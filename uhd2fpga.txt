@@ -1,0 +1,7 @@
+uhd 4.8.0.0 FPGA 39
+
+uhd 4.7.0.0 FPGA 39.3 FW 6.1
+
+uhd 4.3.0.0 FPGA 36
+
+
