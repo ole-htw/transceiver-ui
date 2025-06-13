@@ -3,11 +3,96 @@
 import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox
+import json
+from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
 
 from tx_generator import generate_waveform
+
+# --- suggestion helper ---
+SUGGESTIONS_FILE = Path(__file__).with_name("suggestions.json")
+
+def _load_suggestions() -> dict:
+    try:
+        with open(SUGGESTIONS_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_suggestions(data: dict) -> None:
+    try:
+        with open(SUGGESTIONS_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+
+_SUGGESTIONS = _load_suggestions()
+
+
+class SuggestEntry(tk.Frame):
+    """Entry widget with removable suggestion buttons."""
+
+    def __init__(self, parent, name: str, width: int | None = None) -> None:
+        super().__init__(parent)
+        self.name = name
+        self.entry = ttk.Entry(self, width=width)
+        self.entry.grid(row=0, column=0, sticky="ew")
+        self.sugg_frame = tk.Frame(self)
+        self.sugg_frame.grid(row=1, column=0, sticky="w")
+        self.columnconfigure(0, weight=1)
+        self.suggestions = _SUGGESTIONS.get(name, [])
+        self._render()
+        self.entry.bind("<Return>", self._on_return)
+
+    # Proxy common methods
+    def get(self):
+        return self.entry.get()
+
+    def insert(self, *args):
+        return self.entry.insert(*args)
+
+    def delete(self, *args):
+        return self.entry.delete(*args)
+
+    def _on_return(self, _event):
+        self.add_suggestion(self.entry.get())
+
+    def add_suggestion(self, text: str) -> None:
+        text = text.strip()
+        if not text or text in self.suggestions:
+            return
+        self.suggestions.append(text)
+        _SUGGESTIONS[self.name] = self.suggestions
+        _save_suggestions(_SUGGESTIONS)
+        self._render()
+
+    def _fill_entry(self, text: str) -> None:
+        self.entry.delete(0, tk.END)
+        self.entry.insert(0, text)
+
+    def _remove_suggestion(self, text: str) -> None:
+        if text in self.suggestions:
+            self.suggestions.remove(text)
+            _SUGGESTIONS[self.name] = self.suggestions
+            _save_suggestions(_SUGGESTIONS)
+            self._render()
+
+    def _render(self) -> None:
+        for w in self.sugg_frame.winfo_children():
+            w.destroy()
+        for val in self.suggestions:
+            frame = tk.Frame(self.sugg_frame, bd=1, relief="ridge", padx=2)
+            lbl = tk.Label(frame, text=val)
+            lbl.pack(side="left")
+            rm = tk.Button(frame, text="x", command=lambda v=val: self._remove_suggestion(v), width=2)
+            rm.pack(side="right")
+            frame.pack(side="left", padx=2, pady=1)
+            frame.bind("<Button-1>", lambda _e, v=val: self._fill_entry(v))
+            lbl.bind("<Button-1>", lambda _e, v=val: self._fill_entry(v))
 
 
 def save_interleaved(filename: str, data: np.ndarray, amplitude: float = 10000.0) -> None:
@@ -103,42 +188,42 @@ class TransceiverUI(tk.Tk):
         wave_box.bind("<<ComboboxSelected>>", lambda _e: self.update_waveform_fields())
 
         ttk.Label(gen_frame, text="fs").grid(row=1, column=0, sticky="w")
-        self.fs_entry = ttk.Entry(gen_frame)
+        self.fs_entry = SuggestEntry(gen_frame, "fs_entry")
         self.fs_entry.insert(0, "25e6")
-        self.fs_entry.grid(row=1, column=1)
+        self.fs_entry.grid(row=1, column=1, sticky="ew")
 
         self.f_label = ttk.Label(gen_frame, text="f")
         self.f_label.grid(row=2, column=0, sticky="w")
-        self.f_entry = ttk.Entry(gen_frame)
+        self.f_entry = SuggestEntry(gen_frame, "f_entry")
         self.f_entry.insert(0, "1e6")
-        self.f_entry.grid(row=2, column=1)
+        self.f_entry.grid(row=2, column=1, sticky="ew")
 
         self.f1_label = ttk.Label(gen_frame, text="f1")
-        self.f1_entry = ttk.Entry(gen_frame)
+        self.f1_entry = SuggestEntry(gen_frame, "f1_entry")
         self.f1_label.grid(row=3, column=0, sticky="w")
-        self.f1_entry.grid(row=3, column=1)
+        self.f1_entry.grid(row=3, column=1, sticky="ew")
 
         self.q_label = ttk.Label(gen_frame, text="q")
-        self.q_entry = ttk.Entry(gen_frame)
+        self.q_entry = SuggestEntry(gen_frame, "q_entry")
         self.q_entry.insert(0, "1")
         # row placement will be adjusted in update_waveform_fields
         self.q_label.grid(row=2, column=0, sticky="w")
-        self.q_entry.grid(row=2, column=1)
+        self.q_entry.grid(row=2, column=1, sticky="ew")
 
         ttk.Label(gen_frame, text="Samples").grid(row=4, column=0, sticky="w")
-        self.samples_entry = ttk.Entry(gen_frame)
+        self.samples_entry = SuggestEntry(gen_frame, "samples_entry")
         self.samples_entry.insert(0, "40000")
-        self.samples_entry.grid(row=4, column=1)
+        self.samples_entry.grid(row=4, column=1, sticky="ew")
 
         ttk.Label(gen_frame, text="Amplitude").grid(row=5, column=0, sticky="w")
-        self.amp_entry = ttk.Entry(gen_frame)
+        self.amp_entry = SuggestEntry(gen_frame, "amp_entry")
         self.amp_entry.insert(0, "10000")
-        self.amp_entry.grid(row=5, column=1)
+        self.amp_entry.grid(row=5, column=1, sticky="ew")
 
         ttk.Label(gen_frame, text="File").grid(row=6, column=0, sticky="w")
-        self.file_entry = ttk.Entry(gen_frame)
+        self.file_entry = SuggestEntry(gen_frame, "file_entry")
         self.file_entry.insert(0, "tx_signal.bin")
-        self.file_entry.grid(row=6, column=1)
+        self.file_entry.grid(row=6, column=1, sticky="ew")
 
         ttk.Label(gen_frame, text="View").grid(row=7, column=0, sticky="w")
         self.view_var = tk.StringVar(value="Signal")
@@ -153,29 +238,29 @@ class TransceiverUI(tk.Tk):
         tx_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
 
         ttk.Label(tx_frame, text="Args").grid(row=0, column=0, sticky="w")
-        self.tx_args = ttk.Entry(tx_frame)
+        self.tx_args = SuggestEntry(tx_frame, "tx_args")
         self.tx_args.insert(0, "addr=192.168.10.2")
-        self.tx_args.grid(row=0, column=1)
+        self.tx_args.grid(row=0, column=1, sticky="ew")
 
         ttk.Label(tx_frame, text="Rate").grid(row=1, column=0, sticky="w")
-        self.tx_rate = ttk.Entry(tx_frame)
+        self.tx_rate = SuggestEntry(tx_frame, "tx_rate")
         self.tx_rate.insert(0, "200e6")
-        self.tx_rate.grid(row=1, column=1)
+        self.tx_rate.grid(row=1, column=1, sticky="ew")
 
         ttk.Label(tx_frame, text="Freq").grid(row=2, column=0, sticky="w")
-        self.tx_freq = ttk.Entry(tx_frame)
+        self.tx_freq = SuggestEntry(tx_frame, "tx_freq")
         self.tx_freq.insert(0, "5.18e9")
-        self.tx_freq.grid(row=2, column=1)
+        self.tx_freq.grid(row=2, column=1, sticky="ew")
 
         ttk.Label(tx_frame, text="Gain").grid(row=3, column=0, sticky="w")
-        self.tx_gain = ttk.Entry(tx_frame)
+        self.tx_gain = SuggestEntry(tx_frame, "tx_gain")
         self.tx_gain.insert(0, "30")
-        self.tx_gain.grid(row=3, column=1)
+        self.tx_gain.grid(row=3, column=1, sticky="ew")
 
         ttk.Label(tx_frame, text="File").grid(row=4, column=0, sticky="w")
-        self.tx_file = ttk.Entry(tx_frame)
+        self.tx_file = SuggestEntry(tx_frame, "tx_file")
         self.tx_file.insert(0, "tx_signal.bin")
-        self.tx_file.grid(row=4, column=1)
+        self.tx_file.grid(row=4, column=1, sticky="ew")
 
         ttk.Button(tx_frame, text="Transmit", command=self.transmit).grid(row=5, column=0, columnspan=2, pady=5)
 
@@ -184,34 +269,34 @@ class TransceiverUI(tk.Tk):
         rx_frame.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
 
         ttk.Label(rx_frame, text="Args").grid(row=0, column=0, sticky="w")
-        self.rx_args = ttk.Entry(rx_frame)
+        self.rx_args = SuggestEntry(rx_frame, "rx_args")
         self.rx_args.insert(0, "addr=192.168.20.2,clock_source=external")
-        self.rx_args.grid(row=0, column=1)
+        self.rx_args.grid(row=0, column=1, sticky="ew")
 
         ttk.Label(rx_frame, text="Rate").grid(row=1, column=0, sticky="w")
-        self.rx_rate = ttk.Entry(rx_frame)
+        self.rx_rate = SuggestEntry(rx_frame, "rx_rate")
         self.rx_rate.insert(0, "200e6")
-        self.rx_rate.grid(row=1, column=1)
+        self.rx_rate.grid(row=1, column=1, sticky="ew")
 
         ttk.Label(rx_frame, text="Freq").grid(row=2, column=0, sticky="w")
-        self.rx_freq = ttk.Entry(rx_frame)
+        self.rx_freq = SuggestEntry(rx_frame, "rx_freq")
         self.rx_freq.insert(0, "5.18e9")
-        self.rx_freq.grid(row=2, column=1)
+        self.rx_freq.grid(row=2, column=1, sticky="ew")
 
         ttk.Label(rx_frame, text="Duration").grid(row=3, column=0, sticky="w")
-        self.rx_dur = ttk.Entry(rx_frame)
+        self.rx_dur = SuggestEntry(rx_frame, "rx_dur")
         self.rx_dur.insert(0, "0.01")
-        self.rx_dur.grid(row=3, column=1)
+        self.rx_dur.grid(row=3, column=1, sticky="ew")
 
         ttk.Label(rx_frame, text="Gain").grid(row=4, column=0, sticky="w")
-        self.rx_gain = ttk.Entry(rx_frame)
+        self.rx_gain = SuggestEntry(rx_frame, "rx_gain")
         self.rx_gain.insert(0, "80")
-        self.rx_gain.grid(row=4, column=1)
+        self.rx_gain.grid(row=4, column=1, sticky="ew")
 
         ttk.Label(rx_frame, text="Output").grid(row=5, column=0, sticky="w")
-        self.rx_file = ttk.Entry(rx_frame)
+        self.rx_file = SuggestEntry(rx_frame, "rx_file")
         self.rx_file.insert(0, "rx_signal.bin")
-        self.rx_file.grid(row=5, column=1)
+        self.rx_file.grid(row=5, column=1, sticky="ew")
 
         ttk.Label(rx_frame, text="View").grid(row=6, column=0, sticky="w")
         self.rx_view = tk.StringVar(value="Signal")
@@ -235,16 +320,16 @@ class TransceiverUI(tk.Tk):
         if w == "sinus":
             self.f_label.configure(text="f")
             self.f_label.grid(row=2, column=0, sticky="w")
-            self.f_entry.grid(row=2, column=1)
+            self.f_entry.grid(row=2, column=1, sticky="ew")
         elif w == "zadoffchu":
             self.q_label.grid(row=2, column=0, sticky="w")
-            self.q_entry.grid(row=2, column=1)
+            self.q_entry.grid(row=2, column=1, sticky="ew")
         elif w == "chirp":
             self.f_label.configure(text="f0")
             self.f_label.grid(row=2, column=0, sticky="w")
-            self.f_entry.grid(row=2, column=1)
+            self.f_entry.grid(row=2, column=1, sticky="ew")
             self.f1_label.grid(row=3, column=0, sticky="w")
-            self.f1_entry.grid(row=3, column=1)
+            self.f1_entry.grid(row=3, column=1, sticky="ew")
 
 
     # ----- Actions -----
