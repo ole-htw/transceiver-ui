@@ -491,19 +491,8 @@ class TransceiverUI(tk.Tk):
         self.rx_stop = ttk.Button(rx_frame, text="Stop", command=self.stop_receive, state="disabled")
         self.rx_stop.grid(row=8, column=0, columnspan=2, pady=(0, 5))
 
-        rx_log_frame = ttk.Frame(rx_frame)
-        rx_log_frame.grid(row=9, column=0, columnspan=2, sticky="nsew")
-        rx_log_frame.columnconfigure(0, weight=1)
-        rx_log_frame.rowconfigure(0, weight=1)
-        self.rx_log = tk.Text(rx_log_frame, height=6, wrap="none")
-        self.rx_log.grid(row=0, column=0, sticky="nsew")
-        rx_scroll = ttk.Scrollbar(rx_log_frame, orient="vertical", command=self.rx_log.yview)
-        rx_scroll.grid(row=0, column=1, sticky="ns")
-        self.rx_log.configure(yscrollcommand=rx_scroll.set)
-        rx_frame.rowconfigure(9, weight=1)
-
         rx_scroll_container = ttk.Frame(rx_frame)
-        rx_scroll_container.grid(row=10, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.grid(row=9, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
@@ -521,7 +510,7 @@ class TransceiverUI(tk.Tk):
             "<Configure>",
             lambda _e: self.rx_canvas.configure(scrollregion=self.rx_canvas.bbox("all")),
         )
-        rx_frame.rowconfigure(10, weight=1)
+        rx_frame.rowconfigure(9, weight=1)
         self.rx_canvases = []
 
     def update_waveform_fields(self) -> None:
@@ -653,9 +642,6 @@ class TransceiverUI(tk.Tk):
             if hasattr(self, "tx_log") and self.tx_log.winfo_exists():
                 self.tx_log.insert(tk.END, line)
                 self.tx_log.see(tk.END)
-            if hasattr(self, "rx_log") and self.rx_log.winfo_exists():
-                self.rx_log.insert(tk.END, line)
-                self.rx_log.see(tk.END)
         if self._cmd_running:
             self.after(100, self._process_queue)
 
@@ -931,8 +917,6 @@ class TransceiverUI(tk.Tk):
                "-g", self.rx_gain.get(),
                "--dram",
                "--output-file", out_file]
-        if hasattr(self, "rx_log"):
-            self.rx_log.delete("1.0", tk.END)
         self._cmd_running = True
         if hasattr(self, "rx_stop"):
             self.rx_stop.config(state="normal")
