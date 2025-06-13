@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Simple GUI to generate, transmit and receive signals."""
 import subprocess
+import threading
+import queue
 import tkinter as tk
 from tkinter import ttk, messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -33,6 +35,20 @@ def _save_suggestions(data: dict) -> None:
 
 
 _SUGGESTIONS = _load_suggestions()
+
+
+class ConsoleWindow(tk.Toplevel):
+    """Simple window to display text output."""
+
+    def __init__(self, parent, title: str = "Console") -> None:
+        super().__init__(parent)
+        self.title(title)
+        self.text = tk.Text(self, wrap="none")
+        self.text.pack(fill="both", expand=True)
+
+    def append(self, text: str) -> None:
+        self.text.insert(tk.END, text)
+        self.text.see(tk.END)
 
 
 class SuggestEntry(tk.Frame):
@@ -214,6 +230,9 @@ class TransceiverUI(tk.Tk):
         # define view variables early so callbacks won't fail
         self.view_var = tk.StringVar(value="Signal")
         self.rx_view = tk.StringVar(value="Signal")
+        self.console = None
+        self._out_queue = queue.Queue()
+        self._cmd_running = False
         self.create_widgets()
 
     def create_widgets(self):
@@ -408,6 +427,41 @@ class TransceiverUI(tk.Tk):
             self.gen_canvases.append(canvas)
         self.gen_plots_frame.update_idletasks()
 
+    def _open_console(self, title: str) -> None:
+        if self.console is None or not self.console.winfo_exists():
+            self.console = ConsoleWindow(self, title)
+        else:
+            self.console.title(title)
+            self.console.text.delete("1.0", tk.END)
+        while not self._out_queue.empty():
+            self._out_queue.get_nowait()
+
+    def _process_queue(self) -> None:
+        while not self._out_queue.empty():
+            line = self._out_queue.get_nowait()
+            if self.console and self.console.winfo_exists():
+                self.console.append(line)
+        if self._cmd_running:
+            self.after(100, self._process_queue)
+
+    def _run_cmd(self, cmd: list[str]) -> None:
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            for line in proc.stdout:
+                self._out_queue.put(line)
+            proc.wait()
+            self._out_queue.put(f"[Exited with code {proc.returncode}]\n")
+        except Exception as exc:
+            self._out_queue.put(f"Error: {exc}\n")
+        finally:
+            self._cmd_running = False
+
     def _show_fullscreen(self, mode: str) -> None:
         if self.latest_data is None:
             return
@@ -453,10 +507,10 @@ class TransceiverUI(tk.Tk):
                "--gain", self.tx_gain.get(),
                "--nsamps", "0",
                "--file", self.tx_file.get()]
-        try:
-            subprocess.run(cmd, check=True)
-        except Exception as exc:
-            messagebox.showerror("Transmit error", str(exc))
+        self._open_console("Transmit Log")
+        self._cmd_running = True
+        threading.Thread(target=self._run_cmd, args=(cmd,), daemon=True).start()
+        self._process_queue()
 
     def receive(self):
         out_file = self.rx_file.get()
