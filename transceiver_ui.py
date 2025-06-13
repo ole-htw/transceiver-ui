@@ -3,6 +3,8 @@
 import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -75,6 +77,51 @@ def visualize(data: np.ndarray, fs: float, mode: str, title: str) -> None:
     plt.show()
 
 
+def _plot_on_axes(ax, data: np.ndarray, fs: float, mode: str, title: str) -> None:
+    """Helper to draw the selected visualization on *ax*."""
+    if mode == "Signal":
+        ax.plot(np.real(data), label="Real")
+        ax.plot(np.imag(data), label="Imag")
+        ax.set_title(title)
+        ax.grid(True)
+        ax.legend()
+    elif mode in ("Freq", "Freq Analysis"):
+        spec = np.fft.fftshift(np.fft.fft(data))
+        freqs = np.fft.fftshift(np.fft.fftfreq(len(data), d=1/fs))
+        ax.plot(freqs, 20*np.log10(np.abs(spec) + 1e-9))
+        ax.set_title(f"Spectrum: {title}")
+        ax.set_xlabel("Frequency [Hz]")
+        ax.set_ylabel("Magnitude [dB]")
+        ax.grid(True)
+    elif mode == "InstantFreq":
+        phase = np.unwrap(np.angle(data))
+        inst = np.diff(phase)
+        fi = fs * inst / (2*np.pi)
+        t = np.arange(len(fi)) / fs
+        ax.plot(t, fi)
+        ax.set_title(f"Instantaneous Frequency: {title}")
+        ax.set_xlabel("Time [s]")
+        ax.set_ylabel("Frequency [Hz]")
+        ax.grid(True)
+    elif mode == "Autocorr":
+        ac = np.correlate(data, data, mode="full")
+        lags = np.arange(-len(data) + 1, len(data))
+        ax.plot(lags, np.abs(ac))
+        ax.set_title(f"Autocorrelation: {title}")
+        ax.set_xlabel("Lag")
+        ax.set_ylabel("Magnitude")
+        ax.grid(True)
+
+
+def _create_plot_figure(data: np.ndarray, fs: float, mode: str, title: str, size=(4, 3)) -> Figure:
+    """Return a matplotlib Figure for the given visualization."""
+    fig = Figure(figsize=size)
+    ax = fig.add_subplot(111)
+    _plot_on_axes(ax, data, fs, mode, title)
+    fig.tight_layout()
+    return fig
+
+
 class TransceiverUI(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -140,12 +187,15 @@ class TransceiverUI(tk.Tk):
         self.file_entry.insert(0, "tx_signal.bin")
         self.file_entry.grid(row=6, column=1)
 
-        ttk.Label(gen_frame, text="View").grid(row=7, column=0, sticky="w")
-        self.view_var = tk.StringVar(value="Signal")
-        ttk.Combobox(gen_frame, textvariable=self.view_var,
-                     values=["Signal", "Freq", "InstantFreq", "Autocorr"], width=12).grid(row=7, column=1)
+        ttk.Button(gen_frame, text="Generate", command=self.generate).grid(row=7, column=0, columnspan=2, pady=5)
 
-        ttk.Button(gen_frame, text="Generate", command=self.generate).grid(row=8, column=0, columnspan=2, pady=5)
+        self.gen_plots_frame = ttk.Frame(gen_frame)
+        self.gen_plots_frame.grid(row=8, column=0, columnspan=2, sticky="nsew")
+        gen_frame.rowconfigure(8, weight=1)
+        self.gen_canvases = []
+        self.latest_data = None
+        self.latest_fs = 0.0
+
         self.update_waveform_fields()
 
         # ----- Column 2: Transmit -----
@@ -246,6 +296,40 @@ class TransceiverUI(tk.Tk):
             self.f1_label.grid(row=3, column=0, sticky="w")
             self.f1_entry.grid(row=3, column=1)
 
+    def _clear_gen_plots(self) -> None:
+        for canv in self.gen_canvases:
+            canv.get_tk_widget().destroy()
+        self.gen_canvases.clear()
+
+    def _display_gen_plots(self, data: np.ndarray, fs: float) -> None:
+        """Render all visualizations below the Generate button."""
+        self.latest_data = data
+        self.latest_fs = fs
+        self._clear_gen_plots()
+
+        modes = ["Signal", "Freq", "InstantFreq", "Autocorr"]
+        for idx, mode in enumerate(modes):
+            fig = _create_plot_figure(data, fs, mode, mode)
+            canvas = FigureCanvasTkAgg(fig, master=self.gen_plots_frame)
+            canvas.draw()
+            widget = canvas.get_tk_widget()
+            widget.grid(row=idx, column=0, sticky="nsew", pady=2)
+            widget.bind("<Button-1>", lambda _e, m=mode: self._show_fullscreen(m))
+            self.gen_canvases.append(canvas)
+        self.gen_plots_frame.update_idletasks()
+
+    def _show_fullscreen(self, mode: str) -> None:
+        if self.latest_data is None:
+            return
+        fig, ax = plt.subplots()
+        _plot_on_axes(ax, self.latest_data, self.latest_fs, mode, mode)
+        fig.tight_layout()
+        try:
+            fig.canvas.manager.full_screen_toggle()
+        except Exception:
+            pass
+        plt.show()
+
 
     # ----- Actions -----
     def generate(self):
@@ -267,7 +351,7 @@ class TransceiverUI(tk.Tk):
                 data = generate_waveform(waveform, fs, f0, samples, f0=f0, f1=f1)
 
             save_interleaved(self.file_entry.get(), data, amplitude=amp)
-            visualize(data, fs, self.view_var.get(), "Generated")
+            self._display_gen_plots(data, fs)
         except Exception as exc:
             messagebox.showerror("Generate error", str(exc))
 
