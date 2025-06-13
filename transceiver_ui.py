@@ -4,7 +4,7 @@ import subprocess
 import threading
 import queue
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import json
@@ -14,6 +14,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from tx_generator import generate_waveform
+
+# --- suggestion helper -------------------------------------------------------
 
 # --- suggestion helper ---
 SUGGESTIONS_FILE = Path(__file__).with_name("suggestions.json")
@@ -35,6 +37,28 @@ def _save_suggestions(data: dict) -> None:
 
 
 _SUGGESTIONS = _load_suggestions()
+
+# --- preset helper -----------------------------------------------------------
+PRESETS_FILE = Path(__file__).with_name("presets.json")
+
+
+def _load_presets() -> dict:
+    try:
+        with open(PRESETS_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_presets(data: dict) -> None:
+    try:
+        with open(PRESETS_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
+_PRESETS = _load_presets()
 
 
 class ConsoleWindow(tk.Toplevel):
@@ -339,6 +363,23 @@ class TransceiverUI(tk.Tk):
 
         self.update_waveform_fields()
 
+        # ----- Presets -----
+        preset_frame = ttk.LabelFrame(self, text="Presets")
+        preset_frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
+        preset_frame.columnconfigure(0, weight=1)
+        self.preset_var = tk.StringVar(value="")
+        self.preset_box = ttk.Combobox(
+            preset_frame,
+            textvariable=self.preset_var,
+            values=sorted(_PRESETS.keys()),
+            state="readonly",
+            width=20,
+        )
+        self.preset_box.grid(row=0, column=0, padx=5)
+        ttk.Button(preset_frame, text="Load", command=self.load_preset).grid(row=0, column=1, padx=5)
+        ttk.Button(preset_frame, text="Save", command=self.save_preset).grid(row=0, column=2, padx=5)
+        ttk.Button(preset_frame, text="Delete", command=self.delete_preset).grid(row=0, column=3, padx=5)
+
         # ----- Column 2: Transmit -----
         tx_frame = ttk.LabelFrame(self, text="Transmit")
         tx_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
@@ -528,6 +569,97 @@ class TransceiverUI(tk.Tk):
         except Exception:
             pass
         plt.show()
+
+    # ----- Preset handling --------------------------------------------------
+    def _get_current_params(self) -> dict:
+        return {
+            "waveform": self.wave_var.get(),
+            "fs": self.fs_entry.get(),
+            "f": self.f_entry.get(),
+            "f1": self.f1_entry.get(),
+            "q": self.q_entry.get(),
+            "samples": self.samples_entry.get(),
+            "amplitude": self.amp_entry.get(),
+            "file": self.file_entry.get(),
+            "tx_args": self.tx_args.get(),
+            "tx_rate": self.tx_rate.get(),
+            "tx_freq": self.tx_freq.get(),
+            "tx_gain": self.tx_gain.get(),
+            "tx_file": self.tx_file.get(),
+            "rx_args": self.rx_args.get(),
+            "rx_rate": self.rx_rate.get(),
+            "rx_freq": self.rx_freq.get(),
+            "rx_dur": self.rx_dur.get(),
+            "rx_gain": self.rx_gain.get(),
+            "rx_file": self.rx_file.get(),
+            "rx_view": self.rx_view.get(),
+        }
+
+    def load_preset(self) -> None:
+        name = self.preset_var.get()
+        preset = _PRESETS.get(name)
+        if not preset:
+            messagebox.showerror("Preset", "No preset selected")
+            return
+        self.wave_var.set(preset.get("waveform", "sinus"))
+        self.update_waveform_fields()
+        self.fs_entry.delete(0, tk.END)
+        self.fs_entry.insert(0, preset.get("fs", ""))
+        self.f_entry.delete(0, tk.END)
+        self.f_entry.insert(0, preset.get("f", ""))
+        self.f1_entry.delete(0, tk.END)
+        self.f1_entry.insert(0, preset.get("f1", ""))
+        self.q_entry.delete(0, tk.END)
+        self.q_entry.insert(0, preset.get("q", ""))
+        self.samples_entry.delete(0, tk.END)
+        self.samples_entry.insert(0, preset.get("samples", ""))
+        self.amp_entry.delete(0, tk.END)
+        self.amp_entry.insert(0, preset.get("amplitude", ""))
+        self.file_entry.delete(0, tk.END)
+        self.file_entry.insert(0, preset.get("file", ""))
+        self.tx_args.delete(0, tk.END)
+        self.tx_args.insert(0, preset.get("tx_args", ""))
+        self.tx_rate.delete(0, tk.END)
+        self.tx_rate.insert(0, preset.get("tx_rate", ""))
+        self.tx_freq.delete(0, tk.END)
+        self.tx_freq.insert(0, preset.get("tx_freq", ""))
+        self.tx_gain.delete(0, tk.END)
+        self.tx_gain.insert(0, preset.get("tx_gain", ""))
+        self.tx_file.delete(0, tk.END)
+        self.tx_file.insert(0, preset.get("tx_file", ""))
+        self.rx_args.delete(0, tk.END)
+        self.rx_args.insert(0, preset.get("rx_args", ""))
+        self.rx_rate.delete(0, tk.END)
+        self.rx_rate.insert(0, preset.get("rx_rate", ""))
+        self.rx_freq.delete(0, tk.END)
+        self.rx_freq.insert(0, preset.get("rx_freq", ""))
+        self.rx_dur.delete(0, tk.END)
+        self.rx_dur.insert(0, preset.get("rx_dur", ""))
+        self.rx_gain.delete(0, tk.END)
+        self.rx_gain.insert(0, preset.get("rx_gain", ""))
+        self.rx_file.delete(0, tk.END)
+        self.rx_file.insert(0, preset.get("rx_file", ""))
+        self.rx_view.set(preset.get("rx_view", "Signal"))
+
+    def save_preset(self) -> None:
+        name = simpledialog.askstring("Save Preset", "Preset name:")
+        if not name:
+            return
+        _PRESETS[name] = self._get_current_params()
+        _save_presets(_PRESETS)
+        self.preset_box["values"] = sorted(_PRESETS.keys())
+        self.preset_var.set(name)
+
+    def delete_preset(self) -> None:
+        name = self.preset_var.get()
+        if not name:
+            return
+        if not messagebox.askyesno("Delete Preset", f"Delete preset '{name}'?"):
+            return
+        _PRESETS.pop(name, None)
+        _save_presets(_PRESETS)
+        self.preset_box["values"] = sorted(_PRESETS.keys())
+        self.preset_var.set("")
 
 
     # ----- Actions -----
