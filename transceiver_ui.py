@@ -353,6 +353,14 @@ class TransceiverUI(tk.Tk):
 
             save_interleaved(self.file_entry.get(), data, amplitude=amp)
             visualize(data, fs, self.view_var.get(), "Generated")
+            # remember used values as suggestions
+            self.fs_entry.add_suggestion(self.fs_entry.get())
+            self.samples_entry.add_suggestion(self.samples_entry.get())
+            self.amp_entry.add_suggestion(self.amp_entry.get())
+            self.file_entry.add_suggestion(self.file_entry.get())
+            self.f_entry.add_suggestion(self.f_entry.get())
+            self.f1_entry.add_suggestion(self.f1_entry.get())
+            self.q_entry.add_suggestion(self.q_entry.get())
         except Exception as exc:
             messagebox.showerror("Generate error", str(exc))
 
@@ -366,6 +374,12 @@ class TransceiverUI(tk.Tk):
                "--file", self.tx_file.get()]
         try:
             subprocess.run(cmd, check=True)
+            # store used values as suggestions
+            self.tx_args.add_suggestion(self.tx_args.get())
+            self.tx_rate.add_suggestion(self.tx_rate.get())
+            self.tx_freq.add_suggestion(self.tx_freq.get())
+            self.tx_gain.add_suggestion(self.tx_gain.get())
+            self.tx_file.add_suggestion(self.tx_file.get())
         except Exception as exc:
             messagebox.showerror("Transmit error", str(exc))
 
@@ -389,6 +403,13 @@ class TransceiverUI(tk.Tk):
             conv_file = out_file.replace(".bin", "_conv.bin")
             data = np.fromfile(conv_file, dtype=np.complex64)
             visualize(data, float(eval(self.rx_rate.get())), self.rx_view.get(), "Received")
+            # store used values as suggestions
+            self.rx_args.add_suggestion(self.rx_args.get())
+            self.rx_rate.add_suggestion(self.rx_rate.get())
+            self.rx_freq.add_suggestion(self.rx_freq.get())
+            self.rx_dur.add_suggestion(self.rx_dur.get())
+            self.rx_gain.add_suggestion(self.rx_gain.get())
+            self.rx_file.add_suggestion(self.rx_file.get())
         except Exception as exc:
             messagebox.showerror("Visualization error", str(exc))
 
