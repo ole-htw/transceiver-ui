@@ -45,7 +45,7 @@ def main():
 
     # Plot
     plt.figure()
-    plt.plot(mag)
+    plt.plot(freqs,mag)
     plt.title(f"Frequenzspektrum: {args.filename}")
     plt.xlabel(xlabel)
     plt.ylabel("Magnitude (dB)")

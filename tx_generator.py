@@ -7,9 +7,12 @@ Unterstützt jetzt drei Wellenformen:
     • zadoffchu  – Zadoff–Chu‑Sequenz (komplex, zykloideiphase)
     • chirp      – Linear aufsteigender Up‑Chirp (f0 → f1)
 
-Die erzeugte Folge besteht wie bisher aus N Wellenform‑Samples
-gefolgt von N Null‑Samples und wird als interleaved int16 (IQ IQ …)
-in eine Binärdatei geschrieben.
+Neu: Option **--no-zeros**
+    Gibt an, dass *keine* Null‑Samples an die Wellenform angehängt werden.
+    Standard ist weiterhin das alte Verhalten (Waveform + Null‑Sequenz).
+
+Die erzeugte Folge wird als interleaved int16 (IQ IQ …) in eine Binärdatei
+ geschrieben.
 """
 
 import argparse
@@ -116,7 +119,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Erzeugt eine Wellen­folge (sinus, zadoffchu oder chirp) "
-            "gefolgt von der gleichen Anzahl Null‑Samples und speichert "
+            "gefolgt optional von einer gleichen Anzahl Null‑Samples und speichert "
             "sie als interleaved int16 (IQIQ…) in eine Datei."
         )
     )
@@ -177,6 +180,13 @@ def main() -> None:
         help="Anzahl Samples der Wellenform (Standard: 40000)",
     )
 
+    # Neue Option: Null-Sequenz weglassen
+    parser.add_argument(
+        "--no-zeros",
+        action="store_true",
+        help="Keine Null‑Samples anhängen (Standard: deaktiviert)",
+    )
+
     args = parser.parse_args()
 
     # ------------------------------------------------------------------
@@ -186,7 +196,6 @@ def main() -> None:
         args.f1 = args.fs / 2 - 1  # Maximal fast bis Nyquist
 
     N_waveform = args.samples
-    total_samples = N_waveform * 2
 
     # Blockgröße ggf. an Primzahl anpassen (nur ZC)
     if args.waveform == "zadoffchu":
@@ -194,12 +203,16 @@ def main() -> None:
         if prime != N_waveform:
             print(f"Info: samples={N_waveform} angepasst auf Primzahl {prime} für ZC.")
             N_waveform = prime
-        total_samples = N_waveform * 2
+
+    append_zeros = not args.no_zeros
+    total_samples = N_waveform * (2 if append_zeros else 1)
 
     # ------------------------------------------------------------------
-    print(
-        f"Erzeuge {N_waveform} Samples {args.waveform} + {N_waveform} Null‑Samples."
-    )
+    if append_zeros:
+        print(f"Erzeuge {N_waveform} Samples {args.waveform} + {N_waveform} Null‑Samples.")
+    else:
+        print(f"Erzeuge {N_waveform} Samples {args.waveform} (ohne Null‑Samples).")
+
     if args.waveform == "chirp":
         print(f"  Chirp: {args.f0/1e6:.3f} MHz → {args.f1/1e6:.3f} MHz")
 
@@ -214,8 +227,11 @@ def main() -> None:
         f1=args.f1,
     )
 
-    zeros = np.zeros(N_waveform, dtype=np.complex64)
-    final_signal = np.concatenate([waveform_signal, zeros])
+    if append_zeros:
+        zeros = np.zeros(N_waveform, dtype=np.complex64)
+        final_signal = np.concatenate([waveform_signal, zeros])
+    else:
+        final_signal = waveform_signal
 
     # Skalierung
     max_abs = np.max(np.abs(final_signal)) if np.any(final_signal) else 1.0

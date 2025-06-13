@@ -35,7 +35,7 @@ uhd_image_loader --args="type=x300,addr=192.168.10.2" --fpga-path="<path_to_imag
 bandbreite, abtastrate, buffer
 
 
-./tx_generator.py --amplitude 20000 --fs 25e6 --f 50e3 sinus_tx.bin
+./tx_generator.py --amplitude 30000 --fs 200e6 --f 50e3 --waveform sinus signals/sinus_tx.bin
 
 ./tx_samples_from_file --args addr=192.168.10.2 --rate 25e6 --freq 5.18e9 --ant TX/RX --gain 20 --repeat --file sinus_tx.bin 
 
@@ -53,6 +53,8 @@ uhd_fft --args addr=192.168.20.2 -f 5.18e9 -s 25e6 -g 40 -A RX1
 ./rx_samples_to_file --args addr=192.168.20.2 --rate 200e6 --ref external --freq 5.18e9 --ant RX1 --duration 0.001 --gain 40 --file sinus_rx.bin
 
 
+sudo apt install pkg-config libmariadb-dev libssl-dev build-essential python3-tk
+
 cmake .. \
   -DENABLE_PYTHON_API=ON \
   -DPYTHON_EXECUTABLE=$(which python3) \
@@ -69,3 +71,13 @@ cmake .. \
                   --samples 4000 \
                   --amplitude 30000 \
                   zc_50kHz.bin
+                  
+                  
+
+./rfnoc_replay_samples_from_file --args "addr=192.168.10.2" --rate 200e6 --freq 5.18e9  --gain 30 --nsamps 0 --file signals/chirp_0_100.bin 
+./rx_to_file.py -a "addr=192.168.20.2,clock_source=external" -f 5.18e9 -r 200e6 -d 0.01 -g 80 -c 0 --dram --output-file signals/rx/chirp.bin
+
+./rx_convert.py signals/rx/chirp.bin
+./rx_visualizer.py signals/rx/chirp_conv.bin 
+
+./tx_generator.py --amplitude 20000 --fs 200e6 --f0 -64000 --f1 64000 --samples 250000 --waveform chirp signals/chirp_64.bin
