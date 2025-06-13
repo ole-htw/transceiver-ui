@@ -488,6 +488,41 @@ class TransceiverUI(tk.Tk):
                      values=["Signal", "Freq", "InstantFreq", "Autocorr", "Crosscorr"], width=12).grid(row=6, column=1)
 
         ttk.Button(rx_frame, text="Receive", command=self.receive).grid(row=7, column=0, columnspan=2, pady=5)
+        self.rx_stop = ttk.Button(rx_frame, text="Stop", command=self.stop_receive, state="disabled")
+        self.rx_stop.grid(row=8, column=0, columnspan=2, pady=(0, 5))
+
+        rx_log_frame = ttk.Frame(rx_frame)
+        rx_log_frame.grid(row=9, column=0, columnspan=2, sticky="nsew")
+        rx_log_frame.columnconfigure(0, weight=1)
+        rx_log_frame.rowconfigure(0, weight=1)
+        self.rx_log = tk.Text(rx_log_frame, height=6, wrap="none")
+        self.rx_log.grid(row=0, column=0, sticky="nsew")
+        rx_scroll = ttk.Scrollbar(rx_log_frame, orient="vertical", command=self.rx_log.yview)
+        rx_scroll.grid(row=0, column=1, sticky="ns")
+        self.rx_log.configure(yscrollcommand=rx_scroll.set)
+        rx_frame.rowconfigure(9, weight=1)
+
+        rx_scroll_container = ttk.Frame(rx_frame)
+        rx_scroll_container.grid(row=10, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.columnconfigure(0, weight=1)
+        rx_scroll_container.rowconfigure(0, weight=1)
+
+        self.rx_canvas = tk.Canvas(rx_scroll_container)
+        self.rx_canvas.grid(row=0, column=0, sticky="nsew")
+        self.rx_vscroll = ttk.Scrollbar(rx_scroll_container, orient="vertical", command=self.rx_canvas.yview)
+        self.rx_vscroll.grid(row=0, column=1, sticky="ns")
+        self.rx_canvas.configure(yscrollcommand=self.rx_vscroll.set)
+        self.rx_canvas.bind("<Enter>", self._bind_rx_mousewheel)
+        self.rx_canvas.bind("<Leave>", self._unbind_rx_mousewheel)
+
+        self.rx_plots_frame = ttk.Frame(self.rx_canvas)
+        self.rx_canvas.create_window((0, 0), window=self.rx_plots_frame, anchor="nw")
+        self.rx_plots_frame.bind(
+            "<Configure>",
+            lambda _e: self.rx_canvas.configure(scrollregion=self.rx_canvas.bbox("all")),
+        )
+        rx_frame.rowconfigure(10, weight=1)
+        self.rx_canvases = []
 
     def update_waveform_fields(self) -> None:
         """Show or hide waveform specific parameters."""
@@ -537,6 +572,27 @@ class TransceiverUI(tk.Tk):
             widget.bind("<Button-1>", lambda _e, m=mode: self._show_fullscreen(m))
             self.gen_canvases.append(canvas)
 
+    def _display_rx_plots(self, data: np.ndarray, fs: float) -> None:
+        """Render preview plots below the receive parameters."""
+        self.latest_data = data
+        self.latest_fs = fs
+
+        for c in self.rx_canvases:
+            c.get_tk_widget().destroy()
+        self.rx_canvases.clear()
+
+        modes = ["Signal", "Freq", "InstantFreq", "Autocorr"]
+        for idx, mode in enumerate(modes):
+            fig = Figure(figsize=(5, 2), dpi=100)
+            ax = fig.add_subplot(111)
+            _plot_on_mpl(ax, data, fs, mode, mode)
+            canvas = FigureCanvasTkAgg(fig, master=self.rx_plots_frame)
+            canvas.draw()
+            widget = canvas.get_tk_widget()
+            widget.grid(row=idx, column=0, sticky="nsew", pady=2)
+            widget.bind("<Button-1>", lambda _e, m=mode: self._show_fullscreen(m))
+            self.rx_canvases.append(canvas)
+
     def _open_console(self, title: str) -> None:
         if self.console is None or not self.console.winfo_exists():
             self.console = ConsoleWindow(self, title)
@@ -568,6 +624,27 @@ class TransceiverUI(tk.Tk):
         if delta:
             self.gen_canvas.yview_scroll(delta, "units")
 
+    def _bind_rx_mousewheel(self, _event) -> None:
+        self.rx_canvas.bind_all("<MouseWheel>", self._on_rx_mousewheel)
+        self.rx_canvas.bind_all("<Button-4>", self._on_rx_mousewheel)
+        self.rx_canvas.bind_all("<Button-5>", self._on_rx_mousewheel)
+
+    def _unbind_rx_mousewheel(self, _event) -> None:
+        self.rx_canvas.unbind_all("<MouseWheel>")
+        self.rx_canvas.unbind_all("<Button-4>")
+        self.rx_canvas.unbind_all("<Button-5>")
+
+    def _on_rx_mousewheel(self, event) -> None:
+        delta = 0
+        if hasattr(event, "delta") and event.delta:
+            delta = -1 * int(event.delta / 120)
+        elif event.num == 4:
+            delta = -1
+        elif event.num == 5:
+            delta = 1
+        if delta:
+            self.rx_canvas.yview_scroll(delta, "units")
+
     def _process_queue(self) -> None:
         while not self._out_queue.empty():
             line = self._out_queue.get_nowait()
@@ -576,6 +653,9 @@ class TransceiverUI(tk.Tk):
             if hasattr(self, "tx_log") and self.tx_log.winfo_exists():
                 self.tx_log.insert(tk.END, line)
                 self.tx_log.see(tk.END)
+            if hasattr(self, "rx_log") and self.rx_log.winfo_exists():
+                self.rx_log.insert(tk.END, line)
+                self.rx_log.see(tk.END)
         if self._cmd_running:
             self.after(100, self._process_queue)
 
@@ -600,6 +680,38 @@ class TransceiverUI(tk.Tk):
             self._proc = None
             if hasattr(self, "tx_stop"):
                 self.tx_stop.config(state="disabled")
+
+    def _run_rx_cmd(self, cmd: list[str], out_file: str) -> None:
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            self._proc = proc
+            for line in proc.stdout:
+                self._out_queue.put(line)
+            proc.wait()
+            self._out_queue.put(f"[Exited with code {proc.returncode}]\n")
+        except Exception as exc:
+            self._out_queue.put(f"Error: {exc}\n")
+            proc = None
+        finally:
+            self._cmd_running = False
+            self._proc = None
+            if hasattr(self, "rx_stop"):
+                self.rx_stop.config(state="disabled")
+
+        if proc is not None and proc.returncode == 0:
+            try:
+                subprocess.run(["./rx_convert.py", out_file], check=True)
+                conv_file = out_file.replace(".bin", "_conv.bin")
+                data = np.fromfile(conv_file, dtype=np.complex64)
+                self._display_rx_plots(data, float(eval(self.rx_rate.get())))
+            except Exception as exc:
+                self._out_queue.put(f"Error: {exc}\n")
 
     def _show_fullscreen(self, mode: str) -> None:
         if self.latest_data is None:
@@ -800,6 +912,15 @@ class TransceiverUI(tk.Tk):
         if hasattr(self, "tx_stop"):
             self.tx_stop.config(state="disabled")
 
+    def stop_receive(self) -> None:
+        if self._proc:
+            try:
+                self._proc.terminate()
+            except Exception:
+                pass
+        if hasattr(self, "rx_stop"):
+            self.rx_stop.config(state="disabled")
+
     def receive(self):
         out_file = self.rx_file.get()
         cmd = ["./rx_to_file.py",
@@ -810,18 +931,13 @@ class TransceiverUI(tk.Tk):
                "-g", self.rx_gain.get(),
                "--dram",
                "--output-file", out_file]
-        try:
-            subprocess.run(cmd, check=True)
-        except Exception as exc:
-            messagebox.showerror("Receive error", str(exc))
-            return
-        try:
-            subprocess.run(["./rx_convert.py", out_file], check=True)
-            conv_file = out_file.replace(".bin", "_conv.bin")
-            data = np.fromfile(conv_file, dtype=np.complex64)
-            visualize(data, float(eval(self.rx_rate.get())), self.rx_view.get(), "Received")
-        except Exception as exc:
-            messagebox.showerror("Visualization error", str(exc))
+        if hasattr(self, "rx_log"):
+            self.rx_log.delete("1.0", tk.END)
+        self._cmd_running = True
+        if hasattr(self, "rx_stop"):
+            self.rx_stop.config(state="normal")
+        threading.Thread(target=self._run_rx_cmd, args=(cmd, out_file), daemon=True).start()
+        self._process_queue()
 
 
 def main() -> None:
