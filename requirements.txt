@@ -44,4 +44,5 @@ Werkzeug
 xlrd
 zeep
 zipp
+pyqtgraph
 

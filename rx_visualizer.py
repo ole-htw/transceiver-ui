@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import numpy as np
-import matplotlib.pyplot as plt
+from pyqtgraph.Qt import QtCore
+import pyqtgraph as pg
 import argparse
 
 def main():
@@ -40,18 +41,28 @@ def main():
     # Skalierung anwenden
     rx_sig = rx_sig * args.scale
 
-    # Erstellen des Plots und setzen des Fenstertitels auf den Dateinamen
-    fig = plt.figure()
-    fig.canvas.manager.set_window_title(args.filename)
-    plt.plot(np.real(rx_sig), label='Realteil')
-    plt.plot(np.imag(rx_sig), label='Imaginärteil')
-    plt.grid(True)
-    plt.xlim(0, len(rx_sig))
-    plt.title('Raw RX waveform')
-    plt.xlabel('Sample Index')
-    plt.ylabel('Amplitude')
-    plt.legend()
-    plt.show()
+    # Zu große Datenmengen reduzieren (mehr als 1 MB)
+    if rx_sig.nbytes > 1_000_000:
+        step = int(np.ceil(rx_sig.nbytes / 1_000_000))
+        rx_sig = rx_sig[::step]
+
+    # PyQtGraph-Konfiguration
+    pg.setConfigOption('background', 'w')
+    pg.setConfigOption('foreground', 'k')
+
+    app = pg.mkQApp()
+    win = pg.plot(title='Raw RX waveform')
+    win.setWindowTitle(args.filename)
+    win.showGrid(x=True, y=True)
+    win.setLabel('bottom', 'Sample Index')
+    win.setLabel('left', 'Amplitude')
+    win.addLegend()
+
+    win.plot(np.real(rx_sig), pen=pg.mkPen('b'), name='Realteil')
+    win.plot(np.imag(rx_sig), pen=pg.mkPen('r', style=QtCore.Qt.DashLine),
+             name='Imaginärteil')
+
+    pg.exec()
 
 if __name__ == '__main__':
     main()
