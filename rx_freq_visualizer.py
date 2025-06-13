@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import numpy as np
-import matplotlib.pyplot as plt
+from pyqtgraph.Qt import QtCore
+import pyqtgraph as pg
 import argparse
 
 def main():
@@ -28,6 +29,11 @@ def main():
     if args.samples is not None:
         rx = rx[:args.samples]
 
+    # Zu große Datenmengen reduzieren (mehr als 1 MB)
+    if rx.nbytes > 1_000_000:
+        step = int(np.ceil(rx.nbytes / 1_000_000))
+        rx = rx[::step]
+
     N = rx.size
 
     # FFT und zentrieren
@@ -43,15 +49,18 @@ def main():
         freqs = np.fft.fftshift(np.fft.fftfreq(N))
         xlabel = "Normierte Frequenz"
 
-    # Plot
-    plt.figure()
-    plt.plot(freqs,mag)
-    plt.title(f"Frequenzspektrum: {args.filename}")
-    plt.xlabel(xlabel)
-    plt.ylabel("Magnitude (dB)")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
+    # Plot mit PyQtGraph
+    pg.setConfigOption('background', 'w')
+    pg.setConfigOption('foreground', 'k')
+
+    app = pg.mkQApp()
+    win = pg.plot(freqs, mag, pen='b', title=f"Frequenzspektrum: {args.filename}")
+    win.setWindowTitle(args.filename)
+    win.showGrid(x=True, y=True)
+    win.setLabel('bottom', xlabel)
+    win.setLabel('left', 'Magnitude (dB)')
+
+    pg.exec()
 
 if __name__ == "__main__":
     main()
