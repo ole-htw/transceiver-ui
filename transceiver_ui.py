@@ -10,6 +10,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import json
 from pathlib import Path
+from datetime import datetime
 
 import numpy as np
 from pyqtgraph.Qt import QtCore
@@ -174,6 +175,74 @@ def _reduce_data(data: np.ndarray, max_bytes: int = 1_000_000) -> np.ndarray:
     return data[::step]
 
 
+def _pretty(val: float) -> str:
+    """Shorten numeric values for filenames."""
+    abs_v = abs(val)
+    if abs_v >= 1e6 and abs_v % 1e6 == 0:
+        return f"{int(val/1e6)}M"
+    if abs_v >= 1e3 and abs_v % 1e3 == 0:
+        return f"{int(val/1e3)}k"
+    return f"{int(val)}"
+
+
+def _gen_tx_filename(app) -> str:
+    """Generate TX filename based on current UI settings."""
+    w = app.wave_var.get().lower()
+    parts = [w]
+    try:
+        fs = float(eval(app.fs_entry.get()))
+    except Exception:
+        fs = 0.0
+    try:
+        samples = int(app.samples_entry.get())
+    except Exception:
+        samples = 0
+
+    if w == "sinus":
+        try:
+            f = float(eval(app.f_entry.get()))
+        except Exception:
+            f = 0.0
+        parts.append(f"f{_pretty(f)}")
+    elif w == "zadoffchu":
+        q = app.q_entry.get() or "1"
+        parts.append(f"q{q}")
+    elif w == "chirp":
+        try:
+            f0 = float(eval(app.f_entry.get()))
+        except Exception:
+            f0 = 0.0
+        try:
+            f1 = float(eval(app.f1_entry.get()))
+        except Exception:
+            f1 = f0
+        parts.append(f"{_pretty(f0)}_{_pretty(f1)}")
+
+    parts.append(f"fs{_pretty(fs)}")
+    parts.append(f"N{samples}")
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    name = "_".join(parts) + f"_{stamp}.bin"
+    return str(Path("signals/tx") / name)
+
+
+def _gen_rx_filename(app) -> str:
+    """Generate RX filename based on current UI settings."""
+    try:
+        freq = float(eval(app.rx_freq.get()))
+    except Exception:
+        freq = 0.0
+    try:
+        rate = float(eval(app.rx_rate.get()))
+    except Exception:
+        rate = 0.0
+    dur = app.rx_dur.get() or "0"
+    gain = app.rx_gain.get() or "0"
+    parts = [f"f{_pretty(freq)}", f"r{_pretty(rate)}", f"d{dur}s", f"g{gain}"]
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    name = "_".join(parts) + f"_{stamp}.bin"
+    return str(Path("signals/rx") / name)
+
+
 def visualize(data: np.ndarray, fs: float, mode: str, title: str) -> None:
     """Visualize *data* using PyQtGraph."""
     if data.size == 0:
@@ -300,6 +369,8 @@ class TransceiverUI(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("Signal Transceiver")
+        Path("signals/tx").mkdir(parents=True, exist_ok=True)
+        Path("signals/rx").mkdir(parents=True, exist_ok=True)
         # define view variables early so callbacks won't fail
         self.rx_view = tk.StringVar(value="Signal")
         self.rate_var = tk.StringVar(value="200e6")
@@ -329,23 +400,29 @@ class TransceiverUI(tk.Tk):
             state="readonly",
         )
         wave_box.grid(row=0, column=1)
-        wave_box.bind("<<ComboboxSelected>>", lambda _e: self.update_waveform_fields())
+        wave_box.bind(
+            "<<ComboboxSelected>>",
+            lambda _e: (self.update_waveform_fields(), self.auto_update_tx_filename()),
+        )
 
         ttk.Label(gen_frame, text="fs").grid(row=1, column=0, sticky="w")
         self.fs_entry = SuggestEntry(gen_frame, "fs_entry",
                                      textvariable=self.rate_var)
         self.fs_entry.grid(row=1, column=1, sticky="ew")
+        self.fs_entry.entry.bind("<FocusOut>", lambda _e: self.auto_update_tx_filename())
 
         self.f_label = ttk.Label(gen_frame, text="f")
         self.f_label.grid(row=2, column=0, sticky="w")
         self.f_entry = SuggestEntry(gen_frame, "f_entry")
         self.f_entry.insert(0, "1e6")
         self.f_entry.grid(row=2, column=1, sticky="ew")
+        self.f_entry.entry.bind("<FocusOut>", lambda _e: self.auto_update_tx_filename())
 
         self.f1_label = ttk.Label(gen_frame, text="f1")
         self.f1_entry = SuggestEntry(gen_frame, "f1_entry")
         self.f1_label.grid(row=3, column=0, sticky="w")
         self.f1_entry.grid(row=3, column=1, sticky="ew")
+        self.f1_entry.entry.bind("<FocusOut>", lambda _e: self.auto_update_tx_filename())
 
         self.q_label = ttk.Label(gen_frame, text="q")
         self.q_entry = SuggestEntry(gen_frame, "q_entry")
@@ -353,11 +430,13 @@ class TransceiverUI(tk.Tk):
         # row placement will be adjusted in update_waveform_fields
         self.q_label.grid(row=2, column=0, sticky="w")
         self.q_entry.grid(row=2, column=1, sticky="ew")
+        self.q_entry.entry.bind("<FocusOut>", lambda _e: self.auto_update_tx_filename())
 
         ttk.Label(gen_frame, text="Samples").grid(row=4, column=0, sticky="w")
         self.samples_entry = SuggestEntry(gen_frame, "samples_entry")
         self.samples_entry.insert(0, "40000")
         self.samples_entry.grid(row=4, column=1, sticky="ew")
+        self.samples_entry.entry.bind("<FocusOut>", lambda _e: self.auto_update_tx_filename())
 
         ttk.Label(gen_frame, text="Amplitude").grid(row=5, column=0, sticky="w")
         self.amp_entry = SuggestEntry(gen_frame, "amp_entry")
@@ -462,21 +541,25 @@ class TransceiverUI(tk.Tk):
         self.rx_rate = SuggestEntry(rx_frame, "rx_rate",
                                    textvariable=self.rate_var)
         self.rx_rate.grid(row=1, column=1, sticky="ew")
+        self.rx_rate.entry.bind("<FocusOut>", lambda _e: self.auto_update_rx_filename())
 
         ttk.Label(rx_frame, text="Freq").grid(row=2, column=0, sticky="w")
         self.rx_freq = SuggestEntry(rx_frame, "rx_freq")
         self.rx_freq.insert(0, "5.18e9")
         self.rx_freq.grid(row=2, column=1, sticky="ew")
+        self.rx_freq.entry.bind("<FocusOut>", lambda _e: self.auto_update_rx_filename())
 
         ttk.Label(rx_frame, text="Duration").grid(row=3, column=0, sticky="w")
         self.rx_dur = SuggestEntry(rx_frame, "rx_dur")
         self.rx_dur.insert(0, "0.01")
         self.rx_dur.grid(row=3, column=1, sticky="ew")
+        self.rx_dur.entry.bind("<FocusOut>", lambda _e: self.auto_update_rx_filename())
 
         ttk.Label(rx_frame, text="Gain").grid(row=4, column=0, sticky="w")
         self.rx_gain = SuggestEntry(rx_frame, "rx_gain")
         self.rx_gain.insert(0, "80")
         self.rx_gain.grid(row=4, column=1, sticky="ew")
+        self.rx_gain.entry.bind("<FocusOut>", lambda _e: self.auto_update_rx_filename())
 
         ttk.Label(rx_frame, text="Output").grid(row=5, column=0, sticky="w")
         self.rx_file = SuggestEntry(rx_frame, "rx_file")
@@ -512,6 +595,8 @@ class TransceiverUI(tk.Tk):
         )
         rx_frame.rowconfigure(9, weight=1)
         self.rx_canvases = []
+        self.auto_update_tx_filename()
+        self.auto_update_rx_filename()
 
     def update_waveform_fields(self) -> None:
         """Show or hide waveform specific parameters."""
@@ -538,6 +623,22 @@ class TransceiverUI(tk.Tk):
             self.f_entry.grid(row=2, column=1, sticky="ew")
             self.f1_label.grid(row=3, column=0, sticky="w")
             self.f1_entry.grid(row=3, column=1, sticky="ew")
+
+        self.auto_update_tx_filename()
+
+    def auto_update_tx_filename(self) -> None:
+        """Update TX filename entry based on current parameters."""
+        name = _gen_tx_filename(self)
+        self.file_entry.delete(0, tk.END)
+        self.file_entry.insert(0, name)
+        self.tx_file.delete(0, tk.END)
+        self.tx_file.insert(0, name)
+
+    def auto_update_rx_filename(self) -> None:
+        """Update RX filename entry based on current parameters."""
+        name = _gen_rx_filename(self)
+        self.rx_file.delete(0, tk.END)
+        self.rx_file.insert(0, name)
 
 
     def _display_gen_plots(self, data: np.ndarray, fs: float) -> None:
