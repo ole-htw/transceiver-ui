@@ -36,7 +36,7 @@ def parse_args():
     parser.add_argument("-f", "--freq", type=float, required=True)
     parser.add_argument("-r", "--rate", default=1e6, type=float)
     parser.add_argument("-d", "--duration", default=5.0, type=float)
-    parser.add_argument("-c", "--channels", default=0, nargs="+", type=int)
+    parser.add_argument("-c", "--channels", default=[0], nargs="+", type=int)
     parser.add_argument("-g", "--gain", type=int, default=10)
     parser.add_argument(
         "-n",
