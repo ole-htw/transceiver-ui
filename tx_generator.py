@@ -18,10 +18,13 @@ Die erzeugte Folge wird als interleaved int16 (IQ IQ …) in eine Binärdatei
 import argparse
 import math
 from typing import Optional
+from pathlib import Path
+from datetime import datetime
 
 import numpy as np
 
 # ---------- Hilfsfunktionen --------------------------------------------------
+
 
 def gcd(a: int, b: int) -> int:
     """Größter gemeinsamer Teiler (kompatibel zu Python <3.5)."""
@@ -63,7 +66,33 @@ def find_prime_near(target: int, search_up: bool = True) -> int:
     return 2
 
 
+def _pretty(val: float) -> str:
+    """Hilfsfunktion f\xc3\xbcr verk\xc3\xbcrzte numerische Strings."""
+    abs_v = abs(val)
+    if abs_v >= 1e6 and abs_v % 1e6 == 0:
+        return f"{int(val/1e6)}M"
+    if abs_v >= 1e3 and abs_v % 1e3 == 0:
+        return f"{int(val/1e3)}k"
+    return f"{int(val)}"
+
+
+def generate_filename(args) -> Path:
+    """Erzeuge einen Dateinamen basierend auf den Parametern."""
+    parts = [args.waveform]
+    if args.waveform == "sinus":
+        parts.append(f"f{_pretty(args.f)}")
+    elif args.waveform == "zadoffchu":
+        parts.append(f"q{args.q}")
+    elif args.waveform == "chirp":
+        parts.append(f"{_pretty(args.f0)}_{_pretty(args.f1)}")
+    parts.append(f"N{args.samples}")
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    name = "_".join(parts) + f"_{stamp}.bin"
+    return Path(args.output_dir) / name
+
+
 # ---------- Waveform‑Generator ----------------------------------------------
+
 
 def generate_waveform(
     waveform: str,
@@ -115,6 +144,7 @@ def generate_waveform(
 
 # ---------- Hauptprogramm ----------------------------------------------------
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -125,7 +155,17 @@ def main() -> None:
     )
 
     # Grundparameter
-    parser.add_argument("filename", type=str, help="Zieldatei, z.B. tx_signal.bin")
+    parser.add_argument(
+        "filename",
+        nargs="?",
+        default=None,
+        help="Zieldatei. Wenn nicht angegeben, wird der Dateiname automatisch generiert.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="signals/tx",
+        help="Basisverzeichnis f\xc3\xbcr generierte Dateien (Default: signals/tx)",
+    )
     parser.add_argument(
         "--waveform",
         choices=["sinus", "zadoffchu", "chirp"],
@@ -189,6 +229,12 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    if args.filename is None:
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+        args.filename = str(generate_filename(args))
+    else:
+        Path(args.filename).parent.mkdir(parents=True, exist_ok=True)
+
     # ------------------------------------------------------------------
     # Pre‑Flight‑Checks
     # ------------------------------------------------------------------
@@ -209,7 +255,9 @@ def main() -> None:
 
     # ------------------------------------------------------------------
     if append_zeros:
-        print(f"Erzeuge {N_waveform} Samples {args.waveform} + {N_waveform} Null‑Samples.")
+        print(
+            f"Erzeuge {N_waveform} Samples {args.waveform} + {N_waveform} Null‑Samples."
+        )
     else:
         print(f"Erzeuge {N_waveform} Samples {args.waveform} (ohne Null‑Samples).")
 
@@ -256,4 +304,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

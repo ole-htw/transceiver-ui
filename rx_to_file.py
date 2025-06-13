@@ -9,6 +9,8 @@ RX samples to file using Python API
 """
 
 import argparse
+from datetime import datetime
+from pathlib import Path
 import numpy as np
 import uhd
 from uhd.usrp import dram_utils
@@ -19,32 +21,66 @@ def parse_args():
     """Parse the command line arguments"""
     parser = argparse.ArgumentParser()
     parser.add_argument("-a", "--args", default="", type=str)
-    parser.add_argument("-o", "--output-file", type=str, required=True)
+    parser.add_argument(
+        "-o",
+        "--output-file",
+        type=str,
+        default=None,
+        help="Zieldatei. Wenn nicht angegeben, wird automatisch ein Name vergeben.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="signals/rx",
+        help="Basisverzeichnis f\xc3\xbcr Auto-Dateinamen (Default: signals/rx)",
+    )
     parser.add_argument("-f", "--freq", type=float, required=True)
     parser.add_argument("-r", "--rate", default=1e6, type=float)
     parser.add_argument("-d", "--duration", default=5.0, type=float)
     parser.add_argument("-c", "--channels", default=0, nargs="+", type=int)
     parser.add_argument("-g", "--gain", type=int, default=10)
-    parser.add_argument("-n", "--numpy", default=False, action="store_true",
-                        help="Save output file in NumPy format (default: No)")
-    parser.add_argument("--dram", action='store_true',
-                        help="If given, will attempt to stream via DRAM")
-    return parser.parse_args()
+    parser.add_argument(
+        "-n",
+        "--numpy",
+        default=False,
+        action="store_true",
+        help="Save output file in NumPy format (default: No)",
+    )
+    parser.add_argument(
+        "--dram",
+        action="store_true",
+        help="If given, will attempt to stream via DRAM",
+    )
+
+    args = parser.parse_args()
+
+    if args.output_file is None:
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base = f"rx_{int(args.freq)}Hz_{stamp}.bin"
+        args.output_file = str(Path(args.output_dir) / base)
+    else:
+        Path(args.output_file).parent.mkdir(parents=True, exist_ok=True)
+
+    return args
+
 
 def multi_usrp_rx(args):
     """
     multi_usrp based RX example
     """
     usrp = uhd.usrp.MultiUSRP(args.args)
-    num_samps = int(np.ceil(args.duration*args.rate))
+    num_samps = int(np.ceil(args.duration * args.rate))
     if not isinstance(args.channels, list):
         args.channels = [args.channels]
-    samps = usrp.recv_num_samps(num_samps, args.freq, args.rate, args.channels, args.gain)
-    with open(args.output_file, 'wb') as out_file:
+    samps = usrp.recv_num_samps(
+        num_samps, args.freq, args.rate, args.channels, args.gain
+    )
+    with open(args.output_file, "wb") as out_file:
         if args.numpy:
             np.save(out_file, samps, allow_pickle=False, fix_imports=False)
         else:
             samps.tofile(out_file)
+
 
 def rfnoc_dram_rx(args):
     """
@@ -52,11 +88,12 @@ def rfnoc_dram_rx(args):
     """
     # Init graph
     graph = uhd.rfnoc.RfnocGraph(args.args)
-    num_samps = int(np.ceil(args.duration*args.rate))
+    num_samps = int(np.ceil(args.duration * args.rate))
     if graph.get_num_mboards() > 1:
         print(
             "ERROR: This example only supports DRAM streaming on a single "
-            "motherboard.")
+            "motherboard."
+        )
         return
     # Init radios and replay block
     available_radio_chans = [
@@ -67,10 +104,12 @@ def rfnoc_dram_rx(args):
     radio_chans = [available_radio_chans[x] for x in args.channels]
     print("Receiving from radio channels:", end="")
     print("\n* ".join((f"{r}:{c}" for r, c in radio_chans)))
-    dram = dram_utils.DramReceiver(graph, radio_chans, cpu_format='fc32')
+    dram = dram_utils.DramReceiver(graph, radio_chans, cpu_format="fc32")
     replay = dram.replay_blocks[0]
     print(f"Using replay block {replay.get_block_id()}")
-    for (radio, radio_chan), ddc_info in zip(dram.radio_chan_pairs, dram.ddc_chan_pairs):
+    for (radio, radio_chan), ddc_info in zip(
+        dram.radio_chan_pairs, dram.ddc_chan_pairs
+    ):
         radio.set_rx_frequency(args.freq, radio_chan)
         radio.set_rx_gain(args.gain, radio_chan)
         if ddc_info:
@@ -80,7 +119,9 @@ def rfnoc_dram_rx(args):
             radio.set_rate(args.rate)
     # Overwrite default memory regions to maximize available memory
     mem_per_ch = int(replay.get_mem_size() / len(args.channels))
-    mem_regions = [(idx * mem_per_ch, mem_per_ch) for idx, _ in enumerate(args.channels)]
+    mem_regions = [
+        (idx * mem_per_ch, mem_per_ch) for idx, _ in enumerate(args.channels)
+    ]
     dram.mem_regions = mem_regions
 
     data = np.zeros((len(radio_chans), num_samps), dtype=np.complex64)
@@ -90,11 +131,12 @@ def rfnoc_dram_rx(args):
     dram.issue_stream_cmd(stream_cmd)
     rx_md = uhd.types.RXMetadata()
     dram.recv(data, rx_md)
-    with open(args.output_file, 'wb') as out_file:
+    with open(args.output_file, "wb") as out_file:
         if args.numpy:
             np.save(out_file, data, allow_pickle=False, fix_imports=False)
         else:
             data.tofile(out_file)
+
 
 def main():
     """RX samples and write to file"""
@@ -104,6 +146,7 @@ def main():
         rfnoc_dram_rx(args)
     else:
         multi_usrp_rx(args)
+
 
 if __name__ == "__main__":
     main()
