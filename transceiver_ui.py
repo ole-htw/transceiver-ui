@@ -1,0 +1,264 @@
+#!/usr/bin/env python3
+"""Simple GUI to generate, transmit and receive signals."""
+import subprocess
+import tkinter as tk
+from tkinter import ttk, messagebox
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+from tx_generator import generate_waveform
+
+
+def save_interleaved(filename: str, data: np.ndarray, amplitude: float = 10000.0) -> None:
+    """Save complex64 data as interleaved int16."""
+    max_abs = np.max(np.abs(data)) if np.any(data) else 1.0
+    scale = amplitude / max_abs if max_abs > 1e-9 else 1.0
+    scaled = data * scale
+    real_i16 = np.int16(np.round(np.real(scaled)))
+    imag_i16 = np.int16(np.round(np.imag(scaled)))
+    interleaved = np.empty(real_i16.size + imag_i16.size, dtype=np.int16)
+    interleaved[0::2] = np.clip(real_i16, -32768, 32767)
+    interleaved[1::2] = np.clip(imag_i16, -32768, 32767)
+    interleaved.tofile(filename)
+
+
+def visualize(data: np.ndarray, fs: float, mode: str, title: str) -> None:
+    """Visualize the data using matplotlib."""
+    if data.size == 0:
+        messagebox.showerror("Error", "No data to visualize")
+        return
+
+    if mode == "Signal":
+        plt.figure()
+        plt.plot(np.real(data), label="Real")
+        plt.plot(np.imag(data), label="Imag")
+        plt.title(title)
+        plt.grid(True)
+        plt.legend()
+    elif mode in ("Freq", "Freq Analysis"):
+        spec = np.fft.fftshift(np.fft.fft(data))
+        freqs = np.fft.fftshift(np.fft.fftfreq(len(data), d=1/fs))
+        plt.figure()
+        plt.plot(freqs, 20*np.log10(np.abs(spec)+1e-9))
+        plt.title(f"Spectrum: {title}")
+        plt.xlabel("Frequency [Hz]")
+        plt.ylabel("Magnitude [dB]")
+        plt.grid(True)
+    elif mode == "InstantFreq":
+        phase = np.unwrap(np.angle(data))
+        inst = np.diff(phase)
+        fi = fs * inst / (2*np.pi)
+        t = np.arange(len(fi))/fs
+        plt.figure()
+        plt.plot(t, fi)
+        plt.title(f"Instantaneous Frequency: {title}")
+        plt.xlabel("Time [s]")
+        plt.ylabel("Frequency [Hz]")
+        plt.grid(True)
+    elif mode == "Autocorr":
+        ac = np.correlate(data, data, mode="full")
+        lags = np.arange(-len(data)+1, len(data))
+        plt.figure()
+        plt.plot(lags, np.abs(ac))
+        plt.title(f"Autocorrelation: {title}")
+        plt.xlabel("Lag")
+        plt.ylabel("Magnitude")
+        plt.grid(True)
+    elif mode == "Crosscorr":
+        messagebox.showinfo("Info", "Crosscorrelation requires two files.")
+        return
+    else:
+        messagebox.showerror("Error", f"Unknown mode {mode}")
+        return
+    plt.tight_layout()
+    plt.show()
+
+
+class TransceiverUI(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Signal Transceiver")
+        self.create_widgets()
+
+    def create_widgets(self):
+        self.columnconfigure(0, weight=1)
+        self.columnconfigure(1, weight=1)
+        self.columnconfigure(2, weight=1)
+
+        # ----- Column 1: Generation -----
+        gen_frame = ttk.LabelFrame(self, text="Signal Generation")
+        gen_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+
+        ttk.Label(gen_frame, text="Waveform").grid(row=0, column=0, sticky="w")
+        self.wave_var = tk.StringVar(value="sinus")
+        ttk.Combobox(gen_frame, textvariable=self.wave_var,
+                     values=["sinus", "zadoffchu", "chirp"], width=10).grid(row=0, column=1)
+
+        ttk.Label(gen_frame, text="fs").grid(row=1, column=0, sticky="w")
+        self.fs_entry = ttk.Entry(gen_frame)
+        self.fs_entry.insert(0, "25e6")
+        self.fs_entry.grid(row=1, column=1)
+
+        ttk.Label(gen_frame, text="f / f0").grid(row=2, column=0, sticky="w")
+        self.f_entry = ttk.Entry(gen_frame)
+        self.f_entry.insert(0, "1e6")
+        self.f_entry.grid(row=2, column=1)
+
+        ttk.Label(gen_frame, text="f1").grid(row=3, column=0, sticky="w")
+        self.f1_entry = ttk.Entry(gen_frame)
+        self.f1_entry.grid(row=3, column=1)
+
+        ttk.Label(gen_frame, text="Samples").grid(row=4, column=0, sticky="w")
+        self.samples_entry = ttk.Entry(gen_frame)
+        self.samples_entry.insert(0, "40000")
+        self.samples_entry.grid(row=4, column=1)
+
+        ttk.Label(gen_frame, text="Amplitude").grid(row=5, column=0, sticky="w")
+        self.amp_entry = ttk.Entry(gen_frame)
+        self.amp_entry.insert(0, "10000")
+        self.amp_entry.grid(row=5, column=1)
+
+        ttk.Label(gen_frame, text="File").grid(row=6, column=0, sticky="w")
+        self.file_entry = ttk.Entry(gen_frame)
+        self.file_entry.insert(0, "tx_signal.bin")
+        self.file_entry.grid(row=6, column=1)
+
+        ttk.Label(gen_frame, text="View").grid(row=7, column=0, sticky="w")
+        self.view_var = tk.StringVar(value="Signal")
+        ttk.Combobox(gen_frame, textvariable=self.view_var,
+                     values=["Signal", "Freq", "InstantFreq", "Autocorr"], width=12).grid(row=7, column=1)
+
+        ttk.Button(gen_frame, text="Generate", command=self.generate).grid(row=8, column=0, columnspan=2, pady=5)
+
+        # ----- Column 2: Transmit -----
+        tx_frame = ttk.LabelFrame(self, text="Transmit")
+        tx_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+
+        ttk.Label(tx_frame, text="Args").grid(row=0, column=0, sticky="w")
+        self.tx_args = ttk.Entry(tx_frame)
+        self.tx_args.insert(0, "addr=192.168.10.2")
+        self.tx_args.grid(row=0, column=1)
+
+        ttk.Label(tx_frame, text="Rate").grid(row=1, column=0, sticky="w")
+        self.tx_rate = ttk.Entry(tx_frame)
+        self.tx_rate.insert(0, "200e6")
+        self.tx_rate.grid(row=1, column=1)
+
+        ttk.Label(tx_frame, text="Freq").grid(row=2, column=0, sticky="w")
+        self.tx_freq = ttk.Entry(tx_frame)
+        self.tx_freq.insert(0, "5.18e9")
+        self.tx_freq.grid(row=2, column=1)
+
+        ttk.Label(tx_frame, text="Gain").grid(row=3, column=0, sticky="w")
+        self.tx_gain = ttk.Entry(tx_frame)
+        self.tx_gain.insert(0, "30")
+        self.tx_gain.grid(row=3, column=1)
+
+        ttk.Label(tx_frame, text="File").grid(row=4, column=0, sticky="w")
+        self.tx_file = ttk.Entry(tx_frame)
+        self.tx_file.insert(0, "tx_signal.bin")
+        self.tx_file.grid(row=4, column=1)
+
+        ttk.Button(tx_frame, text="Transmit", command=self.transmit).grid(row=5, column=0, columnspan=2, pady=5)
+
+        # ----- Column 3: Receive -----
+        rx_frame = ttk.LabelFrame(self, text="Receive")
+        rx_frame.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
+
+        ttk.Label(rx_frame, text="Args").grid(row=0, column=0, sticky="w")
+        self.rx_args = ttk.Entry(rx_frame)
+        self.rx_args.insert(0, "addr=192.168.20.2,clock_source=external")
+        self.rx_args.grid(row=0, column=1)
+
+        ttk.Label(rx_frame, text="Rate").grid(row=1, column=0, sticky="w")
+        self.rx_rate = ttk.Entry(rx_frame)
+        self.rx_rate.insert(0, "200e6")
+        self.rx_rate.grid(row=1, column=1)
+
+        ttk.Label(rx_frame, text="Freq").grid(row=2, column=0, sticky="w")
+        self.rx_freq = ttk.Entry(rx_frame)
+        self.rx_freq.insert(0, "5.18e9")
+        self.rx_freq.grid(row=2, column=1)
+
+        ttk.Label(rx_frame, text="Duration").grid(row=3, column=0, sticky="w")
+        self.rx_dur = ttk.Entry(rx_frame)
+        self.rx_dur.insert(0, "0.01")
+        self.rx_dur.grid(row=3, column=1)
+
+        ttk.Label(rx_frame, text="Gain").grid(row=4, column=0, sticky="w")
+        self.rx_gain = ttk.Entry(rx_frame)
+        self.rx_gain.insert(0, "80")
+        self.rx_gain.grid(row=4, column=1)
+
+        ttk.Label(rx_frame, text="Output").grid(row=5, column=0, sticky="w")
+        self.rx_file = ttk.Entry(rx_frame)
+        self.rx_file.insert(0, "rx_signal.bin")
+        self.rx_file.grid(row=5, column=1)
+
+        ttk.Label(rx_frame, text="View").grid(row=6, column=0, sticky="w")
+        self.rx_view = tk.StringVar(value="Signal")
+        ttk.Combobox(rx_frame, textvariable=self.rx_view,
+                     values=["Signal", "Freq", "InstantFreq", "Autocorr", "Crosscorr"], width=12).grid(row=6, column=1)
+
+        ttk.Button(rx_frame, text="Receive", command=self.receive).grid(row=7, column=0, columnspan=2, pady=5)
+
+    # ----- Actions -----
+    def generate(self):
+        try:
+            fs = float(eval(self.fs_entry.get()))
+            samples = int(self.samples_entry.get())
+            amp = float(self.amp_entry.get())
+            waveform = self.wave_var.get()
+            f0 = float(eval(self.f_entry.get())) if self.f_entry.get() else 0.0
+            f1 = float(eval(self.f1_entry.get())) if self.f1_entry.get() else None
+            data = generate_waveform(waveform, fs, f0, samples, f0=f0, f1=f1)
+            save_interleaved(self.file_entry.get(), data, amplitude=amp)
+            visualize(data, fs, self.view_var.get(), "Generated")
+        except Exception as exc:
+            messagebox.showerror("Generate error", str(exc))
+
+    def transmit(self):
+        cmd = ["./rfnoc_replay_samples_from_file",
+               "--args", self.tx_args.get(),
+               "--rate", self.tx_rate.get(),
+               "--freq", self.tx_freq.get(),
+               "--gain", self.tx_gain.get(),
+               "--nsamps", "0",
+               "--file", self.tx_file.get()]
+        try:
+            subprocess.run(cmd, check=True)
+        except Exception as exc:
+            messagebox.showerror("Transmit error", str(exc))
+
+    def receive(self):
+        out_file = self.rx_file.get()
+        cmd = ["./rx_to_file.py",
+               "-a", self.rx_args.get(),
+               "-f", self.rx_freq.get(),
+               "-r", self.rx_rate.get(),
+               "-d", self.rx_dur.get(),
+               "-g", self.rx_gain.get(),
+               "--dram",
+               "--output-file", out_file]
+        try:
+            subprocess.run(cmd, check=True)
+        except Exception as exc:
+            messagebox.showerror("Receive error", str(exc))
+            return
+        try:
+            subprocess.run(["./rx_convert.py", out_file], check=True)
+            conv_file = out_file.replace(".bin", "_conv.bin")
+            data = np.fromfile(conv_file, dtype=np.complex64)
+            visualize(data, float(eval(self.rx_rate.get())), self.rx_view.get(), "Received")
+        except Exception as exc:
+            messagebox.showerror("Visualization error", str(exc))
+
+
+def main() -> None:
+    app = TransceiverUI()
+    app.mainloop()
+
+
+if __name__ == "__main__":
+    main()
