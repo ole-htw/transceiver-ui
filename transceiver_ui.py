@@ -52,12 +52,26 @@ class ConsoleWindow(tk.Toplevel):
 
 
 class SuggestEntry(tk.Frame):
-    """Entry widget with removable suggestion buttons."""
+    """Entry widget with removable suggestion buttons.
 
-    def __init__(self, parent, name: str, width: int | None = None) -> None:
+    Parameters
+    ----------
+    parent : widget
+        Parent widget.
+    name : str
+        Identifier used to store/load suggestions.
+    width : int | None, optional
+        Entry width.
+    textvariable : tk.StringVar | None, optional
+        Shared variable for the underlying entry.
+    """
+
+    def __init__(self, parent, name: str, width: int | None = None,
+                 textvariable: tk.StringVar | None = None) -> None:
         super().__init__(parent)
         self.name = name
-        self.entry = ttk.Entry(self, width=width)
+        self.entry = ttk.Entry(self, width=width, textvariable=textvariable)
+        self.var = textvariable
         self.entry.grid(row=0, column=0, sticky="ew")
         self.sugg_frame = tk.Frame(self)
         self.sugg_frame.grid(row=1, column=0, sticky="w")
@@ -230,6 +244,7 @@ class TransceiverUI(tk.Tk):
         # define view variables early so callbacks won't fail
         self.view_var = tk.StringVar(value="Signal")
         self.rx_view = tk.StringVar(value="Signal")
+        self.rate_var = tk.StringVar(value="200e6")
         self.console = None
         self._out_queue = queue.Queue()
         self._cmd_running = False
@@ -257,8 +272,8 @@ class TransceiverUI(tk.Tk):
         wave_box.bind("<<ComboboxSelected>>", lambda _e: self.update_waveform_fields())
 
         ttk.Label(gen_frame, text="fs").grid(row=1, column=0, sticky="w")
-        self.fs_entry = SuggestEntry(gen_frame, "fs_entry")
-        self.fs_entry.insert(0, "25e6")
+        self.fs_entry = SuggestEntry(gen_frame, "fs_entry",
+                                     textvariable=self.rate_var)
         self.fs_entry.grid(row=1, column=1, sticky="ew")
 
         self.f_label = ttk.Label(gen_frame, text="f")
@@ -318,8 +333,8 @@ class TransceiverUI(tk.Tk):
         self.tx_args.grid(row=0, column=1, sticky="ew")
 
         ttk.Label(tx_frame, text="Rate").grid(row=1, column=0, sticky="w")
-        self.tx_rate = SuggestEntry(tx_frame, "tx_rate")
-        self.tx_rate.insert(0, "200e6")
+        self.tx_rate = SuggestEntry(tx_frame, "tx_rate",
+                                   textvariable=self.rate_var)
         self.tx_rate.grid(row=1, column=1, sticky="ew")
 
         ttk.Label(tx_frame, text="Freq").grid(row=2, column=0, sticky="w")
@@ -349,8 +364,8 @@ class TransceiverUI(tk.Tk):
         self.rx_args.grid(row=0, column=1, sticky="ew")
 
         ttk.Label(rx_frame, text="Rate").grid(row=1, column=0, sticky="w")
-        self.rx_rate = SuggestEntry(rx_frame, "rx_rate")
-        self.rx_rate.insert(0, "200e6")
+        self.rx_rate = SuggestEntry(rx_frame, "rx_rate",
+                                   textvariable=self.rate_var)
         self.rx_rate.grid(row=1, column=1, sticky="ew")
 
         ttk.Label(rx_frame, text="Freq").grid(row=2, column=0, sticky="w")
