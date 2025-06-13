@@ -322,6 +322,10 @@ class TransceiverUI(tk.Tk):
         self.gen_scroll.grid(row=0, column=1, sticky="ns")
         self.gen_canvas.configure(yscrollcommand=self.gen_scroll.set)
 
+        # enable mouse wheel scrolling
+        self.gen_canvas.bind("<Enter>", self._bind_gen_mousewheel)
+        self.gen_canvas.bind("<Leave>", self._unbind_gen_mousewheel)
+
         self.gen_plots_frame = ttk.Frame(self.gen_canvas)
         self.gen_canvas.create_window((0, 0), window=self.gen_plots_frame, anchor="nw")
         self.gen_plots_frame.bind(
@@ -464,6 +468,28 @@ class TransceiverUI(tk.Tk):
             self.console.text.delete("1.0", tk.END)
         while not self._out_queue.empty():
             self._out_queue.get_nowait()
+
+    # ----- Mousewheel helpers -----
+    def _bind_gen_mousewheel(self, _event) -> None:
+        self.gen_canvas.bind_all("<MouseWheel>", self._on_gen_mousewheel)
+        self.gen_canvas.bind_all("<Button-4>", self._on_gen_mousewheel)
+        self.gen_canvas.bind_all("<Button-5>", self._on_gen_mousewheel)
+
+    def _unbind_gen_mousewheel(self, _event) -> None:
+        self.gen_canvas.unbind_all("<MouseWheel>")
+        self.gen_canvas.unbind_all("<Button-4>")
+        self.gen_canvas.unbind_all("<Button-5>")
+
+    def _on_gen_mousewheel(self, event) -> None:
+        delta = 0
+        if hasattr(event, "delta") and event.delta:
+            delta = -1 * int(event.delta / 120)
+        elif event.num == 4:
+            delta = -1
+        elif event.num == 5:
+            delta = 1
+        if delta:
+            self.gen_canvas.yview_scroll(delta, "units")
 
     def _process_queue(self) -> None:
         while not self._out_queue.empty():
