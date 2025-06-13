@@ -645,6 +645,22 @@ class TransceiverUI(tk.Tk):
         if self._cmd_running:
             self.after(100, self._process_queue)
 
+    def _kill_stale_tx(self) -> None:
+        """Terminate orphaned transmit processes from previous runs."""
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", "rfnoc_replay_samples_from_file"],
+                capture_output=True,
+                text=True,
+            )
+            if result.stdout.strip():
+                subprocess.run(
+                    ["pkill", "-f", "rfnoc_replay_samples_from_file"],
+                    capture_output=True,
+                )
+        except Exception:
+            pass
+
     def _run_cmd(self, cmd: list[str]) -> None:
         try:
             proc = subprocess.Popen(
@@ -874,6 +890,7 @@ class TransceiverUI(tk.Tk):
             messagebox.showerror("Generate error", str(exc))
 
     def transmit(self):
+        self._kill_stale_tx()
         cmd = ["./rfnoc_replay_samples_from_file",
                "--args", self.tx_args.get(),
                "--rate", self.tx_rate.get(),
