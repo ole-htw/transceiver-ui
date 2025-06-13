@@ -208,9 +208,12 @@ def _create_plot_figure(data: np.ndarray, fs: float, mode: str, title: str, size
 
 
 class TransceiverUI(tk.Tk):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.title("Signal Transceiver")
+        # define view variables early so callbacks won't fail
+        self.view_var = tk.StringVar(value="Signal")
+        self.rx_view = tk.StringVar(value="Signal")
         self.create_widgets()
 
     def create_widgets(self):
@@ -272,6 +275,11 @@ class TransceiverUI(tk.Tk):
         self.file_entry.insert(0, "tx_signal.bin")
         self.file_entry.grid(row=6, column=1, sticky="ew")
 
+<<<<<<< HEAD
+        ttk.Label(gen_frame, text="View").grid(row=7, column=0, sticky="w")
+        ttk.Combobox(gen_frame, textvariable=self.view_var,
+                     values=["Signal", "Freq", "InstantFreq", "Autocorr"], width=12).grid(row=7, column=1)
+=======
         ttk.Button(gen_frame, text="Generate", command=self.generate).grid(row=7, column=0, columnspan=2, pady=5)
 
         self.gen_plots_frame = ttk.Frame(gen_frame)
@@ -280,6 +288,7 @@ class TransceiverUI(tk.Tk):
         self.gen_canvases = []
         self.latest_data = None
         self.latest_fs = 0.0
+>>>>>>> main
 
         self.update_waveform_fields()
 
@@ -349,7 +358,6 @@ class TransceiverUI(tk.Tk):
         self.rx_file.grid(row=5, column=1, sticky="ew")
 
         ttk.Label(rx_frame, text="View").grid(row=6, column=0, sticky="w")
-        self.rx_view = tk.StringVar(value="Signal")
         ttk.Combobox(rx_frame, textvariable=self.rx_view,
                      values=["Signal", "Freq", "InstantFreq", "Autocorr", "Crosscorr"], width=12).grid(row=6, column=1)
 
@@ -380,6 +388,8 @@ class TransceiverUI(tk.Tk):
             self.f_entry.grid(row=2, column=1, sticky="ew")
             self.f1_label.grid(row=3, column=0, sticky="w")
             self.f1_entry.grid(row=3, column=1, sticky="ew")
+<<<<<<< HEAD
+=======
 
     def _clear_gen_plots(self) -> None:
         for canv in self.gen_canvases:
@@ -414,6 +424,7 @@ class TransceiverUI(tk.Tk):
         except Exception:
             pass
         plt.show()
+>>>>>>> main
 
 
     # ----- Actions -----
