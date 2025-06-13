@@ -243,7 +243,7 @@ def _gen_rx_filename(app) -> str:
     return str(Path("signals/rx") / name)
 
 
-def visualize(data: np.ndarray, fs: float, mode: str, title: str) -> None:
+def visualize(data: np.ndarray, fs: float, mode: str, title: str, ref_data: np.ndarray | None = None) -> None:
     """Visualize *data* using PyQtGraph."""
     if data.size == 0:
         messagebox.showerror("Error", "No data to visualize")
@@ -287,8 +287,16 @@ def visualize(data: np.ndarray, fs: float, mode: str, title: str) -> None:
         win.setLabel("left", "Magnitude")
         win.showGrid(x=True, y=True)
     elif mode == "Crosscorr":
-        messagebox.showinfo("Info", "Crosscorrelation requires two files.")
-        return
+        if ref_data is None or ref_data.size == 0:
+            messagebox.showinfo("Info", "Crosscorrelation requires TX data.")
+            return
+        n = min(len(data), len(ref_data))
+        cc = np.correlate(data[:n], ref_data[:n], mode="full")
+        lags = np.arange(-n + 1, n)
+        win = pg.plot(lags, np.abs(cc), pen="b", title=f"Crosscorr. with TX: {title}")
+        win.setLabel("bottom", "Lag")
+        win.setLabel("left", "Magnitude")
+        win.showGrid(x=True, y=True)
     else:
         messagebox.showerror("Error", f"Unknown mode {mode}")
         return
@@ -296,7 +304,7 @@ def visualize(data: np.ndarray, fs: float, mode: str, title: str) -> None:
     pg.exec()
 
 
-def _plot_on_pg(plot: pg.PlotItem, data: np.ndarray, fs: float, mode: str, title: str) -> None:
+def _plot_on_pg(plot: pg.PlotItem, data: np.ndarray, fs: float, mode: str, title: str, ref_data: np.ndarray | None = None) -> None:
     """Helper to draw the selected visualization on a PyQtGraph PlotItem."""
     data = _reduce_data(data)
     if mode == "Signal":
@@ -329,10 +337,20 @@ def _plot_on_pg(plot: pg.PlotItem, data: np.ndarray, fs: float, mode: str, title
         plot.setTitle(f"Autocorrelation: {title}")
         plot.setLabel("bottom", "Lag")
         plot.setLabel("left", "Magnitude")
+    elif mode == "Crosscorr":
+        if ref_data is None or ref_data.size == 0:
+            return
+        n = min(len(data), len(ref_data))
+        cc = np.correlate(data[:n], ref_data[:n], mode='full')
+        lags = np.arange(-n + 1, n)
+        plot.plot(lags, np.abs(cc), pen="b")
+        plot.setTitle(f"Crosscorr. with TX: {title}")
+        plot.setLabel("bottom", "Lag")
+        plot.setLabel("left", "Magnitude")
     plot.showGrid(x=True, y=True)
 
 
-def _plot_on_mpl(ax, data: np.ndarray, fs: float, mode: str, title: str) -> None:
+def _plot_on_mpl(ax, data: np.ndarray, fs: float, mode: str, title: str, ref_data: np.ndarray | None = None) -> None:
     """Helper to draw a small matplotlib preview plot."""
     data = _reduce_data(data)
     if mode == "Signal":
@@ -359,6 +377,17 @@ def _plot_on_mpl(ax, data: np.ndarray, fs: float, mode: str, title: str) -> None
         ac = np.correlate(data, data, mode="full")
         lags = np.arange(-len(data) + 1, len(data))
         ax.plot(lags, np.abs(ac), "b")
+        ax.set_xlabel("Lag")
+        ax.set_ylabel("Magnitude")
+    elif mode == "Crosscorr":
+        if ref_data is None or ref_data.size == 0:
+            ax.set_title("No TX data")
+            ax.grid(True)
+            return
+        n = min(len(data), len(ref_data))
+        cc = np.correlate(data[:n], ref_data[:n], mode='full')
+        lags = np.arange(-n + 1, n)
+        ax.plot(lags, np.abs(cc), "b")
         ax.set_xlabel("Lag")
         ax.set_ylabel("Magnitude")
     ax.set_title(title)
@@ -569,8 +598,12 @@ class TransceiverUI(tk.Tk):
         self.rx_file.grid(row=5, column=1, sticky="ew")
 
         ttk.Label(rx_frame, text="View").grid(row=6, column=0, sticky="w")
-        ttk.Combobox(rx_frame, textvariable=self.rx_view,
-                     values=["Signal", "Freq", "InstantFreq", "Autocorr", "Crosscorr"], width=12).grid(row=6, column=1)
+        ttk.Combobox(
+            rx_frame,
+            textvariable=self.rx_view,
+            values=["Signal", "Freq", "InstantFreq", "Crosscorr"],
+            width=12,
+        ).grid(row=6, column=1)
 
         ttk.Button(rx_frame, text="Receive", command=self.receive).grid(row=7, column=0, columnspan=2, pady=5)
         self.rx_stop = ttk.Button(rx_frame, text="Stop", command=self.stop_receive, state="disabled")
@@ -653,7 +686,7 @@ class TransceiverUI(tk.Tk):
             c.get_tk_widget().destroy()
         self.gen_canvases.clear()
 
-        modes = ["Signal", "Freq", "InstantFreq", "Autocorr"]
+        modes = ["Signal", "Freq", "InstantFreq"]
         for idx, mode in enumerate(modes):
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
@@ -670,15 +703,24 @@ class TransceiverUI(tk.Tk):
         self.latest_data = data
         self.latest_fs = fs
 
+        try:
+            raw = np.fromfile(self.tx_file.get(), dtype=np.int16)
+            if raw.size % 2:
+                raw = raw[:-1]
+            raw = raw.reshape(-1, 2).astype(np.float32)
+            self.tx_data = raw[:, 0] + 1j * raw[:, 1]
+        except Exception:
+            self.tx_data = np.array([], dtype=np.complex64)
+
         for c in self.rx_canvases:
             c.get_tk_widget().destroy()
         self.rx_canvases.clear()
 
-        modes = ["Signal", "Freq", "InstantFreq", "Autocorr"]
+        modes = ["Signal", "Freq", "InstantFreq", "Crosscorr"]
         for idx, mode in enumerate(modes):
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
-            _plot_on_mpl(ax, data, fs, mode, mode)
+            _plot_on_mpl(ax, data, fs, mode, mode, self.tx_data)
             canvas = FigureCanvasTkAgg(fig, master=self.rx_plots_frame)
             canvas.draw()
             widget = canvas.get_tk_widget()
@@ -826,7 +868,14 @@ class TransceiverUI(tk.Tk):
         pg.setConfigOption("foreground", "k")
         app = pg.mkQApp()
         win = pg.plot()
-        _plot_on_pg(win.getPlotItem(), self.latest_data, self.latest_fs, mode, mode)
+        _plot_on_pg(
+            win.getPlotItem(),
+            self.latest_data,
+            self.latest_fs,
+            mode,
+            mode,
+            getattr(self, "tx_data", None),
+        )
         try:
             win.showMaximized()
         except Exception:
