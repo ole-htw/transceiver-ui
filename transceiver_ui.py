@@ -414,7 +414,7 @@ class TransceiverUI(tk.Tk):
         self.f_label = ttk.Label(gen_frame, text="f")
         self.f_label.grid(row=2, column=0, sticky="w")
         self.f_entry = SuggestEntry(gen_frame, "f_entry")
-        self.f_entry.insert(0, "1e6")
+        self.f_entry.insert(0, "25e3")
         self.f_entry.grid(row=2, column=1, sticky="ew")
         self.f_entry.entry.bind("<FocusOut>", lambda _e: self.auto_update_tx_filename())
 
