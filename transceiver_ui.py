@@ -212,7 +212,6 @@ class TransceiverUI(tk.Tk):
         super().__init__()
         self.title("Signal Transceiver")
         # define view variables early so callbacks won't fail
-        self.view_var = tk.StringVar(value="Signal")
         self.rx_view = tk.StringVar(value="Signal")
         self.create_widgets()
 
@@ -275,13 +274,25 @@ class TransceiverUI(tk.Tk):
         self.file_entry.insert(0, "tx_signal.bin")
         self.file_entry.grid(row=6, column=1, sticky="ew")
 
-        ttk.Label(gen_frame, text="View").grid(row=7, column=0, sticky="w")
-        ttk.Combobox(gen_frame, textvariable=self.view_var,
-                     values=["Signal", "Freq", "InstantFreq", "Autocorr"], width=12).grid(row=7, column=1)
         ttk.Button(gen_frame, text="Generate", command=self.generate).grid(row=7, column=0, columnspan=2, pady=5)
 
-        self.gen_plots_frame = ttk.Frame(gen_frame)
-        self.gen_plots_frame.grid(row=8, column=0, columnspan=2, sticky="nsew")
+        scroll_container = ttk.Frame(gen_frame)
+        scroll_container.grid(row=8, column=0, columnspan=2, sticky="nsew")
+        scroll_container.columnconfigure(0, weight=1)
+        scroll_container.rowconfigure(0, weight=1)
+
+        self.gen_canvas = tk.Canvas(scroll_container)
+        self.gen_canvas.grid(row=0, column=0, sticky="nsew")
+        self.gen_scroll = ttk.Scrollbar(scroll_container, orient="vertical", command=self.gen_canvas.yview)
+        self.gen_scroll.grid(row=0, column=1, sticky="ns")
+        self.gen_canvas.configure(yscrollcommand=self.gen_scroll.set)
+
+        self.gen_plots_frame = ttk.Frame(self.gen_canvas)
+        self.gen_canvas.create_window((0, 0), window=self.gen_plots_frame, anchor="nw")
+        self.gen_plots_frame.bind(
+            "<Configure>",
+            lambda _e: self.gen_canvas.configure(scrollregion=self.gen_canvas.bbox("all")),
+        )
         gen_frame.rowconfigure(8, weight=1)
         self.gen_canvases = []
         self.latest_data = None
@@ -390,6 +401,7 @@ class TransceiverUI(tk.Tk):
         for canv in self.gen_canvases:
             canv.get_tk_widget().destroy()
         self.gen_canvases.clear()
+        self.gen_canvas.configure(scrollregion=self.gen_canvas.bbox("all"))
 
     def _display_gen_plots(self, data: np.ndarray, fs: float) -> None:
         """Render all visualizations below the Generate button."""
@@ -407,6 +419,7 @@ class TransceiverUI(tk.Tk):
             widget.bind("<Button-1>", lambda _e, m=mode: self._show_fullscreen(m))
             self.gen_canvases.append(canvas)
         self.gen_plots_frame.update_idletasks()
+        self.gen_canvas.configure(scrollregion=self.gen_canvas.bbox("all"))
 
     def _show_fullscreen(self, mode: str) -> None:
         if self.latest_data is None:
