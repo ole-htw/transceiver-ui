@@ -1,5 +1,13 @@
 .venv/
-signals/
+signals/*
+!signals/.gitkeep
+!signals/
+signals/tx/*
+!signals/tx/.gitkeep
+!signals/tx/
+signals/rx/*
+!signals/rx/.gitkeep
+!signals/rx/
 
 __pycache__
 
