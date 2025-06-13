@@ -250,6 +250,7 @@ class TransceiverUI(tk.Tk):
         self.create_widgets()
 
     def create_widgets(self):
+        self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
         self.columnconfigure(1, weight=1)
         self.columnconfigure(2, weight=1)
