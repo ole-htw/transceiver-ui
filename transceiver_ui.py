@@ -263,6 +263,39 @@ def _plot_on_pg(plot: pg.PlotItem, data: np.ndarray, fs: float, mode: str, title
     plot.showGrid(x=True, y=True)
 
 
+def _plot_on_mpl(ax, data: np.ndarray, fs: float, mode: str, title: str) -> None:
+    """Helper to draw a small matplotlib preview plot."""
+    data = _reduce_data(data)
+    if mode == "Signal":
+        ax.plot(np.real(data), "b", label="Real")
+        ax.plot(np.imag(data), "r--", label="Imag")
+        ax.set_xlabel("Sample Index")
+        ax.set_ylabel("Amplitude")
+        ax.legend()
+    elif mode in ("Freq", "Freq Analysis"):
+        spec = np.fft.fftshift(np.fft.fft(data))
+        freqs = np.fft.fftshift(np.fft.fftfreq(len(data), d=1/fs))
+        ax.plot(freqs, 20*np.log10(np.abs(spec) + 1e-9), "b")
+        ax.set_xlabel("Frequency [Hz]")
+        ax.set_ylabel("Magnitude [dB]")
+    elif mode == "InstantFreq":
+        phase = np.unwrap(np.angle(data))
+        inst = np.diff(phase)
+        fi = fs * inst / (2 * np.pi)
+        t = np.arange(len(fi)) / fs
+        ax.plot(t, fi, "b")
+        ax.set_xlabel("Time [s]")
+        ax.set_ylabel("Frequency [Hz]")
+    elif mode == "Autocorr":
+        ac = np.correlate(data, data, mode="full")
+        lags = np.arange(-len(data) + 1, len(data))
+        ax.plot(lags, np.abs(ac), "b")
+        ax.set_xlabel("Lag")
+        ax.set_ylabel("Magnitude")
+    ax.set_title(title)
+    ax.grid(True)
+
+
 class TransceiverUI(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -484,22 +517,25 @@ class TransceiverUI(tk.Tk):
 
 
     def _display_gen_plots(self, data: np.ndarray, fs: float) -> None:
-        """Open a PyQtGraph window with different visualizations."""
+        """Render preview plots below the generation parameters."""
         self.latest_data = data
         self.latest_fs = fs
 
-        pg.setConfigOption("background", "w")
-        pg.setConfigOption("foreground", "k")
-        app = pg.mkQApp()
-        win = pg.GraphicsLayoutWidget(title="Generated Signal")
+        for c in self.gen_canvases:
+            c.get_tk_widget().destroy()
+        self.gen_canvases.clear()
 
         modes = ["Signal", "Freq", "InstantFreq", "Autocorr"]
         for idx, mode in enumerate(modes):
-            plot = win.addPlot(row=idx, col=0)
-            _plot_on_pg(plot, data, fs, mode, mode)
-
-        win.show()
-        pg.exec()
+            fig = Figure(figsize=(5, 2), dpi=100)
+            ax = fig.add_subplot(111)
+            _plot_on_mpl(ax, data, fs, mode, mode)
+            canvas = FigureCanvasTkAgg(fig, master=self.gen_plots_frame)
+            canvas.draw()
+            widget = canvas.get_tk_widget()
+            widget.grid(row=idx, column=0, sticky="nsew", pady=2)
+            widget.bind("<Button-1>", lambda _e, m=mode: self._show_fullscreen(m))
+            self.gen_canvases.append(canvas)
 
     def _open_console(self, title: str) -> None:
         if self.console is None or not self.console.winfo_exists():
