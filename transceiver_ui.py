@@ -476,7 +476,6 @@ class TransceiverUI(tk.Tk):
         self.latest_data = None
         self.latest_fs = 0.0
 
-        self.update_waveform_fields()
 
         # ----- Presets -----
         preset_frame = ttk.LabelFrame(self, text="Presets")
@@ -595,6 +594,7 @@ class TransceiverUI(tk.Tk):
         )
         rx_frame.rowconfigure(9, weight=1)
         self.rx_canvases = []
+        self.update_waveform_fields()
         self.auto_update_tx_filename()
         self.auto_update_rx_filename()
 
