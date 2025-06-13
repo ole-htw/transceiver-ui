@@ -271,6 +271,7 @@ class TransceiverUI(tk.Tk):
         self.console = None
         self._out_queue = queue.Queue()
         self._cmd_running = False
+        self._proc = None
         self.create_widgets()
 
     def create_widgets(self):
@@ -410,6 +411,19 @@ class TransceiverUI(tk.Tk):
         self.tx_file.grid(row=4, column=1, sticky="ew")
 
         ttk.Button(tx_frame, text="Transmit", command=self.transmit).grid(row=5, column=0, columnspan=2, pady=5)
+        self.tx_stop = ttk.Button(tx_frame, text="Stop", command=self.stop_transmit, state="disabled")
+        self.tx_stop.grid(row=6, column=0, columnspan=2, pady=(0, 5))
+
+        log_frame = ttk.Frame(tx_frame)
+        log_frame.grid(row=7, column=0, columnspan=2, sticky="nsew")
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
+        self.tx_log = tk.Text(log_frame, height=10, wrap="none")
+        self.tx_log.grid(row=0, column=0, sticky="nsew")
+        log_scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.tx_log.yview)
+        log_scroll.grid(row=0, column=1, sticky="ns")
+        self.tx_log.configure(yscrollcommand=log_scroll.set)
+        tx_frame.rowconfigure(7, weight=1)
 
         # ----- Column 3: Receive -----
         rx_frame = ttk.LabelFrame(self, text="Receive")
@@ -537,6 +551,9 @@ class TransceiverUI(tk.Tk):
             line = self._out_queue.get_nowait()
             if self.console and self.console.winfo_exists():
                 self.console.append(line)
+            if hasattr(self, "tx_log") and self.tx_log.winfo_exists():
+                self.tx_log.insert(tk.END, line)
+                self.tx_log.see(tk.END)
         if self._cmd_running:
             self.after(100, self._process_queue)
 
@@ -549,6 +566,7 @@ class TransceiverUI(tk.Tk):
                 text=True,
                 bufsize=1,
             )
+            self._proc = proc
             for line in proc.stdout:
                 self._out_queue.put(line)
             proc.wait()
@@ -557,6 +575,9 @@ class TransceiverUI(tk.Tk):
             self._out_queue.put(f"Error: {exc}\n")
         finally:
             self._cmd_running = False
+            self._proc = None
+            if hasattr(self, "tx_stop"):
+                self.tx_stop.config(state="disabled")
 
     def _show_fullscreen(self, mode: str) -> None:
         if self.latest_data is None:
@@ -694,10 +715,22 @@ class TransceiverUI(tk.Tk):
                "--gain", self.tx_gain.get(),
                "--nsamps", "0",
                "--file", self.tx_file.get()]
-        self._open_console("Transmit Log")
+        if hasattr(self, "tx_log"):
+            self.tx_log.delete("1.0", tk.END)
         self._cmd_running = True
+        if hasattr(self, "tx_stop"):
+            self.tx_stop.config(state="normal")
         threading.Thread(target=self._run_cmd, args=(cmd,), daemon=True).start()
         self._process_queue()
+
+    def stop_transmit(self) -> None:
+        if self._proc:
+            try:
+                self._proc.terminate()
+            except Exception:
+                pass
+        if hasattr(self, "tx_stop"):
+            self.tx_stop.config(state="disabled")
 
     def receive(self):
         out_file = self.rx_file.get()
