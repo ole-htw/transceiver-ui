@@ -92,22 +92,38 @@ class TransceiverUI(tk.Tk):
 
         ttk.Label(gen_frame, text="Waveform").grid(row=0, column=0, sticky="w")
         self.wave_var = tk.StringVar(value="sinus")
-        ttk.Combobox(gen_frame, textvariable=self.wave_var,
-                     values=["sinus", "zadoffchu", "chirp"], width=10).grid(row=0, column=1)
+        wave_box = ttk.Combobox(
+            gen_frame,
+            textvariable=self.wave_var,
+            values=["sinus", "zadoffchu", "chirp"],
+            width=10,
+            state="readonly",
+        )
+        wave_box.grid(row=0, column=1)
+        wave_box.bind("<<ComboboxSelected>>", lambda _e: self.update_waveform_fields())
 
         ttk.Label(gen_frame, text="fs").grid(row=1, column=0, sticky="w")
         self.fs_entry = ttk.Entry(gen_frame)
         self.fs_entry.insert(0, "25e6")
         self.fs_entry.grid(row=1, column=1)
 
-        ttk.Label(gen_frame, text="f / f0").grid(row=2, column=0, sticky="w")
+        self.f_label = ttk.Label(gen_frame, text="f")
+        self.f_label.grid(row=2, column=0, sticky="w")
         self.f_entry = ttk.Entry(gen_frame)
         self.f_entry.insert(0, "1e6")
         self.f_entry.grid(row=2, column=1)
 
-        ttk.Label(gen_frame, text="f1").grid(row=3, column=0, sticky="w")
+        self.f1_label = ttk.Label(gen_frame, text="f1")
         self.f1_entry = ttk.Entry(gen_frame)
+        self.f1_label.grid(row=3, column=0, sticky="w")
         self.f1_entry.grid(row=3, column=1)
+
+        self.q_label = ttk.Label(gen_frame, text="q")
+        self.q_entry = ttk.Entry(gen_frame)
+        self.q_entry.insert(0, "1")
+        # row placement will be adjusted in update_waveform_fields
+        self.q_label.grid(row=2, column=0, sticky="w")
+        self.q_entry.grid(row=2, column=1)
 
         ttk.Label(gen_frame, text="Samples").grid(row=4, column=0, sticky="w")
         self.samples_entry = ttk.Entry(gen_frame)
@@ -130,6 +146,7 @@ class TransceiverUI(tk.Tk):
                      values=["Signal", "Freq", "InstantFreq", "Autocorr"], width=12).grid(row=7, column=1)
 
         ttk.Button(gen_frame, text="Generate", command=self.generate).grid(row=8, column=0, columnspan=2, pady=5)
+        self.update_waveform_fields()
 
         # ----- Column 2: Transmit -----
         tx_frame = ttk.LabelFrame(self, text="Transmit")
@@ -203,6 +220,33 @@ class TransceiverUI(tk.Tk):
 
         ttk.Button(rx_frame, text="Receive", command=self.receive).grid(row=7, column=0, columnspan=2, pady=5)
 
+    def update_waveform_fields(self) -> None:
+        """Show or hide waveform specific parameters."""
+        w = self.wave_var.get().lower()
+
+        # hide all optional fields first
+        self.f_label.grid_remove()
+        self.f_entry.grid_remove()
+        self.f1_label.grid_remove()
+        self.f1_entry.grid_remove()
+        self.q_label.grid_remove()
+        self.q_entry.grid_remove()
+
+        if w == "sinus":
+            self.f_label.configure(text="f")
+            self.f_label.grid(row=2, column=0, sticky="w")
+            self.f_entry.grid(row=2, column=1)
+        elif w == "zadoffchu":
+            self.q_label.grid(row=2, column=0, sticky="w")
+            self.q_entry.grid(row=2, column=1)
+        elif w == "chirp":
+            self.f_label.configure(text="f0")
+            self.f_label.grid(row=2, column=0, sticky="w")
+            self.f_entry.grid(row=2, column=1)
+            self.f1_label.grid(row=3, column=0, sticky="w")
+            self.f1_entry.grid(row=3, column=1)
+
+
     # ----- Actions -----
     def generate(self):
         try:
@@ -210,9 +254,18 @@ class TransceiverUI(tk.Tk):
             samples = int(self.samples_entry.get())
             amp = float(self.amp_entry.get())
             waveform = self.wave_var.get()
-            f0 = float(eval(self.f_entry.get())) if self.f_entry.get() else 0.0
-            f1 = float(eval(self.f1_entry.get())) if self.f1_entry.get() else None
-            data = generate_waveform(waveform, fs, f0, samples, f0=f0, f1=f1)
+
+            if waveform == "sinus":
+                freq = float(eval(self.f_entry.get())) if self.f_entry.get() else 0.0
+                data = generate_waveform(waveform, fs, freq, samples)
+            elif waveform == "zadoffchu":
+                q = int(self.q_entry.get()) if self.q_entry.get() else 1
+                data = generate_waveform(waveform, fs, 0.0, samples, q=q)
+            else:  # chirp
+                f0 = float(eval(self.f_entry.get())) if self.f_entry.get() else 0.0
+                f1 = float(eval(self.f1_entry.get())) if self.f1_entry.get() else None
+                data = generate_waveform(waveform, fs, f0, samples, f0=f0, f1=f1)
+
             save_interleaved(self.file_entry.get(), data, amplitude=amp)
             visualize(data, fs, self.view_var.get(), "Generated")
         except Exception as exc:
