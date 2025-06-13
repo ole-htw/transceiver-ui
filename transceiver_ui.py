@@ -5,13 +5,12 @@ import threading
 import queue
 import tkinter as tk
 from tkinter import ttk, messagebox
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from matplotlib.figure import Figure
 import json
 from pathlib import Path
 
 import numpy as np
-import matplotlib.pyplot as plt
+from pyqtgraph.Qt import QtCore
+import pyqtgraph as pg
 
 from tx_generator import generate_waveform
 
@@ -140,101 +139,101 @@ def save_interleaved(filename: str, data: np.ndarray, amplitude: float = 10000.0
     interleaved.tofile(filename)
 
 
+def _reduce_data(data: np.ndarray, max_bytes: int = 1_000_000) -> np.ndarray:
+    """Return a downsampled view of *data* if it exceeds *max_bytes*."""
+    if data.nbytes <= max_bytes:
+        return data
+    step = int(np.ceil(data.nbytes / max_bytes))
+    return data[::step]
+
+
 def visualize(data: np.ndarray, fs: float, mode: str, title: str) -> None:
-    """Visualize the data using matplotlib."""
+    """Visualize *data* using PyQtGraph."""
     if data.size == 0:
         messagebox.showerror("Error", "No data to visualize")
         return
 
+    data = _reduce_data(data)
+
+    pg.setConfigOption("background", "w")
+    pg.setConfigOption("foreground", "k")
+    app = pg.mkQApp()
+
     if mode == "Signal":
-        plt.figure()
-        plt.plot(np.real(data), label="Real")
-        plt.plot(np.imag(data), label="Imag")
-        plt.title(title)
-        plt.grid(True)
-        plt.legend()
+        win = pg.plot(title=title)
+        win.addLegend()
+        win.plot(np.real(data), pen=pg.mkPen("b"), name="Real")
+        win.plot(np.imag(data), pen=pg.mkPen("r", style=QtCore.Qt.DashLine), name="Imag")
+        win.setLabel("bottom", "Sample Index")
+        win.setLabel("left", "Amplitude")
+        win.showGrid(x=True, y=True)
     elif mode in ("Freq", "Freq Analysis"):
         spec = np.fft.fftshift(np.fft.fft(data))
         freqs = np.fft.fftshift(np.fft.fftfreq(len(data), d=1/fs))
-        plt.figure()
-        plt.plot(freqs, 20*np.log10(np.abs(spec)+1e-9))
-        plt.title(f"Spectrum: {title}")
-        plt.xlabel("Frequency [Hz]")
-        plt.ylabel("Magnitude [dB]")
-        plt.grid(True)
+        win = pg.plot(freqs, 20*np.log10(np.abs(spec) + 1e-9), pen="b", title=f"Spectrum: {title}")
+        win.setLabel("bottom", "Frequency [Hz]")
+        win.setLabel("left", "Magnitude [dB]")
+        win.showGrid(x=True, y=True)
     elif mode == "InstantFreq":
         phase = np.unwrap(np.angle(data))
         inst = np.diff(phase)
-        fi = fs * inst / (2*np.pi)
-        t = np.arange(len(fi))/fs
-        plt.figure()
-        plt.plot(t, fi)
-        plt.title(f"Instantaneous Frequency: {title}")
-        plt.xlabel("Time [s]")
-        plt.ylabel("Frequency [Hz]")
-        plt.grid(True)
+        fi = fs * inst / (2 * np.pi)
+        t = np.arange(len(fi)) / fs
+        win = pg.plot(t, fi, pen="b", title=f"Instantaneous Frequency: {title}")
+        win.setLabel("bottom", "Time [s]")
+        win.setLabel("left", "Frequency [Hz]")
+        win.showGrid(x=True, y=True)
     elif mode == "Autocorr":
         ac = np.correlate(data, data, mode="full")
-        lags = np.arange(-len(data)+1, len(data))
-        plt.figure()
-        plt.plot(lags, np.abs(ac))
-        plt.title(f"Autocorrelation: {title}")
-        plt.xlabel("Lag")
-        plt.ylabel("Magnitude")
-        plt.grid(True)
+        lags = np.arange(-len(data) + 1, len(data))
+        win = pg.plot(lags, np.abs(ac), pen="b", title=f"Autocorrelation: {title}")
+        win.setLabel("bottom", "Lag")
+        win.setLabel("left", "Magnitude")
+        win.showGrid(x=True, y=True)
     elif mode == "Crosscorr":
         messagebox.showinfo("Info", "Crosscorrelation requires two files.")
         return
     else:
         messagebox.showerror("Error", f"Unknown mode {mode}")
         return
-    plt.tight_layout()
-    plt.show()
+
+    pg.exec()
 
 
-def _plot_on_axes(ax, data: np.ndarray, fs: float, mode: str, title: str) -> None:
-    """Helper to draw the selected visualization on *ax*."""
+def _plot_on_pg(plot: pg.PlotItem, data: np.ndarray, fs: float, mode: str, title: str) -> None:
+    """Helper to draw the selected visualization on a PyQtGraph PlotItem."""
+    data = _reduce_data(data)
     if mode == "Signal":
-        ax.plot(np.real(data), label="Real")
-        ax.plot(np.imag(data), label="Imag")
-        ax.set_title(title)
-        ax.grid(True)
-        ax.legend()
+        plot.addLegend()
+        plot.plot(np.real(data), pen=pg.mkPen("b"), name="Real")
+        plot.plot(np.imag(data), pen=pg.mkPen("r", style=QtCore.Qt.DashLine), name="Imag")
+        plot.setTitle(title)
+        plot.setLabel("bottom", "Sample Index")
+        plot.setLabel("left", "Amplitude")
     elif mode in ("Freq", "Freq Analysis"):
         spec = np.fft.fftshift(np.fft.fft(data))
         freqs = np.fft.fftshift(np.fft.fftfreq(len(data), d=1/fs))
-        ax.plot(freqs, 20*np.log10(np.abs(spec) + 1e-9))
-        ax.set_title(f"Spectrum: {title}")
-        ax.set_xlabel("Frequency [Hz]")
-        ax.set_ylabel("Magnitude [dB]")
-        ax.grid(True)
+        plot.plot(freqs, 20*np.log10(np.abs(spec) + 1e-9), pen="b")
+        plot.setTitle(f"Spectrum: {title}")
+        plot.setLabel("bottom", "Frequency [Hz]")
+        plot.setLabel("left", "Magnitude [dB]")
     elif mode == "InstantFreq":
         phase = np.unwrap(np.angle(data))
         inst = np.diff(phase)
-        fi = fs * inst / (2*np.pi)
+        fi = fs * inst / (2 * np.pi)
         t = np.arange(len(fi)) / fs
-        ax.plot(t, fi)
-        ax.set_title(f"Instantaneous Frequency: {title}")
-        ax.set_xlabel("Time [s]")
-        ax.set_ylabel("Frequency [Hz]")
-        ax.grid(True)
+        plot.plot(t, fi, pen="b")
+        plot.setTitle(f"Instantaneous Frequency: {title}")
+        plot.setLabel("bottom", "Time [s]")
+        plot.setLabel("left", "Frequency [Hz]")
     elif mode == "Autocorr":
         ac = np.correlate(data, data, mode="full")
         lags = np.arange(-len(data) + 1, len(data))
-        ax.plot(lags, np.abs(ac))
-        ax.set_title(f"Autocorrelation: {title}")
-        ax.set_xlabel("Lag")
-        ax.set_ylabel("Magnitude")
-        ax.grid(True)
-
-
-def _create_plot_figure(data: np.ndarray, fs: float, mode: str, title: str, size=(4, 3)) -> Figure:
-    """Return a matplotlib Figure for the given visualization."""
-    fig = Figure(figsize=size)
-    ax = fig.add_subplot(111)
-    _plot_on_axes(ax, data, fs, mode, title)
-    fig.tight_layout()
-    return fig
+        plot.plot(lags, np.abs(ac), pen="b")
+        plot.setTitle(f"Autocorrelation: {title}")
+        plot.setLabel("bottom", "Lag")
+        plot.setLabel("left", "Magnitude")
+    plot.showGrid(x=True, y=True)
 
 
 class TransceiverUI(tk.Tk):
@@ -432,29 +431,24 @@ class TransceiverUI(tk.Tk):
             self.f1_label.grid(row=3, column=0, sticky="w")
             self.f1_entry.grid(row=3, column=1, sticky="ew")
 
-    def _clear_gen_plots(self) -> None:
-        for canv in self.gen_canvases:
-            canv.get_tk_widget().destroy()
-        self.gen_canvases.clear()
-        self.gen_canvas.configure(scrollregion=self.gen_canvas.bbox("all"))
 
     def _display_gen_plots(self, data: np.ndarray, fs: float) -> None:
-        """Render all visualizations below the Generate button."""
+        """Open a PyQtGraph window with different visualizations."""
         self.latest_data = data
         self.latest_fs = fs
-        self._clear_gen_plots()
+
+        pg.setConfigOption("background", "w")
+        pg.setConfigOption("foreground", "k")
+        app = pg.mkQApp()
+        win = pg.GraphicsLayoutWidget(title="Generated Signal")
 
         modes = ["Signal", "Freq", "InstantFreq", "Autocorr"]
         for idx, mode in enumerate(modes):
-            fig = _create_plot_figure(data, fs, mode, mode)
-            canvas = FigureCanvasTkAgg(fig, master=self.gen_plots_frame)
-            canvas.draw()
-            widget = canvas.get_tk_widget()
-            widget.grid(row=idx, column=0, sticky="nsew", pady=2)
-            widget.bind("<Button-1>", lambda _e, m=mode: self._show_fullscreen(m))
-            self.gen_canvases.append(canvas)
-        self.gen_plots_frame.update_idletasks()
-        self.gen_canvas.configure(scrollregion=self.gen_canvas.bbox("all"))
+            plot = win.addPlot(row=idx, col=0)
+            _plot_on_pg(plot, data, fs, mode, mode)
+
+        win.show()
+        pg.exec()
 
     def _open_console(self, title: str) -> None:
         if self.console is None or not self.console.winfo_exists():
@@ -494,14 +488,16 @@ class TransceiverUI(tk.Tk):
     def _show_fullscreen(self, mode: str) -> None:
         if self.latest_data is None:
             return
-        fig, ax = plt.subplots()
-        _plot_on_axes(ax, self.latest_data, self.latest_fs, mode, mode)
-        fig.tight_layout()
+        pg.setConfigOption("background", "w")
+        pg.setConfigOption("foreground", "k")
+        app = pg.mkQApp()
+        win = pg.plot()
+        _plot_on_pg(win.getPlotItem(), self.latest_data, self.latest_fs, mode, mode)
         try:
-            fig.canvas.manager.full_screen_toggle()
+            win.showMaximized()
         except Exception:
             pass
-        plt.show()
+        pg.exec()
 
 
     # ----- Actions -----
