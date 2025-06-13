@@ -708,7 +708,7 @@ class TransceiverUI(tk.Tk):
 
         if proc is not None and proc.returncode == 0:
             try:
-                subprocess.run(["./rx_convert.py", out_file], check=True)
+                subprocess.run(["./rx_convert.py", out_file, "--to", "fc32"], check=True)
                 conv_file = out_file.replace(".bin", "_conv.bin")
                 data = np.fromfile(conv_file, dtype=np.complex64)
                 self._display_rx_plots(data, float(eval(self.rx_rate.get())))
