@@ -5,6 +5,9 @@ import threading
 import queue
 import tkinter as tk
 from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 import json
 from pathlib import Path
 
@@ -13,6 +16,8 @@ from pyqtgraph.Qt import QtCore
 import pyqtgraph as pg
 
 from tx_generator import generate_waveform
+
+# --- suggestion helper -------------------------------------------------------
 
 # --- suggestion helper ---
 SUGGESTIONS_FILE = Path(__file__).with_name("suggestions.json")
@@ -34,6 +39,28 @@ def _save_suggestions(data: dict) -> None:
 
 
 _SUGGESTIONS = _load_suggestions()
+
+# --- preset helper -----------------------------------------------------------
+PRESETS_FILE = Path(__file__).with_name("presets.json")
+
+
+def _load_presets() -> dict:
+    try:
+        with open(PRESETS_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_presets(data: dict) -> None:
+    try:
+        with open(PRESETS_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
+_PRESETS = _load_presets()
 
 
 class ConsoleWindow(tk.Toplevel):
@@ -246,6 +273,7 @@ class TransceiverUI(tk.Tk):
         self.console = None
         self._out_queue = queue.Queue()
         self._cmd_running = False
+        self._proc = None
         self.create_widgets()
 
     def create_widgets(self):
@@ -321,6 +349,10 @@ class TransceiverUI(tk.Tk):
         self.gen_scroll.grid(row=0, column=1, sticky="ns")
         self.gen_canvas.configure(yscrollcommand=self.gen_scroll.set)
 
+        # enable mouse wheel scrolling
+        self.gen_canvas.bind("<Enter>", self._bind_gen_mousewheel)
+        self.gen_canvas.bind("<Leave>", self._unbind_gen_mousewheel)
+
         self.gen_plots_frame = ttk.Frame(self.gen_canvas)
         self.gen_canvas.create_window((0, 0), window=self.gen_plots_frame, anchor="nw")
         self.gen_plots_frame.bind(
@@ -333,6 +365,23 @@ class TransceiverUI(tk.Tk):
         self.latest_fs = 0.0
 
         self.update_waveform_fields()
+
+        # ----- Presets -----
+        preset_frame = ttk.LabelFrame(self, text="Presets")
+        preset_frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
+        preset_frame.columnconfigure(0, weight=1)
+        self.preset_var = tk.StringVar(value="")
+        self.preset_box = ttk.Combobox(
+            preset_frame,
+            textvariable=self.preset_var,
+            values=sorted(_PRESETS.keys()),
+            state="readonly",
+            width=20,
+        )
+        self.preset_box.grid(row=0, column=0, padx=5)
+        ttk.Button(preset_frame, text="Load", command=self.load_preset).grid(row=0, column=1, padx=5)
+        ttk.Button(preset_frame, text="Save", command=self.save_preset).grid(row=0, column=2, padx=5)
+        ttk.Button(preset_frame, text="Delete", command=self.delete_preset).grid(row=0, column=3, padx=5)
 
         # ----- Column 2: Transmit -----
         tx_frame = ttk.LabelFrame(self, text="Transmit")
@@ -364,6 +413,19 @@ class TransceiverUI(tk.Tk):
         self.tx_file.grid(row=4, column=1, sticky="ew")
 
         ttk.Button(tx_frame, text="Transmit", command=self.transmit).grid(row=5, column=0, columnspan=2, pady=5)
+        self.tx_stop = ttk.Button(tx_frame, text="Stop", command=self.stop_transmit, state="disabled")
+        self.tx_stop.grid(row=6, column=0, columnspan=2, pady=(0, 5))
+
+        log_frame = ttk.Frame(tx_frame)
+        log_frame.grid(row=7, column=0, columnspan=2, sticky="nsew")
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
+        self.tx_log = tk.Text(log_frame, height=10, wrap="none")
+        self.tx_log.grid(row=0, column=0, sticky="nsew")
+        log_scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.tx_log.yview)
+        log_scroll.grid(row=0, column=1, sticky="ns")
+        self.tx_log.configure(yscrollcommand=log_scroll.set)
+        tx_frame.rowconfigure(7, weight=1)
 
         # ----- Column 3: Receive -----
         rx_frame = ttk.LabelFrame(self, text="Receive")
@@ -459,11 +521,36 @@ class TransceiverUI(tk.Tk):
         while not self._out_queue.empty():
             self._out_queue.get_nowait()
 
+    # ----- Mousewheel helpers -----
+    def _bind_gen_mousewheel(self, _event) -> None:
+        self.gen_canvas.bind_all("<MouseWheel>", self._on_gen_mousewheel)
+        self.gen_canvas.bind_all("<Button-4>", self._on_gen_mousewheel)
+        self.gen_canvas.bind_all("<Button-5>", self._on_gen_mousewheel)
+
+    def _unbind_gen_mousewheel(self, _event) -> None:
+        self.gen_canvas.unbind_all("<MouseWheel>")
+        self.gen_canvas.unbind_all("<Button-4>")
+        self.gen_canvas.unbind_all("<Button-5>")
+
+    def _on_gen_mousewheel(self, event) -> None:
+        delta = 0
+        if hasattr(event, "delta") and event.delta:
+            delta = -1 * int(event.delta / 120)
+        elif event.num == 4:
+            delta = -1
+        elif event.num == 5:
+            delta = 1
+        if delta:
+            self.gen_canvas.yview_scroll(delta, "units")
+
     def _process_queue(self) -> None:
         while not self._out_queue.empty():
             line = self._out_queue.get_nowait()
             if self.console and self.console.winfo_exists():
                 self.console.append(line)
+            if hasattr(self, "tx_log") and self.tx_log.winfo_exists():
+                self.tx_log.insert(tk.END, line)
+                self.tx_log.see(tk.END)
         if self._cmd_running:
             self.after(100, self._process_queue)
 
@@ -476,6 +563,7 @@ class TransceiverUI(tk.Tk):
                 text=True,
                 bufsize=1,
             )
+            self._proc = proc
             for line in proc.stdout:
                 self._out_queue.put(line)
             proc.wait()
@@ -484,6 +572,9 @@ class TransceiverUI(tk.Tk):
             self._out_queue.put(f"Error: {exc}\n")
         finally:
             self._cmd_running = False
+            self._proc = None
+            if hasattr(self, "tx_stop"):
+                self.tx_stop.config(state="disabled")
 
     def _show_fullscreen(self, mode: str) -> None:
         if self.latest_data is None:
@@ -498,6 +589,97 @@ class TransceiverUI(tk.Tk):
         except Exception:
             pass
         pg.exec()
+
+    # ----- Preset handling --------------------------------------------------
+    def _get_current_params(self) -> dict:
+        return {
+            "waveform": self.wave_var.get(),
+            "fs": self.fs_entry.get(),
+            "f": self.f_entry.get(),
+            "f1": self.f1_entry.get(),
+            "q": self.q_entry.get(),
+            "samples": self.samples_entry.get(),
+            "amplitude": self.amp_entry.get(),
+            "file": self.file_entry.get(),
+            "tx_args": self.tx_args.get(),
+            "tx_rate": self.tx_rate.get(),
+            "tx_freq": self.tx_freq.get(),
+            "tx_gain": self.tx_gain.get(),
+            "tx_file": self.tx_file.get(),
+            "rx_args": self.rx_args.get(),
+            "rx_rate": self.rx_rate.get(),
+            "rx_freq": self.rx_freq.get(),
+            "rx_dur": self.rx_dur.get(),
+            "rx_gain": self.rx_gain.get(),
+            "rx_file": self.rx_file.get(),
+            "rx_view": self.rx_view.get(),
+        }
+
+    def load_preset(self) -> None:
+        name = self.preset_var.get()
+        preset = _PRESETS.get(name)
+        if not preset:
+            messagebox.showerror("Preset", "No preset selected")
+            return
+        self.wave_var.set(preset.get("waveform", "sinus"))
+        self.update_waveform_fields()
+        self.fs_entry.delete(0, tk.END)
+        self.fs_entry.insert(0, preset.get("fs", ""))
+        self.f_entry.delete(0, tk.END)
+        self.f_entry.insert(0, preset.get("f", ""))
+        self.f1_entry.delete(0, tk.END)
+        self.f1_entry.insert(0, preset.get("f1", ""))
+        self.q_entry.delete(0, tk.END)
+        self.q_entry.insert(0, preset.get("q", ""))
+        self.samples_entry.delete(0, tk.END)
+        self.samples_entry.insert(0, preset.get("samples", ""))
+        self.amp_entry.delete(0, tk.END)
+        self.amp_entry.insert(0, preset.get("amplitude", ""))
+        self.file_entry.delete(0, tk.END)
+        self.file_entry.insert(0, preset.get("file", ""))
+        self.tx_args.delete(0, tk.END)
+        self.tx_args.insert(0, preset.get("tx_args", ""))
+        self.tx_rate.delete(0, tk.END)
+        self.tx_rate.insert(0, preset.get("tx_rate", ""))
+        self.tx_freq.delete(0, tk.END)
+        self.tx_freq.insert(0, preset.get("tx_freq", ""))
+        self.tx_gain.delete(0, tk.END)
+        self.tx_gain.insert(0, preset.get("tx_gain", ""))
+        self.tx_file.delete(0, tk.END)
+        self.tx_file.insert(0, preset.get("tx_file", ""))
+        self.rx_args.delete(0, tk.END)
+        self.rx_args.insert(0, preset.get("rx_args", ""))
+        self.rx_rate.delete(0, tk.END)
+        self.rx_rate.insert(0, preset.get("rx_rate", ""))
+        self.rx_freq.delete(0, tk.END)
+        self.rx_freq.insert(0, preset.get("rx_freq", ""))
+        self.rx_dur.delete(0, tk.END)
+        self.rx_dur.insert(0, preset.get("rx_dur", ""))
+        self.rx_gain.delete(0, tk.END)
+        self.rx_gain.insert(0, preset.get("rx_gain", ""))
+        self.rx_file.delete(0, tk.END)
+        self.rx_file.insert(0, preset.get("rx_file", ""))
+        self.rx_view.set(preset.get("rx_view", "Signal"))
+
+    def save_preset(self) -> None:
+        name = simpledialog.askstring("Save Preset", "Preset name:")
+        if not name:
+            return
+        _PRESETS[name] = self._get_current_params()
+        _save_presets(_PRESETS)
+        self.preset_box["values"] = sorted(_PRESETS.keys())
+        self.preset_var.set(name)
+
+    def delete_preset(self) -> None:
+        name = self.preset_var.get()
+        if not name:
+            return
+        if not messagebox.askyesno("Delete Preset", f"Delete preset '{name}'?"):
+            return
+        _PRESETS.pop(name, None)
+        _save_presets(_PRESETS)
+        self.preset_box["values"] = sorted(_PRESETS.keys())
+        self.preset_var.set("")
 
 
     # ----- Actions -----
@@ -532,10 +714,22 @@ class TransceiverUI(tk.Tk):
                "--gain", self.tx_gain.get(),
                "--nsamps", "0",
                "--file", self.tx_file.get()]
-        self._open_console("Transmit Log")
+        if hasattr(self, "tx_log"):
+            self.tx_log.delete("1.0", tk.END)
         self._cmd_running = True
+        if hasattr(self, "tx_stop"):
+            self.tx_stop.config(state="normal")
         threading.Thread(target=self._run_cmd, args=(cmd,), daemon=True).start()
         self._process_queue()
+
+    def stop_transmit(self) -> None:
+        if self._proc:
+            try:
+                self._proc.terminate()
+            except Exception:
+                pass
+        if hasattr(self, "tx_stop"):
+            self.tx_stop.config(state="disabled")
 
     def receive(self):
         out_file = self.rx_file.get()
