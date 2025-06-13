@@ -369,19 +369,8 @@ class TransceiverUI(tk.Tk):
         # ----- Presets -----
         preset_frame = ttk.LabelFrame(self, text="Presets")
         preset_frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
-        preset_frame.columnconfigure(0, weight=1)
-        self.preset_var = tk.StringVar(value="")
-        self.preset_box = ttk.Combobox(
-            preset_frame,
-            textvariable=self.preset_var,
-            values=sorted(_PRESETS.keys()),
-            state="readonly",
-            width=20,
-        )
-        self.preset_box.grid(row=0, column=0, padx=5)
-        ttk.Button(preset_frame, text="Load", command=self.load_preset).grid(row=0, column=1, padx=5)
-        ttk.Button(preset_frame, text="Save", command=self.save_preset).grid(row=0, column=2, padx=5)
-        ttk.Button(preset_frame, text="Delete", command=self.delete_preset).grid(row=0, column=3, padx=5)
+        ttk.Button(preset_frame, text="Load Preset", command=self.open_load_preset_window).grid(row=0, column=0, padx=5)
+        ttk.Button(preset_frame, text="Save Preset", command=self.open_save_preset_window).grid(row=0, column=1, padx=5)
 
         # ----- Column 2: Transmit -----
         tx_frame = ttk.LabelFrame(self, text="Transmit")
@@ -615,11 +604,46 @@ class TransceiverUI(tk.Tk):
             "rx_view": self.rx_view.get(),
         }
 
-    def load_preset(self) -> None:
-        name = self.preset_var.get()
+    def open_load_preset_window(self) -> None:
+        win = tk.Toplevel(self)
+        win.title("Load Preset")
+        lb = tk.Listbox(win, exportselection=False)
+        for name in sorted(_PRESETS.keys()):
+            lb.insert(tk.END, name)
+        lb.pack(fill="both", expand=True, padx=5, pady=5)
+
+        def load_selected() -> None:
+            sel = lb.curselection()
+            if not sel:
+                messagebox.showerror("Preset", "No preset selected")
+                return
+            name = lb.get(sel[0])
+            self.load_preset(name)
+            win.destroy()
+
+        ttk.Button(win, text="Load", command=load_selected).pack(pady=5)
+
+    def open_save_preset_window(self) -> None:
+        win = tk.Toplevel(self)
+        win.title("Save Preset")
+        tk.Label(win, text="Name:").grid(row=0, column=0, padx=5, pady=5)
+        name_var = tk.StringVar()
+        ttk.Entry(win, textvariable=name_var).grid(row=0, column=1, padx=5, pady=5)
+
+        def save() -> None:
+            name = name_var.get().strip()
+            if not name:
+                messagebox.showerror("Save Preset", "Name cannot be empty")
+                return
+            self.save_preset(name)
+            win.destroy()
+
+        ttk.Button(win, text="Save", command=save).grid(row=1, column=0, columnspan=2, pady=5)
+
+    def load_preset(self, name: str) -> None:
         preset = _PRESETS.get(name)
         if not preset:
-            messagebox.showerror("Preset", "No preset selected")
+            messagebox.showerror("Preset", f"Preset '{name}' not found")
             return
         self.wave_var.set(preset.get("waveform", "sinus"))
         self.update_waveform_fields()
@@ -661,25 +685,34 @@ class TransceiverUI(tk.Tk):
         self.rx_file.insert(0, preset.get("rx_file", ""))
         self.rx_view.set(preset.get("rx_view", "Signal"))
 
-    def save_preset(self) -> None:
-        name = simpledialog.askstring("Save Preset", "Preset name:")
-        if not name:
-            return
+    def save_preset(self, name: str) -> None:
         _PRESETS[name] = self._get_current_params()
         _save_presets(_PRESETS)
-        self.preset_box["values"] = sorted(_PRESETS.keys())
-        self.preset_var.set(name)
 
     def delete_preset(self) -> None:
-        name = self.preset_var.get()
-        if not name:
+        if not _PRESETS:
+            messagebox.showinfo("Delete Preset", "No presets available")
             return
-        if not messagebox.askyesno("Delete Preset", f"Delete preset '{name}'?"):
-            return
-        _PRESETS.pop(name, None)
-        _save_presets(_PRESETS)
-        self.preset_box["values"] = sorted(_PRESETS.keys())
-        self.preset_var.set("")
+        win = tk.Toplevel(self)
+        win.title("Delete Preset")
+        lb = tk.Listbox(win, exportselection=False)
+        for p in sorted(_PRESETS.keys()):
+            lb.insert(tk.END, p)
+        lb.pack(fill="both", expand=True, padx=5, pady=5)
+
+        def delete_selected():
+            sel = lb.curselection()
+            if not sel:
+                messagebox.showerror("Delete Preset", "No preset selected")
+                return
+            name = lb.get(sel[0])
+            if not messagebox.askyesno("Delete Preset", f"Delete preset '{name}'?"):
+                return
+            _PRESETS.pop(name, None)
+            _save_presets(_PRESETS)
+            win.destroy()
+
+        ttk.Button(win, text="Delete", command=delete_selected).pack(pady=5)
 
 
     # ----- Actions -----
