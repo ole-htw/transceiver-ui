@@ -389,6 +389,7 @@ class TransceiverUI(tk.Tk):
         # ----- Column 1: Generation -----
         gen_frame = ttk.LabelFrame(self, text="Signal Generation")
         gen_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        gen_frame.columnconfigure(1, weight=1)
 
         ttk.Label(gen_frame, text="Waveform").grid(row=0, column=0, sticky="w")
         self.wave_var = tk.StringVar(value="sinus")
@@ -486,6 +487,7 @@ class TransceiverUI(tk.Tk):
         # ----- Column 2: Transmit -----
         tx_frame = ttk.LabelFrame(self, text="Transmit")
         tx_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        tx_frame.columnconfigure(1, weight=1)
 
         ttk.Label(tx_frame, text="Args").grid(row=0, column=0, sticky="w")
         self.tx_args = SuggestEntry(tx_frame, "tx_args")
@@ -530,6 +532,7 @@ class TransceiverUI(tk.Tk):
         # ----- Column 3: Receive -----
         rx_frame = ttk.LabelFrame(self, text="Receive")
         rx_frame.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
+        rx_frame.columnconfigure(1, weight=1)
 
         ttk.Label(rx_frame, text="Args").grid(row=0, column=0, sticky="w")
         self.rx_args = SuggestEntry(rx_frame, "rx_args")
