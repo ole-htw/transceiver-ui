@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import numpy as np
-import matplotlib.pyplot as plt
+from pyqtgraph.Qt import QtCore
+import pyqtgraph as pg
 import argparse
 import os # For basename in title
 import time # To measure correlation time
@@ -108,37 +109,27 @@ def main():
             plot_title_suffix = ' [dB]'
 
 
-    # --- Plotten ---
-    print("Erstelle Plot...")
-    fig, ax = plt.subplots(figsize=(12, 7))
+    # Datenreduktion bei sehr großen Datenmengen (>1 MB)
+    if plot_data.nbytes > 1_000_000:
+        step = int(np.ceil(plot_data.nbytes / 1_000_000))
+        plot_data = plot_data[::step]
+        lags = lags[::step]
+
+    # --- Plotten mit PyQtGraph ---
+    pg.setConfigOption("background", "w")
+    pg.setConfigOption("foreground", "k")
+    app = pg.mkQApp()
+
     fname1_base = os.path.basename(args.filename1)
     fname2_base = os.path.basename(args.filename2)
-    fig.canvas.manager.set_window_title(f"Kreuzkorrelation (gekürzt) - {fname1_base} vs {fname2_base}")
+    win = pg.plot(lags, plot_data, pen=pg.mkPen("b"))
+    win.setWindowTitle(f"Kreuzkorrelation - {fname1_base} vs {fname2_base}")
+    win.setLabel("bottom", "Lag / Verschiebung von Signal 2 zu Signal 1 [Samples]")
+    win.setLabel("left", ylabel_text)
+    win.showGrid(x=True, y=True)
+    win.setTitle(f"{plot_title}: {fname1_base} vs {fname2_base}{plot_title_suffix}")
 
-    ax.plot(lags, plot_data)
-
-    ax.set_title(f'{plot_title}: {fname1_base} vs {fname2_base}{plot_title_suffix}')
-    ax.set_xlabel('Lag / Verschiebung von Signal 2 zu Signal 1 [Samples]')
-    ax.set_ylabel(ylabel_text)
-    ax.grid(True)
-
-    # Optional: X-Achsen-Limit setzen
-    if args.maxlag is not None and args.maxlag > 0:
-        max_possible_lag = N - 1 # Max lag is N-1 after truncation
-        actual_maxlag = min(args.maxlag, max_possible_lag)
-        ax.set_xlim(-actual_maxlag, actual_maxlag)
-        print(f"Zeige Lags von {-actual_maxlag} bis {actual_maxlag}.")
-    else:
-        ax.set_xlim(lags[0], lags[-1])
-
-    # Optional: Y-Achsen-Limit für dB-Plots
-    if args.db:
-        min_db_val = max(np.min(plot_data[plot_data > -np.inf]), -80) # Ignoriere -inf, mindestens -80dB
-        ax.set_ylim(bottom=min_db_val - 5, top=5)
-
-    plt.tight_layout()
-    print("Plot wird angezeigt. Schließe das Fenster, um das Skript zu beenden.")
-    plt.show()
+    pg.exec()
 
 if __name__ == '__main__':
     main()

@@ -8,7 +8,8 @@ Aufrufbeispiel:
 """
 import argparse
 import numpy as np
-import matplotlib.pyplot as plt
+from pyqtgraph.Qt import QtCore
+import pyqtgraph as pg
 
 
 def instantaneous_frequency(x: np.ndarray, fs: float) -> np.ndarray:
@@ -57,15 +58,24 @@ def main() -> None:
     # ---------- Zeitachse -----------------------------------------------------
     t = np.arange(f_inst.size) / args.rate  # Sekunden
 
-    # ---------- Plot ----------------------------------------------------------
-    plt.figure()
-    plt.plot(t * 1e6, f_inst / 1e6)
-    plt.xlabel("Zeit [µs]")
-    plt.ylabel("Instantane Frequenz [MHz]")
-    plt.title(f"Instantane Frequenz: {args.filename}")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
+    # Datenreduktion bei sehr großen Datenmengen (>1 MB)
+    if f_inst.nbytes > 1_000_000:
+        step = int(np.ceil(f_inst.nbytes / 1_000_000))
+        f_inst = f_inst[::step]
+        t = t[::step]
+
+    # ---------- Plot mit PyQtGraph -------------------------------------------
+    pg.setConfigOption("background", "w")
+    pg.setConfigOption("foreground", "k")
+
+    app = pg.mkQApp()
+    win = pg.plot(t * 1e6, f_inst / 1e6, pen=pg.mkPen("b"))
+    win.setWindowTitle(f"Instantane Frequenz: {args.filename}")
+    win.setLabel("bottom", "Zeit [µs]")
+    win.setLabel("left", "Instantane Frequenz [MHz]")
+    win.showGrid(x=True, y=True)
+
+    pg.exec()
 
 
 if __name__ == "__main__":

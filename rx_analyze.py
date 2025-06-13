@@ -10,7 +10,8 @@ Optional können Original- und postprocessetes Signal geplottet werden.
 import numpy as np
 import argparse
 import os
-import matplotlib.pyplot as plt
+from pyqtgraph.Qt import QtCore
+import pyqtgraph as pg
 
 def load_rx_file(filename):
     """
@@ -159,26 +160,29 @@ def main():
 
     # Optional: Plot des Original- und postprocesseten Signals
     if args.plot:
-        plt.figure(figsize=(12, 8))
-        plt.subplot(2, 1, 1)
-        plt.plot(np.real(orig_signal), label="Original Real")
-        plt.plot(np.imag(orig_signal), label="Original Imag", alpha=0.7)
-        plt.title("Originales RX Signal")
-        plt.xlabel("Sample Index")
-        plt.ylabel("Amplitude")
-        plt.legend()
-        plt.grid(True)
-        
-        plt.subplot(2, 1, 2)
-        plt.plot(np.real(signal), label="Postprocessed Real")
-        plt.plot(np.imag(signal), label="Postprocessed Imag", alpha=0.7)
-        plt.title("Postprocessetes RX Signal (skaliert)")
-        plt.xlabel("Sample Index")
-        plt.ylabel("Amplitude")
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
-        plt.show()
+        orig_plot = orig_signal
+        proc_plot = signal
+        if orig_plot.nbytes > 1_000_000 or proc_plot.nbytes > 1_000_000:
+            step = int(np.ceil(max(orig_plot.nbytes, proc_plot.nbytes) / 1_000_000))
+            orig_plot = orig_plot[::step]
+            proc_plot = proc_plot[::step]
+
+        pg.setConfigOption("background", "w")
+        pg.setConfigOption("foreground", "k")
+        app = pg.mkQApp()
+        win = pg.GraphicsLayoutWidget(title="RX Signal")
+        p1 = win.addPlot(title="Originales RX Signal")
+        p1.plot(np.real(orig_plot), pen=pg.mkPen("b"), name="Real")
+        p1.plot(np.imag(orig_plot), pen=pg.mkPen("r", style=QtCore.Qt.DashLine), name="Imag")
+        p1.showGrid(x=True, y=True)
+        p1.addLegend()
+        win.nextRow()
+        p2 = win.addPlot(title="Postprocessetes RX Signal (skaliert)")
+        p2.plot(np.real(proc_plot), pen=pg.mkPen("b"), name="Real")
+        p2.plot(np.imag(proc_plot), pen=pg.mkPen("r", style=QtCore.Qt.DashLine), name="Imag")
+        p2.showGrid(x=True, y=True)
+        p2.addLegend()
+        pg.exec()
 
 if __name__ == '__main__':
     main()
