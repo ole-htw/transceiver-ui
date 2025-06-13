@@ -241,6 +241,15 @@ class TransceiverUI(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("Signal Transceiver")
+        # start in full screen mode
+        try:
+            self.attributes("-fullscreen", True)
+        except Exception:
+            # fall back to maximized window if fullscreen is not supported
+            try:
+                self.state("zoomed")
+            except Exception:
+                pass
         # define view variables early so callbacks won't fail
         self.rx_view = tk.StringVar(value="Signal")
         self.rate_var = tk.StringVar(value="200e6")
