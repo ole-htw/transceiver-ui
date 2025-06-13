@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import numpy as np
-import matplotlib.pyplot as plt
+from pyqtgraph.Qt import QtCore
+import pyqtgraph as pg
 import argparse
 import time # Um die Berechnungszeit zu messen
 
@@ -100,34 +101,25 @@ def main():
          plot_title += ' [dB]' # Füge dB zum Titel hinzu
 
 
-    # --- Plotten ---
-    print("Erstelle Plot...")
-    fig, ax = plt.subplots(figsize=(12, 7)) # Etwas größeres Fenster
-    fig.canvas.manager.set_window_title(f"Autokorrelation - {args.filename}")
+    # Datenreduktion bei sehr großen Datenmengen (>1 MB)
+    if plot_data.nbytes > 1_000_000:
+        step = int(np.ceil(plot_data.nbytes / 1_000_000))
+        plot_data = plot_data[::step]
+        lags = lags[::step]
 
-    ax.plot(lags, plot_data)
+    # --- Plotten mit PyQtGraph ---
+    pg.setConfigOption("background", "w")
+    pg.setConfigOption("foreground", "k")
+    app = pg.mkQApp()
 
-    ax.set_title(plot_title)
-    ax.set_xlabel('Lag / Verschiebung [Samples]')
-    ax.set_ylabel(ylabel_text)
-    ax.grid(True)
+    win = pg.plot(lags, plot_data, pen=pg.mkPen("b"))
+    win.setWindowTitle(f"Autokorrelation - {args.filename}")
+    win.setLabel("bottom", "Lag / Verschiebung [Samples]")
+    win.setLabel("left", ylabel_text)
+    win.showGrid(x=True, y=True)
+    win.setTitle(plot_title)
 
-    # Optional: X-Achsen-Limit setzen, falls maxlag angegeben wurde
-    if args.maxlag is not None and args.maxlag > 0:
-        ax.set_xlim(-args.maxlag, args.maxlag)
-        print(f"Zeige Lags von {-args.maxlag} bis {args.maxlag}.")
-    else:
-        ax.set_xlim(lags[0], lags[-1]) # Voller Bereich
-
-    # Optional: Y-Achsen-Limit für dB-Plots
-    if args.db:
-        # Setze unteres Limit z.B. auf -80 dB oder Minimum+Puffer, oberes auf etwas über 0
-        min_db_val = max(np.min(plot_data[plot_data > -np.inf]), -80) # Ignoriere -inf, mindestens -80dB
-        ax.set_ylim(bottom=min_db_val - 5, top=5)
-
-    plt.tight_layout() # Optimiert Layout
-    print("Plot wird angezeigt. Schließe das Fenster, um das Skript zu beenden.")
-    plt.show()
+    pg.exec()
 
 if __name__ == '__main__':
     main()
