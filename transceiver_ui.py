@@ -478,7 +478,15 @@ class TransceiverUI(tk.Tk):
         ttk.Combobox(
             gen_frame,
             textvariable=self.zeros_var,
-            values=["none", "same", "half", "quarter"],
+            values=[
+                "none",
+                "same",
+                "half",
+                "quarter",
+                "double",
+                "quadruple",
+                "octuple",
+            ],
             state="readonly",
             width=10,
         ).grid(row=6, column=1, sticky="ew")
@@ -1076,6 +1084,12 @@ class TransceiverUI(tk.Tk):
                 zeros = len(data) // 2
             elif zeros_mode == "quarter":
                 zeros = len(data) // 4
+            elif zeros_mode == "double":
+                zeros = len(data) * 2
+            elif zeros_mode == "quadruple":
+                zeros = len(data) * 4
+            elif zeros_mode == "octuple":
+                zeros = len(data) * 8
 
             if zeros:
                 data = np.concatenate([data, np.zeros(zeros, dtype=np.complex64)])
