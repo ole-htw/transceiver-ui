@@ -6,6 +6,7 @@ import queue
 import tkinter as tk
 from tkinter import ttk, messagebox
 from tkinter import ttk, messagebox, simpledialog
+import time
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import json
@@ -407,6 +408,7 @@ class TransceiverUI(tk.Tk):
         self._out_queue = queue.Queue()
         self._cmd_running = False
         self._proc = None
+        self._stop_requested = False
         self._plot_win = None
         self.create_widgets()
         try:
@@ -846,22 +848,48 @@ class TransceiverUI(tk.Tk):
         except Exception:
             pass
 
-    def _run_cmd(self, cmd: list[str]) -> None:
+    def _run_cmd(
+        self,
+        cmd: list[str],
+        max_attempts: int = 1,
+        delay: float = 2.0,
+    ) -> None:
+        attempt = 1
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-            self._proc = proc
-            for line in proc.stdout:
-                self._out_queue.put(line)
-            proc.wait()
-            self._out_queue.put(f"[Exited with code {proc.returncode}]\n")
-        except Exception as exc:
-            self._out_queue.put(f"Error: {exc}\n")
+            while attempt <= max_attempts and not self._stop_requested:
+                self._kill_stale_tx()
+                try:
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                    )
+                    self._proc = proc
+                    for line in proc.stdout:
+                        self._out_queue.put(line)
+                    proc.wait()
+                    self._out_queue.put(
+                        f"[Exited with code {proc.returncode}]\n"
+                    )
+                except Exception as exc:
+                    self._out_queue.put(f"Error: {exc}\n")
+                    proc = None
+                finally:
+                    self._proc = None
+
+                if self._stop_requested or (
+                    proc is not None and proc.returncode == 0
+                ):
+                    break
+
+                if attempt < max_attempts:
+                    self._out_queue.put(
+                        f"Retry {attempt}/{max_attempts} failed, retrying...\n"
+                    )
+                    time.sleep(delay)
+                attempt += 1
         finally:
             self._cmd_running = False
             self._proc = None
@@ -1133,6 +1161,7 @@ class TransceiverUI(tk.Tk):
 
     def transmit(self):
         self._kill_stale_tx()
+        self._stop_requested = False
         cmd = ["./rfnoc_replay_samples_from_file",
                "--args", self.tx_args.get(),
                "--rate", self.tx_rate.get(),
@@ -1147,7 +1176,12 @@ class TransceiverUI(tk.Tk):
             self.tx_button.config(state="disabled")
         if hasattr(self, "tx_stop"):
             self.tx_stop.config(state="normal")
-        threading.Thread(target=self._run_cmd, args=(cmd,), daemon=True).start()
+        threading.Thread(
+            target=self._run_cmd,
+            args=(cmd,),
+            kwargs={"max_attempts": 10, "delay": 2.0},
+            daemon=True,
+        ).start()
         self._process_queue()
 
     def stop_transmit(self) -> None:
@@ -1156,6 +1190,7 @@ class TransceiverUI(tk.Tk):
                 self._proc.terminate()
             except Exception:
                 pass
+        self._stop_requested = True
         if hasattr(self, "tx_stop"):
             self.tx_stop.config(state="disabled")
         if hasattr(self, "tx_button"):
