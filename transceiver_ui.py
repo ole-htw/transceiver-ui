@@ -407,6 +407,7 @@ class TransceiverUI(tk.Tk):
         self._out_queue = queue.Queue()
         self._cmd_running = False
         self._proc = None
+        self._plot_win = None
         self.create_widgets()
         try:
             self.state("zoomed")
@@ -906,8 +907,16 @@ class TransceiverUI(tk.Tk):
             return
         pg.setConfigOption("background", "w")
         pg.setConfigOption("foreground", "k")
+        if self._plot_win is not None and self._plot_win.isVisible():
+            try:
+                self._plot_win.close()
+            except Exception:
+                pass
+            self._plot_win = None
+
         app = pg.mkQApp()
         win = pg.plot()
+        self._plot_win = win
         _plot_on_pg(
             win.getPlotItem(),
             data,
@@ -920,7 +929,13 @@ class TransceiverUI(tk.Tk):
             win.showMaximized()
         except Exception:
             pass
+        try:
+            win.raise_()
+            win.activateWindow()
+        except Exception:
+            pass
         pg.exec()
+        self._plot_win = None
 
     # ----- Preset handling --------------------------------------------------
     def _get_current_params(self) -> dict:
