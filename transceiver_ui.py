@@ -636,7 +636,8 @@ class TransceiverUI(tk.Tk):
             width=12,
         ).grid(row=6, column=1)
 
-        ttk.Button(rx_frame, text="Receive", command=self.receive).grid(row=7, column=0, columnspan=2, pady=5)
+        self.rx_button = ttk.Button(rx_frame, text="Receive", command=self.receive)
+        self.rx_button.grid(row=7, column=0, columnspan=2, pady=5)
         self.rx_stop = ttk.Button(rx_frame, text="Stop", command=self.stop_receive, state="disabled")
         self.rx_stop.grid(row=8, column=0, columnspan=2, pady=(0, 5))
 
@@ -890,6 +891,8 @@ class TransceiverUI(tk.Tk):
             self._proc = None
             if hasattr(self, "rx_stop"):
                 self.rx_stop.config(state="disabled")
+            if hasattr(self, "rx_button"):
+                self.rx_button.config(state="normal")
 
         if proc is not None and proc.returncode == 0:
             try:
@@ -1151,6 +1154,8 @@ class TransceiverUI(tk.Tk):
                 pass
         if hasattr(self, "rx_stop"):
             self.rx_stop.config(state="disabled")
+        if hasattr(self, "rx_button"):
+            self.rx_button.config(state="normal")
 
     def receive(self):
         out_file = self.rx_file.get()
@@ -1165,6 +1170,8 @@ class TransceiverUI(tk.Tk):
         self._cmd_running = True
         if hasattr(self, "rx_stop"):
             self.rx_stop.config(state="normal")
+        if hasattr(self, "rx_button"):
+            self.rx_button.config(state="disabled")
         threading.Thread(target=self._run_rx_cmd, args=(cmd, out_file), daemon=True).start()
         self._process_queue()
 
