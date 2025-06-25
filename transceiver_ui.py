@@ -408,6 +408,13 @@ class TransceiverUI(tk.Tk):
         self._cmd_running = False
         self._proc = None
         self.create_widgets()
+        try:
+            self.state("zoomed")
+        except tk.TclError:
+            try:
+                self.attributes("-zoomed", True)
+            except tk.TclError:
+                pass
 
     def create_widgets(self):
         self.rowconfigure(0, weight=1)
