@@ -679,7 +679,7 @@ class TransceiverUI(tk.Tk):
             "<Configure>",
             lambda _e: self.rx_canvas.configure(scrollregion=self.rx_canvas.bbox("all")),
         )
-        rx_frame.rowconfigure(9, weight=1)
+        rx_frame.rowconfigure(8, weight=1)
         self.rx_canvases = []
         self.update_waveform_fields()
         self.auto_update_tx_filename()
