@@ -573,7 +573,8 @@ class TransceiverUI(tk.Tk):
         self.tx_file.insert(0, "tx_signal.bin")
         self.tx_file.grid(row=4, column=1, sticky="ew")
 
-        ttk.Button(tx_frame, text="Transmit", command=self.transmit).grid(row=5, column=0, columnspan=2, pady=5)
+        self.tx_button = ttk.Button(tx_frame, text="Transmit", command=self.transmit)
+        self.tx_button.grid(row=5, column=0, columnspan=2, pady=5)
         self.tx_stop = ttk.Button(tx_frame, text="Stop", command=self.stop_transmit, state="disabled")
         self.tx_stop.grid(row=6, column=0, columnspan=2, pady=(0, 5))
 
@@ -864,6 +865,8 @@ class TransceiverUI(tk.Tk):
             self._proc = None
             if hasattr(self, "tx_stop"):
                 self.tx_stop.config(state="disabled")
+            if hasattr(self, "tx_button"):
+                self.tx_button.config(state="normal")
 
     def _run_rx_cmd(self, cmd: list[str], out_file: str) -> None:
         try:
@@ -1122,6 +1125,8 @@ class TransceiverUI(tk.Tk):
         if hasattr(self, "tx_log"):
             self.tx_log.delete("1.0", tk.END)
         self._cmd_running = True
+        if hasattr(self, "tx_button"):
+            self.tx_button.config(state="disabled")
         if hasattr(self, "tx_stop"):
             self.tx_stop.config(state="normal")
         threading.Thread(target=self._run_cmd, args=(cmd,), daemon=True).start()
@@ -1135,6 +1140,8 @@ class TransceiverUI(tk.Tk):
                 pass
         if hasattr(self, "tx_stop"):
             self.tx_stop.config(state="disabled")
+        if hasattr(self, "tx_button"):
+            self.tx_button.config(state="normal")
 
     def stop_receive(self) -> None:
         if self._proc:
