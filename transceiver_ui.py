@@ -878,6 +878,7 @@ class TransceiverUI(tk.Tk):
                 subprocess.run(["./rx_convert.py", out_file, "--to", "fc32"], check=True)
                 conv_file = out_file.replace(".bin", "_conv.bin")
                 data = np.fromfile(conv_file, dtype=np.complex64)
+                data *= 32768.0
                 self._display_rx_plots(data, float(eval(self.rx_rate.get())))
             except Exception as exc:
                 self._out_queue.put(f"Error: {exc}\n")
@@ -1080,7 +1081,11 @@ class TransceiverUI(tk.Tk):
                 data = np.concatenate([data, np.zeros(zeros, dtype=np.complex64)])
 
             save_interleaved(self.file_entry.get(), data, amplitude=amp)
-            self._display_gen_plots(data, fs)
+
+            max_abs = np.max(np.abs(data)) if np.any(data) else 1.0
+            scale = amp / max_abs if max_abs > 1e-9 else 1.0
+            scaled_data = data * scale
+            self._display_gen_plots(scaled_data, fs)
         except Exception as exc:
             messagebox.showerror("Generate error", str(exc))
 
