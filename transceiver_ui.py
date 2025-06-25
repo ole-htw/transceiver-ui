@@ -410,6 +410,8 @@ class TransceiverUI(tk.Tk):
         self._proc = None
         self._stop_requested = False
         self._plot_win = None
+        self._tx_running = False
+        self._last_tx_end = 0.0
         self.create_widgets()
         try:
             self.state("zoomed")
@@ -583,7 +585,9 @@ class TransceiverUI(tk.Tk):
         self.tx_button = ttk.Button(btn_frame, text="Transmit", command=self.transmit)
         self.tx_button.grid(row=0, column=0, padx=2)
 
-        self.tx_retrans = ttk.Button(btn_frame, text="Retransmit", command=self.retransmit)
+        self.tx_retrans = ttk.Button(
+            btn_frame, text="Retransmit", command=self.retransmit, state="disabled"
+        )
         self.tx_retrans.grid(row=0, column=1, padx=2)
 
         self.tx_stop = ttk.Button(btn_frame, text="Stop", command=self.stop_transmit, state="disabled")
@@ -905,10 +909,14 @@ class TransceiverUI(tk.Tk):
         finally:
             self._cmd_running = False
             self._proc = None
+            self._tx_running = False
+            self._last_tx_end = time.monotonic()
             if hasattr(self, "tx_stop"):
                 self.tx_stop.config(state="disabled")
             if hasattr(self, "tx_button"):
                 self.tx_button.config(state="normal")
+            if hasattr(self, "tx_retrans"):
+                self.tx_retrans.config(state="disabled")
 
     def _run_rx_cmd(self, cmd: list[str], out_file: str) -> None:
         try:
@@ -1172,6 +1180,11 @@ class TransceiverUI(tk.Tk):
             messagebox.showerror("Generate error", str(exc))
 
     def transmit(self):
+        now = time.monotonic()
+        if now - self._last_tx_end < 10:
+            wait = 10 - (now - self._last_tx_end)
+            self.after(int(wait * 1000), self.transmit)
+            return
         self._kill_stale_tx()
         self._stop_requested = False
         cmd = ["./rfnoc_replay_samples_from_file",
@@ -1184,10 +1197,13 @@ class TransceiverUI(tk.Tk):
         if hasattr(self, "tx_log"):
             self.tx_log.delete("1.0", tk.END)
         self._cmd_running = True
+        self._tx_running = True
         if hasattr(self, "tx_button"):
             self.tx_button.config(state="disabled")
         if hasattr(self, "tx_stop"):
             self.tx_stop.config(state="normal")
+        if hasattr(self, "tx_retrans"):
+            self.tx_retrans.config(state="normal")
         threading.Thread(
             target=self._run_cmd,
             args=(cmd,),
@@ -1203,10 +1219,14 @@ class TransceiverUI(tk.Tk):
             except Exception:
                 pass
         self._stop_requested = True
+        self._tx_running = False
+        self._last_tx_end = time.monotonic()
         if hasattr(self, "tx_stop"):
             self.tx_stop.config(state="disabled")
         if hasattr(self, "tx_button"):
             self.tx_button.config(state="normal")
+        if hasattr(self, "tx_retrans"):
+            self.tx_retrans.config(state="disabled")
 
     def retransmit(self) -> None:
         """Stop any ongoing transmission and start a new one."""
