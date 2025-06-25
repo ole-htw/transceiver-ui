@@ -403,7 +403,12 @@ class TransceiverUI(tk.Tk):
         Path("signals/rx").mkdir(parents=True, exist_ok=True)
         # define view variables early so callbacks won't fail
         self.rx_view = tk.StringVar(value="Signal")
+        self.sync_var = tk.BooleanVar(value=True)
         self.rate_var = tk.StringVar(value="200e6")
+        # individual variables used when rate sync is disabled
+        self.fs_var = self.rate_var
+        self.tx_rate_var = self.rate_var
+        self.rx_rate_var = self.rate_var
         self.console = None
         self._out_queue = queue.Queue()
         self._cmd_running = False
@@ -449,7 +454,7 @@ class TransceiverUI(tk.Tk):
 
         ttk.Label(gen_frame, text="fs").grid(row=1, column=0, sticky="w")
         self.fs_entry = SuggestEntry(gen_frame, "fs_entry",
-                                     textvariable=self.rate_var)
+                                     textvariable=self.fs_var)
         self.fs_entry.grid(row=1, column=1, sticky="ew")
         self.fs_entry.entry.bind("<FocusOut>", lambda _e: self.auto_update_tx_filename())
 
@@ -547,6 +552,12 @@ class TransceiverUI(tk.Tk):
         preset_frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
         ttk.Button(preset_frame, text="Load Preset", command=self.open_load_preset_window).grid(row=0, column=0, padx=5)
         ttk.Button(preset_frame, text="Save Preset", command=self.open_save_preset_window).grid(row=0, column=1, padx=5)
+        ttk.Checkbutton(
+            preset_frame,
+            text="Sync Sample Rates",
+            variable=self.sync_var,
+            command=lambda: self.toggle_rate_sync(self.sync_var.get()),
+        ).grid(row=0, column=2, padx=5)
 
         # ----- Column 2: Transmit -----
         tx_frame = ttk.LabelFrame(self, text="Transmit")
@@ -560,7 +571,7 @@ class TransceiverUI(tk.Tk):
 
         ttk.Label(tx_frame, text="Rate").grid(row=1, column=0, sticky="w")
         self.tx_rate = SuggestEntry(tx_frame, "tx_rate",
-                                   textvariable=self.rate_var)
+                                   textvariable=self.tx_rate_var)
         self.tx_rate.grid(row=1, column=1, sticky="ew")
 
         ttk.Label(tx_frame, text="Freq").grid(row=2, column=0, sticky="w")
@@ -616,7 +627,7 @@ class TransceiverUI(tk.Tk):
 
         ttk.Label(rx_frame, text="Rate").grid(row=1, column=0, sticky="w")
         self.rx_rate = SuggestEntry(rx_frame, "rx_rate",
-                                   textvariable=self.rate_var)
+                                   textvariable=self.rx_rate_var)
         self.rx_rate.grid(row=1, column=1, sticky="ew")
         self.rx_rate.entry.bind("<FocusOut>", lambda _e: self.auto_update_rx_filename())
 
@@ -684,6 +695,7 @@ class TransceiverUI(tk.Tk):
         self.update_waveform_fields()
         self.auto_update_tx_filename()
         self.auto_update_rx_filename()
+        self.toggle_rate_sync(self.sync_var.get())
 
     def update_waveform_fields(self) -> None:
         """Show or hide waveform specific parameters."""
@@ -726,6 +738,24 @@ class TransceiverUI(tk.Tk):
         name = _gen_rx_filename(self)
         self.rx_file.delete(0, tk.END)
         self.rx_file.insert(0, name)
+
+    def toggle_rate_sync(self, enable: bool) -> None:
+        """Enable or disable rate synchronization between TX and RX."""
+        if enable:
+            self.rate_var.set(self.fs_entry.get() or self.tx_rate.get() or self.rx_rate.get())
+            self.fs_var = self.rate_var
+            self.tx_rate_var = self.rate_var
+            self.rx_rate_var = self.rate_var
+        else:
+            self.fs_var = tk.StringVar(value=self.fs_entry.get())
+            self.tx_rate_var = tk.StringVar(value=self.tx_rate.get())
+            self.rx_rate_var = tk.StringVar(value=self.rx_rate.get())
+        self.fs_entry.entry.configure(textvariable=self.fs_var)
+        self.fs_entry.var = self.fs_var
+        self.tx_rate.entry.configure(textvariable=self.tx_rate_var)
+        self.tx_rate.var = self.tx_rate_var
+        self.rx_rate.entry.configure(textvariable=self.rx_rate_var)
+        self.rx_rate.var = self.rx_rate_var
 
 
     def _display_gen_plots(self, data: np.ndarray, fs: float) -> None:
@@ -1001,6 +1031,7 @@ class TransceiverUI(tk.Tk):
             "zeros": self.zeros_var.get(),
             "amplitude": self.amp_entry.get(),
             "file": self.file_entry.get(),
+            "sync_rates": self.sync_var.get(),
             "tx_args": self.tx_args.get(),
             "tx_rate": self.tx_rate.get(),
             "tx_freq": self.tx_freq.get(),
@@ -1098,6 +1129,8 @@ class TransceiverUI(tk.Tk):
         self.rx_file.delete(0, tk.END)
         self.rx_file.insert(0, preset.get("rx_file", ""))
         self.rx_view.set(preset.get("rx_view", "Signal"))
+        self.sync_var.set(preset.get("sync_rates", True))
+        self.toggle_rate_sync(self.sync_var.get())
 
     def save_preset(self, name: str) -> None:
         _PRESETS[name] = self._get_current_params()
