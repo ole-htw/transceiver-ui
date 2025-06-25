@@ -705,12 +705,15 @@ class TransceiverUI(tk.Tk):
         for idx, mode in enumerate(modes):
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
-            _plot_on_mpl(ax, data, fs, mode, mode)
+            _plot_on_mpl(ax, data, fs, mode, f"TX {mode}")
             canvas = FigureCanvasTkAgg(fig, master=self.gen_plots_frame)
             canvas.draw()
             widget = canvas.get_tk_widget()
             widget.grid(row=idx, column=0, sticky="nsew", pady=2)
-            widget.bind("<Button-1>", lambda _e, m=mode: self._show_fullscreen(m))
+            widget.bind(
+                "<Button-1>",
+                lambda _e, m=mode, d=data, s=fs: self._show_fullscreen(d, s, m, f"TX {m}")
+            )
             self.gen_canvases.append(canvas)
 
     def _display_rx_plots(self, data: np.ndarray, fs: float) -> None:
@@ -735,12 +738,15 @@ class TransceiverUI(tk.Tk):
         for idx, mode in enumerate(modes):
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
-            _plot_on_mpl(ax, data, fs, mode, mode, self.tx_data)
+            _plot_on_mpl(ax, data, fs, mode, f"RX {mode}", self.tx_data)
             canvas = FigureCanvasTkAgg(fig, master=self.rx_plots_frame)
             canvas.draw()
             widget = canvas.get_tk_widget()
             widget.grid(row=idx, column=0, sticky="nsew", pady=2)
-            widget.bind("<Button-1>", lambda _e, m=mode: self._show_fullscreen(m))
+            widget.bind(
+                "<Button-1>",
+                lambda _e, m=mode, d=data, s=fs: self._show_fullscreen(d, s, m, f"RX {m}")
+            )
             self.rx_canvases.append(canvas)
 
     def _open_console(self, title: str) -> None:
@@ -876,8 +882,8 @@ class TransceiverUI(tk.Tk):
             except Exception as exc:
                 self._out_queue.put(f"Error: {exc}\n")
 
-    def _show_fullscreen(self, mode: str) -> None:
-        if self.latest_data is None:
+    def _show_fullscreen(self, data: np.ndarray, fs: float, mode: str, title: str) -> None:
+        if data is None:
             return
         pg.setConfigOption("background", "w")
         pg.setConfigOption("foreground", "k")
@@ -885,10 +891,10 @@ class TransceiverUI(tk.Tk):
         win = pg.plot()
         _plot_on_pg(
             win.getPlotItem(),
-            self.latest_data,
-            self.latest_fs,
+            data,
+            fs,
             mode,
-            mode,
+            title,
             getattr(self, "tx_data", None),
         )
         try:
