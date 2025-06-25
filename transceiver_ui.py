@@ -852,7 +852,7 @@ class TransceiverUI(tk.Tk):
         self,
         cmd: list[str],
         max_attempts: int = 1,
-        delay: float = 2.0,
+        delay: float = 5.0,
     ) -> None:
         attempt = 1
         try:
