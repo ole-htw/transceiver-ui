@@ -468,20 +468,35 @@ class TransceiverUI(tk.Tk):
         self.samples_entry.grid(row=4, column=1, sticky="ew")
         self.samples_entry.entry.bind("<FocusOut>", lambda _e: self.auto_update_tx_filename())
 
-        ttk.Label(gen_frame, text="Amplitude").grid(row=5, column=0, sticky="w")
+        ttk.Label(gen_frame, text="Repeats").grid(row=5, column=0, sticky="w")
+        self.repeat_entry = SuggestEntry(gen_frame, "repeat_entry")
+        self.repeat_entry.insert(0, "1")
+        self.repeat_entry.grid(row=5, column=1, sticky="ew")
+
+        ttk.Label(gen_frame, text="Zeros").grid(row=6, column=0, sticky="w")
+        self.zeros_var = tk.StringVar(value="none")
+        ttk.Combobox(
+            gen_frame,
+            textvariable=self.zeros_var,
+            values=["none", "same", "half", "quarter"],
+            state="readonly",
+            width=10,
+        ).grid(row=6, column=1, sticky="ew")
+
+        ttk.Label(gen_frame, text="Amplitude").grid(row=7, column=0, sticky="w")
         self.amp_entry = SuggestEntry(gen_frame, "amp_entry")
         self.amp_entry.insert(0, "10000")
-        self.amp_entry.grid(row=5, column=1, sticky="ew")
+        self.amp_entry.grid(row=7, column=1, sticky="ew")
 
-        ttk.Label(gen_frame, text="File").grid(row=6, column=0, sticky="w")
+        ttk.Label(gen_frame, text="File").grid(row=8, column=0, sticky="w")
         self.file_entry = SuggestEntry(gen_frame, "file_entry")
         self.file_entry.insert(0, "tx_signal.bin")
-        self.file_entry.grid(row=6, column=1, sticky="ew")
+        self.file_entry.grid(row=8, column=1, sticky="ew")
 
-        ttk.Button(gen_frame, text="Generate", command=self.generate).grid(row=7, column=0, columnspan=2, pady=5)
+        ttk.Button(gen_frame, text="Generate", command=self.generate).grid(row=9, column=0, columnspan=2, pady=5)
 
         scroll_container = ttk.Frame(gen_frame)
-        scroll_container.grid(row=8, column=0, columnspan=2, sticky="nsew")
+        scroll_container.grid(row=10, column=0, columnspan=2, sticky="nsew")
         scroll_container.columnconfigure(0, weight=1)
         scroll_container.rowconfigure(0, weight=1)
 
@@ -501,7 +516,7 @@ class TransceiverUI(tk.Tk):
             "<Configure>",
             lambda _e: self.gen_canvas.configure(scrollregion=self.gen_canvas.bbox("all")),
         )
-        gen_frame.rowconfigure(8, weight=1)
+        gen_frame.rowconfigure(10, weight=1)
         self.gen_canvases = []
         self.latest_data = None
         self.latest_fs = 0.0
@@ -891,6 +906,8 @@ class TransceiverUI(tk.Tk):
             "f1": self.f1_entry.get(),
             "q": self.q_entry.get(),
             "samples": self.samples_entry.get(),
+            "repeats": self.repeat_entry.get(),
+            "zeros": self.zeros_var.get(),
             "amplitude": self.amp_entry.get(),
             "file": self.file_entry.get(),
             "tx_args": self.tx_args.get(),
@@ -960,6 +977,9 @@ class TransceiverUI(tk.Tk):
         self.q_entry.insert(0, preset.get("q", ""))
         self.samples_entry.delete(0, tk.END)
         self.samples_entry.insert(0, preset.get("samples", ""))
+        self.repeat_entry.delete(0, tk.END)
+        self.repeat_entry.insert(0, preset.get("repeats", "1"))
+        self.zeros_var.set(preset.get("zeros", "none"))
         self.amp_entry.delete(0, tk.END)
         self.amp_entry.insert(0, preset.get("amplitude", ""))
         self.file_entry.delete(0, tk.END)
@@ -1023,6 +1043,8 @@ class TransceiverUI(tk.Tk):
         try:
             fs = float(eval(self.fs_entry.get()))
             samples = int(self.samples_entry.get())
+            repeats = int(self.repeat_entry.get()) if self.repeat_entry.get() else 1
+            zeros_mode = self.zeros_var.get()
             amp = float(self.amp_entry.get())
             waveform = self.wave_var.get()
 
@@ -1036,6 +1058,20 @@ class TransceiverUI(tk.Tk):
                 f0 = float(eval(self.f_entry.get())) if self.f_entry.get() else 0.0
                 f1 = float(eval(self.f1_entry.get())) if self.f1_entry.get() else None
                 data = generate_waveform(waveform, fs, f0, samples, f0=f0, f1=f1)
+
+            if repeats > 1:
+                data = np.tile(data, repeats)
+
+            zeros = 0
+            if zeros_mode == "same":
+                zeros = len(data)
+            elif zeros_mode == "half":
+                zeros = len(data) // 2
+            elif zeros_mode == "quarter":
+                zeros = len(data) // 4
+
+            if zeros:
+                data = np.concatenate([data, np.zeros(zeros, dtype=np.complex64)])
 
             save_interleaved(self.file_entry.get(), data, amplitude=amp)
             self._display_gen_plots(data, fs)
