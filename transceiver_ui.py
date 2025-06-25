@@ -576,13 +576,21 @@ class TransceiverUI(tk.Tk):
         self.tx_file.insert(0, "tx_signal.bin")
         self.tx_file.grid(row=4, column=1, sticky="ew")
 
-        self.tx_button = ttk.Button(tx_frame, text="Transmit", command=self.transmit)
-        self.tx_button.grid(row=5, column=0, columnspan=2, pady=5)
-        self.tx_stop = ttk.Button(tx_frame, text="Stop", command=self.stop_transmit, state="disabled")
-        self.tx_stop.grid(row=6, column=0, columnspan=2, pady=(0, 5))
+        btn_frame = ttk.Frame(tx_frame)
+        btn_frame.grid(row=5, column=0, columnspan=2, pady=5)
+        btn_frame.columnconfigure((0, 1, 2), weight=1)
+
+        self.tx_button = ttk.Button(btn_frame, text="Transmit", command=self.transmit)
+        self.tx_button.grid(row=0, column=0, padx=2)
+
+        self.tx_retrans = ttk.Button(btn_frame, text="Retransmit", command=self.retransmit)
+        self.tx_retrans.grid(row=0, column=1, padx=2)
+
+        self.tx_stop = ttk.Button(btn_frame, text="Stop", command=self.stop_transmit, state="disabled")
+        self.tx_stop.grid(row=0, column=2, padx=2)
 
         log_frame = ttk.Frame(tx_frame)
-        log_frame.grid(row=7, column=0, columnspan=2, sticky="nsew")
+        log_frame.grid(row=6, column=0, columnspan=2, sticky="nsew")
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
         self.tx_log = tk.Text(log_frame, height=10, wrap="none")
@@ -590,7 +598,7 @@ class TransceiverUI(tk.Tk):
         log_scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.tx_log.yview)
         log_scroll.grid(row=0, column=1, sticky="ns")
         self.tx_log.configure(yscrollcommand=log_scroll.set)
-        tx_frame.rowconfigure(7, weight=1)
+        tx_frame.rowconfigure(6, weight=1)
 
         # ----- Column 3: Receive -----
         rx_frame = ttk.LabelFrame(self, text="Receive")
@@ -1195,6 +1203,12 @@ class TransceiverUI(tk.Tk):
             self.tx_stop.config(state="disabled")
         if hasattr(self, "tx_button"):
             self.tx_button.config(state="normal")
+
+    def retransmit(self) -> None:
+        """Stop any ongoing transmission and start a new one."""
+        self.stop_transmit()
+        # Give the previous process a moment to terminate
+        self.after(200, self.transmit)
 
     def stop_receive(self) -> None:
         if self._proc:
