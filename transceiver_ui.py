@@ -647,13 +647,17 @@ class TransceiverUI(tk.Tk):
             width=12,
         ).grid(row=6, column=1)
 
-        self.rx_button = ttk.Button(rx_frame, text="Receive", command=self.receive)
-        self.rx_button.grid(row=7, column=0, columnspan=2, pady=5)
-        self.rx_stop = ttk.Button(rx_frame, text="Stop", command=self.stop_receive, state="disabled")
-        self.rx_stop.grid(row=8, column=0, columnspan=2, pady=(0, 5))
+        rx_btn_frame = ttk.Frame(rx_frame)
+        rx_btn_frame.grid(row=7, column=0, columnspan=2, pady=5)
+        rx_btn_frame.columnconfigure((0, 1), weight=1)
+
+        self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
+        self.rx_button.grid(row=0, column=0, padx=2)
+        self.rx_stop = ttk.Button(rx_btn_frame, text="Stop", command=self.stop_receive, state="disabled")
+        self.rx_stop.grid(row=0, column=1, padx=2)
 
         rx_scroll_container = ttk.Frame(rx_frame)
-        rx_scroll_container.grid(row=9, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.grid(row=8, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
