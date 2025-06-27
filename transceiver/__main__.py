@@ -251,6 +251,33 @@ def _gen_rx_filename(app) -> str:
     return str(Path("signals/rx") / name)
 
 
+def _calc_stats(data: np.ndarray, fs: float) -> dict:
+    """Return basic signal statistics for display."""
+    stats = {
+        "f_low": 0.0,
+        "f_high": 0.0,
+        "bw": 0.0,
+        "amp": 0.0,
+    }
+
+    if data.size == 0 or fs <= 0:
+        return stats
+
+    stats["amp"] = float(np.max(np.abs(data))) if np.any(data) else 0.0
+
+    spec = np.fft.fftshift(np.fft.fft(data))
+    freqs = np.fft.fftshift(np.fft.fftfreq(len(data), d=1 / fs))
+    mag = 20 * np.log10(np.abs(spec) / len(data) + 1e-12)
+    max_mag = mag.max()
+    mask = mag >= max_mag - 3.0
+    if np.any(mask):
+        stats["f_low"] = float(freqs[mask].min())
+        stats["f_high"] = float(freqs[mask].max())
+        stats["bw"] = stats["f_high"] - stats["f_low"]
+
+    return stats
+
+
 def visualize(data: np.ndarray, fs: float, mode: str, title: str, ref_data: np.ndarray | None = None) -> None:
     """Visualize *data* using PyQtGraph."""
     if data.size == 0:
@@ -792,6 +819,18 @@ class TransceiverUI(tk.Tk):
             )
             self.gen_canvases.append(canvas)
 
+        stats = _calc_stats(data, fs)
+        text = (
+            f"fmin: {stats['f_low']:.0f} Hz\n"
+            f"fmax: {stats['f_high']:.0f} Hz\n"
+            f"max Amp: {stats['amp']:.1f}\n"
+            f"BW (3dB): {stats['bw']:.0f} Hz"
+        )
+        if not hasattr(self, 'gen_stats_label'):
+            self.gen_stats_label = ttk.Label(self.gen_plots_frame, justify='left', anchor='w')
+            self.gen_stats_label.grid(row=len(modes), column=0, sticky='w', pady=2)
+        self.gen_stats_label.configure(text=text)
+
     def _display_rx_plots(self, data: np.ndarray, fs: float) -> None:
         """Render preview plots below the receive parameters."""
         self.latest_data = data
@@ -824,6 +863,18 @@ class TransceiverUI(tk.Tk):
                 lambda _e, m=mode, d=data, s=fs: self._show_fullscreen(d, s, m, f"RX {m}")
             )
             self.rx_canvases.append(canvas)
+
+        stats = _calc_stats(data, fs)
+        text = (
+            f"fmin: {stats['f_low']:.0f} Hz\n"
+            f"fmax: {stats['f_high']:.0f} Hz\n"
+            f"max Amp: {stats['amp']:.1f}\n"
+            f"BW (3dB): {stats['bw']:.0f} Hz"
+        )
+        if not hasattr(self, 'rx_stats_label'):
+            self.rx_stats_label = ttk.Label(self.rx_plots_frame, justify='left', anchor='w')
+            self.rx_stats_label.grid(row=len(modes), column=0, sticky='w', pady=2)
+        self.rx_stats_label.configure(text=text)
 
     def _open_console(self, title: str) -> None:
         if self.console is None or not self.console.winfo_exists():
