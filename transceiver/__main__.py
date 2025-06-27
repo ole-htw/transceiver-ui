@@ -1116,7 +1116,10 @@ class TransceiverUI(tk.Tk):
 
         if proc is not None and proc.returncode == 0:
             try:
-                subprocess.run(["./rx_convert.py", out_file, "--to", "fc32"], check=True)
+                subprocess.run(
+                    [sys.executable, "-m", "transceiver.helpers.rx_convert", out_file, "--to", "fc32"],
+                    check=True,
+                )
                 conv_file = out_file.replace(".bin", "_conv.bin")
                 data = np.fromfile(conv_file, dtype=np.complex64)
                 data *= 32768.0
