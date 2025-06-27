@@ -83,12 +83,58 @@ def generate_filename(args) -> Path:
         parts.append(f"f{_pretty(args.f)}")
     elif args.waveform == "zadoffchu":
         parts.append(f"q{args.q}")
+        if getattr(args, "oversample", 1) > 1:
+            parts.append(f"os{args.oversample}")
     elif args.waveform == "chirp":
         parts.append(f"{_pretty(args.f0)}_{_pretty(args.f1)}")
     parts.append(f"N{args.samples}")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     name = "_".join(parts) + f"_{stamp}.bin"
     return Path(args.output_dir) / name
+
+
+def oversample(signal: np.ndarray, factor: int, method: str = "fft") -> np.ndarray:
+    """Oversample *signal* by integer *factor* using the given *method*.
+
+    Parameters
+    ----------
+    signal : np.ndarray
+        Complex input signal.
+    factor : int
+        Oversampling factor (>=1).
+    method : str
+        Either ``"fft"`` for zero-padding in the frequency domain or
+        ``"filter"`` for sinc interpolation in the time domain.
+    """
+
+    if factor <= 1:
+        return signal
+
+    method = method.lower()
+    if method == "fft":
+        N = len(signal)
+        spec = np.fft.fft(signal)
+        half = N // 2
+        if N % 2:
+            first = spec[: half + 1]
+            second = spec[half + 1 :]
+        else:
+            first = spec[:half]
+            second = spec[half:]
+        pad = np.zeros(N * (factor - 1), dtype=spec.dtype)
+        spec_os = np.concatenate([first, pad, second])
+        oversampled = np.fft.ifft(spec_os) * factor
+        return oversampled.astype(np.complex64)
+
+    if method == "filter":
+        up = np.zeros(len(signal) * factor, dtype=signal.dtype)
+        up[::factor] = signal
+        t = np.arange(-4 * factor, 4 * factor + 1) / factor
+        h = np.sinc(t)
+        oversampled = np.convolve(up, h, mode="same")
+        return oversampled.astype(np.complex64)
+
+    raise ValueError(f"Unknown oversampling method: {method}")
 
 
 # ---------- Waveform‑Generator ----------------------------------------------
@@ -102,8 +148,16 @@ def generate_waveform(
     q: int = 1,
     f0: Optional[float] = None,
     f1: Optional[float] = None,
+    oversample: int = 1,
+    oversample_method: str = "fft",
 ) -> np.ndarray:
-    """Erzeugt komplexe Samples einer der unterstützten Wellenformen."""
+    """Erzeugt komplexe Samples einer der unterstützten Wellenformen.
+
+    Mit ``oversample`` kann eine Überabtastung angegeben werden. ``oversample``
+    muss dabei ein ganzzahliger Faktor sein. Die Methode ``oversample_method``
+    bestimmt, ob per FFT-Zero‑Padding (``"fft"``) oder mittels Sinc‑Filter
+    (``"filter"``) interpoliert wird.
+    """
 
     if N <= 0:
         raise ValueError("N muss > 0 sein.")
@@ -139,7 +193,8 @@ def generate_waveform(
     else:
         raise ValueError(f"Unbekannte Wellenform: {waveform}")
 
-    return signal.astype(np.complex64)
+    signal = signal.astype(np.complex64)
+    return oversample(signal, oversample, oversample_method)
 
 
 # ---------- Hauptprogramm ----------------------------------------------------
@@ -190,6 +245,18 @@ def main() -> None:
     # Zadoff–Chu‑spezifisch
     parser.add_argument(
         "--q", type=int, default=1, help="Zadoff‑Chu‑Parameter q (Standard: 1)"
+    )
+    parser.add_argument(
+        "--oversample",
+        type=int,
+        default=1,
+        help="Überabtastungsfaktor für Zadoff‑Chu (Standard: 1)",
+    )
+    parser.add_argument(
+        "--method",
+        choices=["fft", "filter"],
+        default="fft",
+        help="Methode für Oversampling (fft oder filter)",
     )
 
     # Chirp‑spezifisch
@@ -251,15 +318,18 @@ def main() -> None:
             N_waveform = prime
 
     append_zeros = not args.no_zeros
-    total_samples = N_waveform * (2 if append_zeros else 1)
 
     # ------------------------------------------------------------------
     if append_zeros:
         print(
-            f"Erzeuge {N_waveform} Samples {args.waveform} + {N_waveform} Null‑Samples."
+            f"Erzeuge {N_waveform} Samples {args.waveform} + {N_waveform} Null‑Samples "
+            f"(Oversample {args.oversample}×)."
         )
     else:
-        print(f"Erzeuge {N_waveform} Samples {args.waveform} (ohne Null‑Samples).")
+        print(
+            f"Erzeuge {N_waveform} Samples {args.waveform} (ohne Null‑Samples, "
+            f"Oversample {args.oversample}×)."
+        )
 
     if args.waveform == "chirp":
         print(f"  Chirp: {args.f0/1e6:.3f} MHz → {args.f1/1e6:.3f} MHz")
@@ -273,13 +343,17 @@ def main() -> None:
         args.q,
         f0=args.f0,
         f1=args.f1,
+        oversample=args.oversample,
+        oversample_method=args.method,
     )
 
+    oversampled_len = len(waveform_signal)
     if append_zeros:
-        zeros = np.zeros(N_waveform, dtype=np.complex64)
+        zeros = np.zeros(oversampled_len, dtype=np.complex64)
         final_signal = np.concatenate([waveform_signal, zeros])
     else:
         final_signal = waveform_signal
+    total_samples = final_signal.size
 
     # Skalierung
     max_abs = np.max(np.abs(final_signal)) if np.any(final_signal) else 1.0

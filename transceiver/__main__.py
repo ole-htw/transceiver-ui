@@ -566,7 +566,22 @@ class TransceiverUI(tk.Tk):
         self.repeat_entry.insert(0, "1")
         self.repeat_entry.grid(row=5, column=1, sticky="ew")
 
-        ttk.Label(gen_frame, text="Zeros").grid(row=6, column=0, sticky="w")
+        ttk.Label(gen_frame, text="Oversample").grid(row=6, column=0, sticky="w")
+        self.os_entry = SuggestEntry(gen_frame, "os_entry")
+        self.os_entry.insert(0, "1")
+        self.os_entry.grid(row=6, column=1, sticky="ew")
+
+        ttk.Label(gen_frame, text="Method").grid(row=7, column=0, sticky="w")
+        self.os_method = tk.StringVar(value="fft")
+        ttk.Combobox(
+            gen_frame,
+            textvariable=self.os_method,
+            values=["fft", "filter"],
+            state="readonly",
+            width=10,
+        ).grid(row=7, column=1, sticky="ew")
+
+        ttk.Label(gen_frame, text="Zeros").grid(row=8, column=0, sticky="w")
         self.zeros_var = tk.StringVar(value="none")
         ttk.Combobox(
             gen_frame,
@@ -582,22 +597,22 @@ class TransceiverUI(tk.Tk):
             ],
             state="readonly",
             width=10,
-        ).grid(row=6, column=1, sticky="ew")
+        ).grid(row=8, column=1, sticky="ew")
 
-        ttk.Label(gen_frame, text="Amplitude").grid(row=7, column=0, sticky="w")
+        ttk.Label(gen_frame, text="Amplitude").grid(row=9, column=0, sticky="w")
         self.amp_entry = SuggestEntry(gen_frame, "amp_entry")
         self.amp_entry.insert(0, "10000")
-        self.amp_entry.grid(row=7, column=1, sticky="ew")
+        self.amp_entry.grid(row=9, column=1, sticky="ew")
 
-        ttk.Label(gen_frame, text="File").grid(row=8, column=0, sticky="w")
+        ttk.Label(gen_frame, text="File").grid(row=10, column=0, sticky="w")
         self.file_entry = SuggestEntry(gen_frame, "file_entry")
         self.file_entry.insert(0, "tx_signal.bin")
-        self.file_entry.grid(row=8, column=1, sticky="ew")
+        self.file_entry.grid(row=10, column=1, sticky="ew")
 
-        ttk.Button(gen_frame, text="Generate", command=self.generate).grid(row=9, column=0, columnspan=2, pady=5)
+        ttk.Button(gen_frame, text="Generate", command=self.generate).grid(row=11, column=0, columnspan=2, pady=5)
 
         scroll_container = ttk.Frame(gen_frame)
-        scroll_container.grid(row=10, column=0, columnspan=2, sticky="nsew")
+        scroll_container.grid(row=12, column=0, columnspan=2, sticky="nsew")
         scroll_container.columnconfigure(0, weight=1)
         scroll_container.rowconfigure(0, weight=1)
 
@@ -618,7 +633,7 @@ class TransceiverUI(tk.Tk):
             "<Configure>",
             lambda _e: self.gen_canvas.configure(scrollregion=self.gen_canvas.bbox("all")),
         )
-        gen_frame.rowconfigure(10, weight=1)
+        gen_frame.rowconfigure(12, weight=1)
         self.gen_canvases = []
         self.latest_data = None
         self.latest_fs = 0.0
@@ -1138,6 +1153,8 @@ class TransceiverUI(tk.Tk):
             "q": self.q_entry.get(),
             "samples": self.samples_entry.get(),
             "repeats": self.repeat_entry.get(),
+            "oversample": self.os_entry.get(),
+            "method": self.os_method.get(),
             "zeros": self.zeros_var.get(),
             "amplitude": self.amp_entry.get(),
             "file": self.file_entry.get(),
@@ -1171,6 +1188,9 @@ class TransceiverUI(tk.Tk):
         self.samples_entry.insert(0, params.get("samples", ""))
         self.repeat_entry.delete(0, tk.END)
         self.repeat_entry.insert(0, params.get("repeats", "1"))
+        self.os_entry.delete(0, tk.END)
+        self.os_entry.insert(0, params.get("oversample", "1"))
+        self.os_method.set(params.get("method", "fft"))
         self.zeros_var.set(params.get("zeros", "none"))
         self.amp_entry.delete(0, tk.END)
         self.amp_entry.insert(0, params.get("amplitude", ""))
@@ -1290,7 +1310,17 @@ class TransceiverUI(tk.Tk):
                 data = generate_waveform(waveform, fs, freq, samples)
             elif waveform == "zadoffchu":
                 q = int(self.q_entry.get()) if self.q_entry.get() else 1
-                data = generate_waveform(waveform, fs, 0.0, samples, q=q)
+                osf = int(self.os_entry.get()) if self.os_entry.get() else 1
+                method = self.os_method.get()
+                data = generate_waveform(
+                    waveform,
+                    fs,
+                    0.0,
+                    samples,
+                    q=q,
+                    oversample=osf,
+                    oversample_method=method,
+                )
             else:  # chirp
                 f0 = float(eval(self.f_entry.get())) if self.f_entry.get() else 0.0
                 f1 = float(eval(self.f1_entry.get())) if self.f1_entry.get() else None
