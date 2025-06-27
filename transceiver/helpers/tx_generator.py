@@ -148,12 +148,12 @@ def generate_waveform(
     q: int = 1,
     f0: Optional[float] = None,
     f1: Optional[float] = None,
-    oversample: int = 1,
+    oversample_factor: int = 1,
     oversample_method: str = "fft",
 ) -> np.ndarray:
     """Erzeugt komplexe Samples einer der unterstützten Wellenformen.
 
-    Mit ``oversample`` kann eine Überabtastung angegeben werden. ``oversample``
+    Mit ``oversample_factor`` kann eine Überabtastung angegeben werden. ``oversample_factor``
     muss dabei ein ganzzahliger Faktor sein. Die Methode ``oversample_method``
     bestimmt, ob per FFT-Zero‑Padding (``"fft"``) oder mittels Sinc‑Filter
     (``"filter"``) interpoliert wird.
@@ -194,7 +194,7 @@ def generate_waveform(
         raise ValueError(f"Unbekannte Wellenform: {waveform}")
 
     signal = signal.astype(np.complex64)
-    return oversample(signal, oversample, oversample_method)
+    return oversample(signal, oversample_factor, oversample_method)
 
 
 # ---------- Hauptprogramm ----------------------------------------------------
@@ -343,7 +343,7 @@ def main() -> None:
         args.q,
         f0=args.f0,
         f1=args.f1,
-        oversample=args.oversample,
+        oversample_factor=args.oversample,
         oversample_method=args.method,
     )
 
