@@ -566,20 +566,23 @@ class TransceiverUI(tk.Tk):
         self.repeat_entry.insert(0, "1")
         self.repeat_entry.grid(row=5, column=1, sticky="ew")
 
-        ttk.Label(gen_frame, text="Oversample").grid(row=6, column=0, sticky="w")
+        self.os_label = ttk.Label(gen_frame, text="Oversample")
+        self.os_label.grid(row=6, column=0, sticky="w")
         self.os_entry = SuggestEntry(gen_frame, "os_entry")
         self.os_entry.insert(0, "1")
         self.os_entry.grid(row=6, column=1, sticky="ew")
 
-        ttk.Label(gen_frame, text="Method").grid(row=7, column=0, sticky="w")
+        self.method_label = ttk.Label(gen_frame, text="Method")
+        self.method_label.grid(row=7, column=0, sticky="w")
         self.os_method = tk.StringVar(value="fft")
-        ttk.Combobox(
+        self.os_method_box = ttk.Combobox(
             gen_frame,
             textvariable=self.os_method,
             values=["fft", "filter"],
             state="readonly",
             width=10,
-        ).grid(row=7, column=1, sticky="ew")
+        )
+        self.os_method_box.grid(row=7, column=1, sticky="ew")
 
         ttk.Label(gen_frame, text="Zeros").grid(row=8, column=0, sticky="w")
         self.zeros_var = tk.StringVar(value="none")
@@ -801,6 +804,12 @@ class TransceiverUI(tk.Tk):
         self.f1_entry.grid_remove()
         self.q_label.grid_remove()
         self.q_entry.grid_remove()
+        self.os_label.grid_remove()
+        self.os_entry.grid_remove()
+        self.method_label.grid_remove()
+        self.os_method_box.grid_remove()
+        self.os_entry.entry.configure(state="disabled")
+        self.os_method_box.configure(state="disabled")
 
         if w == "sinus":
             self.f_label.configure(text="f")
@@ -809,6 +818,12 @@ class TransceiverUI(tk.Tk):
         elif w == "zadoffchu":
             self.q_label.grid(row=2, column=0, sticky="w")
             self.q_entry.grid(row=2, column=1, sticky="ew")
+            self.os_label.grid(row=6, column=0, sticky="w")
+            self.os_entry.grid(row=6, column=1, sticky="ew")
+            self.method_label.grid(row=7, column=0, sticky="w")
+            self.os_method_box.grid(row=7, column=1, sticky="ew")
+            self.os_entry.entry.configure(state="normal")
+            self.os_method_box.configure(state="readonly")
         elif w == "chirp":
             self.f_label.configure(text="f0")
             self.f_label.grid(row=2, column=0, sticky="w")
