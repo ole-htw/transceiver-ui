@@ -30,6 +30,7 @@ def main():
         rx = rx[:args.samples]
 
     # Zu große Datenmengen reduzieren (mehr als 1 MB)
+    step = 1
     if rx.nbytes > 1_000_000:
         step = int(np.ceil(rx.nbytes / 1_000_000))
         rx = rx[::step]
@@ -42,7 +43,7 @@ def main():
 
     # Frequenzachse
     if args.rate:
-        fs = args.rate
+        fs = args.rate / step
         freqs = np.fft.fftshift(np.fft.fftfreq(N, d=1/fs))
         xlabel = "Frequenz (Hz)"
     else:
