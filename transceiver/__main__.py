@@ -17,7 +17,8 @@ import numpy as np
 from pyqtgraph.Qt import QtCore
 import pyqtgraph as pg
 
-from tx_generator import generate_waveform
+import sys
+from .helpers.tx_generator import generate_waveform
 
 # --- suggestion helper -------------------------------------------------------
 
@@ -63,6 +64,11 @@ def _save_presets(data: dict) -> None:
 
 
 _PRESETS = _load_presets()
+
+# Paths to external helpers
+ROOT_DIR = Path(__file__).resolve().parents[1]
+BIN_DIR = ROOT_DIR / "bin"
+REPLAY_BIN = str(BIN_DIR / "rfnoc_replay_samples_from_file")
 
 
 class ConsoleWindow(tk.Toplevel):
@@ -1220,7 +1226,7 @@ class TransceiverUI(tk.Tk):
             return
         self._kill_stale_tx()
         self._stop_requested = False
-        cmd = ["./rfnoc_replay_samples_from_file",
+        cmd = [REPLAY_BIN,
                "--args", self.tx_args.get(),
                "--rate", self.tx_rate.get(),
                "--freq", self.tx_freq.get(),
@@ -1280,7 +1286,7 @@ class TransceiverUI(tk.Tk):
 
     def receive(self):
         out_file = self.rx_file.get()
-        cmd = ["./rx_to_file.py",
+        cmd = [sys.executable, "-m", "transceiver.helpers.rx_to_file",
                "-a", self.rx_args.get(),
                "-f", self.rx_freq.get(),
                "-r", self.rx_rate.get(),

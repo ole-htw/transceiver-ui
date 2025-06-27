@@ -1,83 +1,34 @@
-sudo apt install uhd???
+# Ettus Transceiver Project
 
+This repository contains tools for generating, transmitting and
+receiving signals with Ettus USRP devices.  The GUI application
+`transceiver` is the central entry point.  All other Python scripts are
+located in the `transceiver/helpers` package and serve as utilities for
+converting or analysing recorded data.  Pre‑built binaries for RFNoC
+streaming are kept in `bin/`.
 
-git clone ...
+## Structure
 
-cd host/
+```
+bin/                C++ helper binaries used by the GUI
+signals/            directory for generated TX/RX files
+transceiver/
+    __main__.py     main UI (`python -m transceiver`)
+    helpers/        various helper modules (rx_to_file, tx_generator, ...)
+```
 
-mkdir build4.8 && cd build4.8
+## Running the UI
 
-make -j8
+Activate your Python environment with the requirements in
+`requirements.txt` installed and simply run
 
-sudo make install
+```bash
+python -m transceiver
+```
 
-git checkout v4.7.0.0
+The helper modules can also be executed individually, e.g.
 
-...
+```bash
+python -m transceiver.helpers.rx_to_file --help
+```
 
-
-uhd_image_loader --args="type=x300,addr=192.168.10.2,fpga=HG"
-
-sudo ldconfig
-
-ldconfig -p | grep libuhd.so
-
-sudo uhd_images_downloader
-
-uhd_image_loader --args="type=x300,addr=192.168.10.2,fpga=HG"
-
-ping 192.168.10.2
-
-uhd_usrp_probe --args addr=192.168.10.2
-
-uhd_image_loader --args="type=x300,addr=192.168.10.2" --fpga-path="<path_to_images>/usrp_x310_fpga_HG.bit"
-
-bandbreite, abtastrate, buffer
-
-
-./tx_generator.py --amplitude 30000 --fs 200e6 --f 50e3 --waveform sinus signals/sinus_tx.bin
-
-./tx_samples_from_file --args addr=192.168.10.2 --rate 25e6 --freq 5.18e9 --ant TX/RX --gain 20 --repeat --file sinus_tx.bin 
-
-
-./rx_samples_to_file --args addr=192.168.20.2 --rate 25e6 --ref external --freq 5.18e9 --ant RX1 --duration 0.01 --gain 30 --file sinus_rx.bin 
-
-
-
-
-uhd_fft --args addr=192.168.20.2 -f 5.18e9 -s 25e6 -g 40 -A RX1
-
-
-
-
-./rx_samples_to_file --args addr=192.168.20.2 --rate 200e6 --ref external --freq 5.18e9 --ant RX1 --duration 0.001 --gain 40 --file sinus_rx.bin
-
-
-sudo apt install pkg-config libmariadb-dev libssl-dev build-essential python3-tk
-
-cmake .. \
-  -DENABLE_PYTHON_API=ON \
-  -DPYTHON_EXECUTABLE=$(which python3) \
-  -DUHD_PYTHON_DIR=/usr/local/lib/python3.11/dist-packages 
-  
-  
-./tx_generator.py --waveform zadoffchu \
-                  --fs 200e6 --samples 10000 \
-                  zc_20kHz.bin
-                  
-                  
-./tx_generator.py --waveform zadoffchu \
-                  --fs 100e6 \
-                  --samples 4000 \
-                  --amplitude 30000 \
-                  zc_50kHz.bin
-                  
-                  
-
-./rfnoc_replay_samples_from_file --args "addr=192.168.10.2" --rate 200e6 --freq 5.18e9  --gain 30 --nsamps 0 --file signals/chirp_0_100.bin 
-./rx_to_file.py -a "addr=192.168.20.2,clock_source=external" -f 5.18e9 -r 200e6 -d 0.01 -g 80 -c 0 --dram --output-file signals/rx/chirp.bin
-
-./rx_convert.py signals/rx/chirp.bin
-./rx_visualizer.py signals/rx/chirp_conv.bin 
-
-./tx_generator.py --amplitude 20000 --fs 200e6 --f0 -64000 --f1 64000 --samples 250000 --waveform chirp signals/chirp_64.bin
