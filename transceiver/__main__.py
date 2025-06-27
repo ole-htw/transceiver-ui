@@ -65,6 +65,28 @@ def _save_presets(data: dict) -> None:
 
 _PRESETS = _load_presets()
 
+# --- state persistence helper ----------------------------------------------
+STATE_FILE = Path(__file__).with_name("state.json")
+
+
+def _load_state() -> dict:
+    try:
+        with open(STATE_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_state(data: dict) -> None:
+    try:
+        with open(STATE_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
+_STATE = _load_state()
+
 # Paths to external helpers
 ROOT_DIR = Path(__file__).resolve().parents[1]
 BIN_DIR = ROOT_DIR / "bin"
@@ -462,6 +484,9 @@ class TransceiverUI(tk.Tk):
                 self.attributes("-zoomed", True)
             except tk.TclError:
                 pass
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        if _STATE:
+            self._apply_params(_STATE)
 
     def create_widgets(self):
         self.rowconfigure(0, weight=1)
@@ -1107,6 +1132,52 @@ class TransceiverUI(tk.Tk):
             "rx_view": self.rx_view.get(),
         }
 
+    def _apply_params(self, params: dict) -> None:
+        self.wave_var.set(params.get("waveform", "sinus"))
+        self.update_waveform_fields()
+        self.fs_entry.delete(0, tk.END)
+        self.fs_entry.insert(0, params.get("fs", ""))
+        self.f_entry.delete(0, tk.END)
+        self.f_entry.insert(0, params.get("f", ""))
+        self.f1_entry.delete(0, tk.END)
+        self.f1_entry.insert(0, params.get("f1", ""))
+        self.q_entry.delete(0, tk.END)
+        self.q_entry.insert(0, params.get("q", ""))
+        self.samples_entry.delete(0, tk.END)
+        self.samples_entry.insert(0, params.get("samples", ""))
+        self.repeat_entry.delete(0, tk.END)
+        self.repeat_entry.insert(0, params.get("repeats", "1"))
+        self.zeros_var.set(params.get("zeros", "none"))
+        self.amp_entry.delete(0, tk.END)
+        self.amp_entry.insert(0, params.get("amplitude", ""))
+        self.file_entry.delete(0, tk.END)
+        self.file_entry.insert(0, params.get("file", ""))
+        self.tx_args.delete(0, tk.END)
+        self.tx_args.insert(0, params.get("tx_args", ""))
+        self.tx_rate.delete(0, tk.END)
+        self.tx_rate.insert(0, params.get("tx_rate", ""))
+        self.tx_freq.delete(0, tk.END)
+        self.tx_freq.insert(0, params.get("tx_freq", ""))
+        self.tx_gain.delete(0, tk.END)
+        self.tx_gain.insert(0, params.get("tx_gain", ""))
+        self.tx_file.delete(0, tk.END)
+        self.tx_file.insert(0, params.get("tx_file", ""))
+        self.rx_args.delete(0, tk.END)
+        self.rx_args.insert(0, params.get("rx_args", ""))
+        self.rx_rate.delete(0, tk.END)
+        self.rx_rate.insert(0, params.get("rx_rate", ""))
+        self.rx_freq.delete(0, tk.END)
+        self.rx_freq.insert(0, params.get("rx_freq", ""))
+        self.rx_dur.delete(0, tk.END)
+        self.rx_dur.insert(0, params.get("rx_dur", ""))
+        self.rx_gain.delete(0, tk.END)
+        self.rx_gain.insert(0, params.get("rx_gain", ""))
+        self.rx_file.delete(0, tk.END)
+        self.rx_file.insert(0, params.get("rx_file", ""))
+        self.rx_view.set(params.get("rx_view", "Signal"))
+        self.sync_var.set(params.get("sync_rates", True))
+        self.toggle_rate_sync(self.sync_var.get())
+
     def open_load_preset_window(self) -> None:
         win = tk.Toplevel(self)
         win.title("Load Preset")
@@ -1148,50 +1219,7 @@ class TransceiverUI(tk.Tk):
         if not preset:
             messagebox.showerror("Preset", f"Preset '{name}' not found")
             return
-        self.wave_var.set(preset.get("waveform", "sinus"))
-        self.update_waveform_fields()
-        self.fs_entry.delete(0, tk.END)
-        self.fs_entry.insert(0, preset.get("fs", ""))
-        self.f_entry.delete(0, tk.END)
-        self.f_entry.insert(0, preset.get("f", ""))
-        self.f1_entry.delete(0, tk.END)
-        self.f1_entry.insert(0, preset.get("f1", ""))
-        self.q_entry.delete(0, tk.END)
-        self.q_entry.insert(0, preset.get("q", ""))
-        self.samples_entry.delete(0, tk.END)
-        self.samples_entry.insert(0, preset.get("samples", ""))
-        self.repeat_entry.delete(0, tk.END)
-        self.repeat_entry.insert(0, preset.get("repeats", "1"))
-        self.zeros_var.set(preset.get("zeros", "none"))
-        self.amp_entry.delete(0, tk.END)
-        self.amp_entry.insert(0, preset.get("amplitude", ""))
-        self.file_entry.delete(0, tk.END)
-        self.file_entry.insert(0, preset.get("file", ""))
-        self.tx_args.delete(0, tk.END)
-        self.tx_args.insert(0, preset.get("tx_args", ""))
-        self.tx_rate.delete(0, tk.END)
-        self.tx_rate.insert(0, preset.get("tx_rate", ""))
-        self.tx_freq.delete(0, tk.END)
-        self.tx_freq.insert(0, preset.get("tx_freq", ""))
-        self.tx_gain.delete(0, tk.END)
-        self.tx_gain.insert(0, preset.get("tx_gain", ""))
-        self.tx_file.delete(0, tk.END)
-        self.tx_file.insert(0, preset.get("tx_file", ""))
-        self.rx_args.delete(0, tk.END)
-        self.rx_args.insert(0, preset.get("rx_args", ""))
-        self.rx_rate.delete(0, tk.END)
-        self.rx_rate.insert(0, preset.get("rx_rate", ""))
-        self.rx_freq.delete(0, tk.END)
-        self.rx_freq.insert(0, preset.get("rx_freq", ""))
-        self.rx_dur.delete(0, tk.END)
-        self.rx_dur.insert(0, preset.get("rx_dur", ""))
-        self.rx_gain.delete(0, tk.END)
-        self.rx_gain.insert(0, preset.get("rx_gain", ""))
-        self.rx_file.delete(0, tk.END)
-        self.rx_file.insert(0, preset.get("rx_file", ""))
-        self.rx_view.set(preset.get("rx_view", "Signal"))
-        self.sync_var.set(preset.get("sync_rates", True))
-        self.toggle_rate_sync(self.sync_var.get())
+        self._apply_params(preset)
 
     def save_preset(self, name: str) -> None:
         _PRESETS[name] = self._get_current_params()
@@ -1356,6 +1384,12 @@ class TransceiverUI(tk.Tk):
             self.rx_button.config(state="disabled")
         threading.Thread(target=self._run_rx_cmd, args=(cmd, out_file), daemon=True).start()
         self._process_queue()
+
+    def on_close(self) -> None:
+        self.stop_transmit()
+        self.stop_receive()
+        _save_state(self._get_current_params())
+        self.destroy()
 
 
 def main() -> None:
