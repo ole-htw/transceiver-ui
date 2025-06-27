@@ -174,12 +174,13 @@ def save_interleaved(filename: str, data: np.ndarray, amplitude: float = 10000.0
     interleaved.tofile(filename)
 
 
-def _reduce_data(data: np.ndarray, max_bytes: int = 1_000_000) -> np.ndarray:
-    """Return a downsampled view of *data* if it exceeds *max_bytes*."""
-    if data.nbytes <= max_bytes:
-        return data
-    step = int(np.ceil(data.nbytes / max_bytes))
-    return data[::step]
+def _reduce_data(data: np.ndarray, max_bytes: int = 1_000_000) -> tuple[np.ndarray, int]:
+    """Return a downsampled view of *data* and the step used."""
+    step = 1
+    if data.nbytes > max_bytes:
+        step = int(np.ceil(data.nbytes / max_bytes))
+        data = data[::step]
+    return data, step
 
 
 def _pretty(val: float) -> str:
@@ -256,7 +257,8 @@ def visualize(data: np.ndarray, fs: float, mode: str, title: str, ref_data: np.n
         messagebox.showerror("Error", "No data to visualize")
         return
 
-    data = _reduce_data(data)
+    data, step = _reduce_data(data)
+    fs /= step
 
     pg.setConfigOption("background", "w")
     pg.setConfigOption("foreground", "k")
@@ -313,7 +315,8 @@ def visualize(data: np.ndarray, fs: float, mode: str, title: str, ref_data: np.n
 
 def _plot_on_pg(plot: pg.PlotItem, data: np.ndarray, fs: float, mode: str, title: str, ref_data: np.ndarray | None = None) -> None:
     """Helper to draw the selected visualization on a PyQtGraph PlotItem."""
-    data = _reduce_data(data)
+    data, step = _reduce_data(data)
+    fs /= step
     if mode == "Signal":
         plot.addLegend()
         plot.plot(np.real(data), pen=pg.mkPen("b"), name="Real")
@@ -359,7 +362,8 @@ def _plot_on_pg(plot: pg.PlotItem, data: np.ndarray, fs: float, mode: str, title
 
 def _plot_on_mpl(ax, data: np.ndarray, fs: float, mode: str, title: str, ref_data: np.ndarray | None = None) -> None:
     """Helper to draw a small matplotlib preview plot."""
-    data = _reduce_data(data)
+    data, step = _reduce_data(data)
+    fs /= step
     if mode == "Signal":
         ax.plot(np.real(data), "b", label="Real")
         ax.plot(np.imag(data), "r--", label="Imag")
