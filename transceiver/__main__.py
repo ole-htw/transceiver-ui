@@ -10,6 +10,7 @@ import time
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import json
+import math
 from pathlib import Path
 from datetime import datetime
 
@@ -1327,15 +1328,18 @@ class TransceiverUI(tk.Tk):
                 q = int(self.q_entry.get()) if self.q_entry.get() else 1
                 osf = int(self.os_entry.get()) if self.os_entry.get() else 1
                 method = self.os_method.get()
+                base_samples = math.ceil(samples / osf) if osf > 1 else samples
                 data = generate_waveform(
                     waveform,
                     fs,
                     0.0,
-                    samples,
+                    base_samples,
                     q=q,
                     oversample_factor=osf,
                     oversample_method=method,
                 )
+                if osf > 1:
+                    data = data[:samples]
             else:  # chirp
                 f0 = float(eval(self.f_entry.get())) if self.f_entry.get() else 0.0
                 f1 = float(eval(self.f1_entry.get())) if self.f1_entry.get() else None

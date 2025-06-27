@@ -250,7 +250,7 @@ def main() -> None:
         "--oversample",
         type=int,
         default=1,
-        help="Überabtastungsfaktor für Zadoff‑Chu (Standard: 1)",
+        help="Überabtastungsfaktor für Zadoff‑Chu; Ausgabe behält Länge --samples (Standard: 1)",
     )
     parser.add_argument(
         "--method",
@@ -308,7 +308,8 @@ def main() -> None:
     if args.waveform == "chirp" and args.f1 is None:
         args.f1 = args.fs / 2 - 1  # Maximal fast bis Nyquist
 
-    N_waveform = args.samples
+    N_output = args.samples
+    N_waveform = math.ceil(N_output / args.oversample)
 
     # Blockgröße ggf. an Primzahl anpassen (nur ZC)
     if args.waveform == "zadoffchu":
@@ -322,12 +323,12 @@ def main() -> None:
     # ------------------------------------------------------------------
     if append_zeros:
         print(
-            f"Erzeuge {N_waveform} Samples {args.waveform} + {N_waveform} Null‑Samples "
+            f"Erzeuge {N_output} Samples {args.waveform} + {N_output} Null-Samples "
             f"(Oversample {args.oversample}×)."
         )
     else:
         print(
-            f"Erzeuge {N_waveform} Samples {args.waveform} (ohne Null‑Samples, "
+            f"Erzeuge {N_output} Samples {args.waveform} (ohne Null-Samples, "
             f"Oversample {args.oversample}×)."
         )
 
@@ -346,6 +347,9 @@ def main() -> None:
         oversample_factor=args.oversample,
         oversample_method=args.method,
     )
+
+    if args.oversample > 1:
+        waveform_signal = waveform_signal[:N_output]
 
     oversampled_len = len(waveform_signal)
     if append_zeros:
