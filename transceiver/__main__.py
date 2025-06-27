@@ -598,6 +598,7 @@ class TransceiverUI(tk.Tk):
         self.gen_canvas.bind("<Leave>", self._unbind_gen_mousewheel)
 
         self.gen_plots_frame = ttk.Frame(self.gen_canvas)
+        self.gen_plots_frame.columnconfigure(0, weight=1)
         self.gen_canvas.create_window((0, 0), window=self.gen_plots_frame, anchor="nw")
         self.gen_plots_frame.bind(
             "<Configure>",
@@ -747,6 +748,7 @@ class TransceiverUI(tk.Tk):
         self.rx_canvas.bind("<Leave>", self._unbind_rx_mousewheel)
 
         self.rx_plots_frame = ttk.Frame(self.rx_canvas)
+        self.rx_plots_frame.columnconfigure(0, weight=1)
         self.rx_canvas.create_window((0, 0), window=self.rx_plots_frame, anchor="nw")
         self.rx_plots_frame.bind(
             "<Configure>",
@@ -852,8 +854,12 @@ class TransceiverUI(tk.Tk):
             f"BW (3dB): {stats['bw']:.0f} Hz"
         )
         if not hasattr(self, 'gen_stats_label'):
-            self.gen_stats_label = ttk.Label(self.gen_plots_frame, justify='left', anchor='w')
-            self.gen_stats_label.grid(row=len(modes), column=0, sticky='w', pady=2)
+            self.gen_stats_label = ttk.Label(
+                self.gen_plots_frame,
+                justify='left',
+                anchor='w'
+            )
+            self.gen_stats_label.grid(row=len(modes), column=0, sticky='ew', pady=2)
         self.gen_stats_label.configure(text=text)
 
     def _display_rx_plots(self, data: np.ndarray, fs: float) -> None:
@@ -897,8 +903,12 @@ class TransceiverUI(tk.Tk):
             f"BW (3dB): {stats['bw']:.0f} Hz"
         )
         if not hasattr(self, 'rx_stats_label'):
-            self.rx_stats_label = ttk.Label(self.rx_plots_frame, justify='left', anchor='w')
-            self.rx_stats_label.grid(row=len(modes), column=0, sticky='w', pady=2)
+            self.rx_stats_label = ttk.Label(
+                self.rx_plots_frame,
+                justify='left',
+                anchor='w'
+            )
+            self.rx_stats_label.grid(row=len(modes), column=0, sticky='ew', pady=2)
         self.rx_stats_label.configure(text=text)
 
     def _open_console(self, title: str) -> None:
