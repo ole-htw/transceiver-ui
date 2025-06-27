@@ -215,6 +215,20 @@ def _pretty(val: float) -> str:
     return f"{int(val)}"
 
 
+def _format_hz(val: float) -> str:
+    """Return *val* in a human friendly frequency unit."""
+    abs_v = abs(val)
+    if abs_v >= 1e9:
+        return f"{val/1e9:.2f} GHz"
+    if abs_v >= 1e6:
+        return f"{val/1e6:.2f} MHz"
+    if abs_v >= 1e3:
+        return f"{val/1e3:.2f} kHz"
+    if abs_v >= 1.0:
+        return f"{val:.0f} Hz"
+    return f"{val*1e3:.2f} mHz"
+
+
 def _gen_tx_filename(app) -> str:
     """Generate TX filename based on current UI settings."""
     w = app.wave_var.get().lower()
@@ -848,10 +862,10 @@ class TransceiverUI(tk.Tk):
 
         stats = _calc_stats(data, fs)
         text = (
-            f"fmin: {stats['f_low']:.0f} Hz\n"
-            f"fmax: {stats['f_high']:.0f} Hz\n"
+            f"fmin: {_format_hz(stats['f_low'])}\n"
+            f"fmax: {_format_hz(stats['f_high'])}\n"
             f"max Amp: {stats['amp']:.1f}\n"
-            f"BW (3dB): {stats['bw']:.0f} Hz"
+            f"BW (3dB): {_format_hz(stats['bw'])}"
         )
         if not hasattr(self, 'gen_stats_label'):
             self.gen_stats_label = ttk.Label(
@@ -897,10 +911,10 @@ class TransceiverUI(tk.Tk):
 
         stats = _calc_stats(data, fs)
         text = (
-            f"fmin: {stats['f_low']:.0f} Hz\n"
-            f"fmax: {stats['f_high']:.0f} Hz\n"
+            f"fmin: {_format_hz(stats['f_low'])}\n"
+            f"fmax: {_format_hz(stats['f_high'])}\n"
             f"max Amp: {stats['amp']:.1f}\n"
-            f"BW (3dB): {stats['bw']:.0f} Hz"
+            f"BW (3dB): {_format_hz(stats['bw'])}"
         )
         if not hasattr(self, 'rx_stats_label'):
             self.rx_stats_label = ttk.Label(
