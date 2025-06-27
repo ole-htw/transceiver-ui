@@ -1333,7 +1333,7 @@ class TransceiverUI(tk.Tk):
                     0.0,
                     samples,
                     q=q,
-                    oversample=osf,
+                    oversample_factor=osf,
                     oversample_method=method,
                 )
             else:  # chirp
