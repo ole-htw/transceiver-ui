@@ -315,6 +315,16 @@ def _calc_stats(data: np.ndarray, fs: float) -> dict:
     return stats
 
 
+def _format_stats_text(stats: dict) -> str:
+    """Return a formatted multi-line string for signal statistics."""
+    return (
+        f"fmin: {_format_hz(stats['f_low'])}\n"
+        f"fmax: {_format_hz(stats['f_high'])}\n"
+        f"max Amp: {stats['amp']:.1f}\n"
+        f"BW (3dB): {_format_hz(stats['bw'])}"
+    )
+
+
 def visualize(data: np.ndarray, fs: float, mode: str, title: str, ref_data: np.ndarray | None = None) -> None:
     """Visualize *data* using PyQtGraph."""
     if data.size == 0:
@@ -892,12 +902,7 @@ class TransceiverUI(tk.Tk):
             self.gen_canvases.append(canvas)
 
         stats = _calc_stats(data, fs)
-        text = (
-            f"fmin: {_format_hz(stats['f_low'])}\n"
-            f"fmax: {_format_hz(stats['f_high'])}\n"
-            f"max Amp: {stats['amp']:.1f}\n"
-            f"BW (3dB): {_format_hz(stats['bw'])}"
-        )
+        text = _format_stats_text(stats)
         if not hasattr(self, 'gen_stats_label'):
             self.gen_stats_label = ttk.Label(
                 self.gen_plots_frame,
@@ -941,12 +946,7 @@ class TransceiverUI(tk.Tk):
             self.rx_canvases.append(canvas)
 
         stats = _calc_stats(data, fs)
-        text = (
-            f"fmin: {_format_hz(stats['f_low'])}\n"
-            f"fmax: {_format_hz(stats['f_high'])}\n"
-            f"max Amp: {stats['amp']:.1f}\n"
-            f"BW (3dB): {_format_hz(stats['bw'])}"
-        )
+        text = _format_stats_text(stats)
         if not hasattr(self, 'rx_stats_label'):
             self.rx_stats_label = ttk.Label(
                 self.rx_plots_frame,
