@@ -768,24 +768,53 @@ class TransceiverUI(tk.Tk):
             width=12,
         ).grid(row=6, column=1)
 
+        # --- Trim controls -------------------------------------------------
+        self.trim_var = tk.BooleanVar(value=False)
+        self.trim_start = tk.DoubleVar(value=0.0)
+        self.trim_end = tk.DoubleVar(value=100.0)
+
+        trim_frame = ttk.Frame(rx_frame)
+        trim_frame.grid(row=7, column=0, columnspan=2, sticky="ew")
+        trim_frame.columnconfigure((1, 2), weight=1)
+
+        ttk.Checkbutton(
+            trim_frame,
+            text="Trim",
+            variable=self.trim_var,
+            command=self.update_trim,
+        ).grid(row=0, column=0, sticky="w")
+
+        self.trim_start_scale = ttk.Scale(
+            trim_frame,
+            from_=0,
+            to=100,
+            orient="horizontal",
+            variable=self.trim_start,
+            command=lambda _e: self.update_trim(),
+        )
+        self.trim_start_scale.grid(row=0, column=1, sticky="ew", padx=2)
+
+        self.trim_end_scale = ttk.Scale(
+            trim_frame,
+            from_=0,
+            to=100,
+            orient="horizontal",
+            variable=self.trim_end,
+            command=lambda _e: self.update_trim(),
+        )
+        self.trim_end_scale.grid(row=0, column=2, sticky="ew")
+
         rx_btn_frame = ttk.Frame(rx_frame)
-        rx_btn_frame.grid(row=7, column=0, columnspan=2, pady=5)
-        rx_btn_frame.columnconfigure((0, 1, 2), weight=1)
+        rx_btn_frame.grid(row=8, column=0, columnspan=2, pady=5)
+        rx_btn_frame.columnconfigure((0, 1), weight=1)
 
         self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
         self.rx_button.grid(row=0, column=0, padx=2)
         self.rx_stop = ttk.Button(rx_btn_frame, text="Stop", command=self.stop_receive, state="disabled")
         self.rx_stop.grid(row=0, column=1, padx=2)
-        self.rx_trim_button = ttk.Button(
-            rx_btn_frame,
-            text="Trim",
-            command=self.open_trim_window,
-            state="disabled",
-        )
-        self.rx_trim_button.grid(row=0, column=2, padx=2)
 
         rx_scroll_container = ttk.Frame(rx_frame)
-        rx_scroll_container.grid(row=8, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.grid(row=9, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
@@ -804,7 +833,7 @@ class TransceiverUI(tk.Tk):
             "<Configure>",
             lambda _e: self.rx_canvas.configure(scrollregion=self.rx_canvas.bbox("all")),
         )
-        rx_frame.rowconfigure(8, weight=1)
+        rx_frame.rowconfigure(9, weight=1)
         self.rx_canvases = []
         self.update_waveform_fields()
         self.auto_update_tx_filename()
@@ -921,8 +950,11 @@ class TransceiverUI(tk.Tk):
 
     def _display_rx_plots(self, data: np.ndarray, fs: float) -> None:
         """Render preview plots below the receive parameters."""
-        self.latest_data = data
+        self.raw_rx_data = data
         self.latest_fs = fs
+        if self.trim_var.get():
+            data = self._trim_data(data)
+        self.latest_data = data
 
         try:
             raw = np.fromfile(self.tx_file.get(), dtype=np.int16)
@@ -963,10 +995,29 @@ class TransceiverUI(tk.Tk):
         self.rx_stats_label.grid(row=len(modes), column=0, sticky='ew', pady=2)
         self.rx_stats_label.configure(text=text)
 
-        # Enable trim button when data is available
-        if hasattr(self, 'rx_trim_button'):
-            state = 'normal' if data.size else 'disabled'
-            self.rx_trim_button.config(state=state)
+    def _trim_data(self, data: np.ndarray) -> np.ndarray:
+        """Return trimmed view of *data* based on slider settings."""
+        if data.size == 0:
+            return data
+        start_pct = max(0.0, min(100.0, self.trim_start.get()))
+        end_pct = max(0.0, min(100.0, self.trim_end.get()))
+        if end_pct <= start_pct:
+            end_pct = min(100.0, start_pct + 1.0)
+        s = int(round(len(data) * start_pct / 100))
+        e = int(round(len(data) * end_pct / 100))
+        e = max(s + 1, min(len(data), e))
+        return data[s:e]
+
+    def update_trim(self, *_args) -> None:
+        """Re-apply trimming and refresh RX plots."""
+        state = "normal" if self.trim_var.get() else "disabled"
+        for widget in (self.trim_start_scale, self.trim_end_scale):
+            try:
+                widget.configure(state=state)
+            except Exception:
+                pass
+        if hasattr(self, "raw_rx_data") and self.raw_rx_data is not None:
+            self._display_rx_plots(self.raw_rx_data, self.latest_fs)
 
     def _open_console(self, title: str) -> None:
         if self.console is None or not self.console.winfo_exists():
@@ -1182,58 +1233,6 @@ class TransceiverUI(tk.Tk):
         pg.exec()
         self._plot_win = None
 
-    def open_trim_window(self) -> None:
-        """Allow interactive trimming of the current RX data."""
-        data = getattr(self, "latest_data", None)
-        fs = getattr(self, "latest_fs", None)
-        if data is None or data.size == 0:
-            messagebox.showerror("Trim", "No RX data available")
-            return
-        pg.setConfigOption("background", "w")
-        pg.setConfigOption("foreground", "k")
-        app = pg.mkQApp()
-        QtWidgets = pg.QtWidgets  # type: ignore[attr-defined]
-
-        dlg = QtWidgets.QDialog()
-        dlg.setWindowTitle("Trim RX Signal")
-        layout = QtWidgets.QVBoxLayout(dlg)
-
-        plot = pg.PlotWidget()
-        _plot_on_pg(plot.getPlotItem(), data, fs, "Signal", "RX Signal")
-        layout.addWidget(plot)
-
-        region = pg.LinearRegionItem(values=[0, len(data)])
-        region.setZValue(10)
-        plot.addItem(region)
-
-        info = QtWidgets.QLabel()
-        layout.addWidget(info)
-
-        def _update():
-            start, end = region.getRegion()
-            info.setText(f"Start: {100*start/len(data):.1f}%  End: {100*end/len(data):.1f}%")
-
-        region.sigRegionChanged.connect(_update)
-        _update()
-
-        btn = QtWidgets.QPushButton("Apply")
-        layout.addWidget(btn)
-
-        result = {"data": data}
-
-        def _apply():
-            start, end = region.getRegion()
-            s = max(0, int(round(start)))
-            e = max(s + 1, min(len(data), int(round(end))))
-            result["data"] = data[s:e]
-            dlg.accept()
-
-        btn.clicked.connect(_apply)
-        dlg.exec()
-
-        if result["data"] is not data:
-            self.latest_data = result["data"]
-            self._display_rx_plots(self.latest_data, fs)
 
     # ----- Preset handling --------------------------------------------------
     def _get_current_params(self) -> dict:
@@ -1263,6 +1262,9 @@ class TransceiverUI(tk.Tk):
             "rx_gain": self.rx_gain.get(),
             "rx_file": self.rx_file.get(),
             "rx_view": self.rx_view.get(),
+            "trim": self.trim_var.get(),
+            "trim_start": self.trim_start.get(),
+            "trim_end": self.trim_end.get(),
         }
 
     def _apply_params(self, params: dict) -> None:
@@ -1311,6 +1313,10 @@ class TransceiverUI(tk.Tk):
         self.rx_file.delete(0, tk.END)
         self.rx_file.insert(0, params.get("rx_file", ""))
         self.rx_view.set(params.get("rx_view", "Signal"))
+        self.trim_var.set(params.get("trim", False))
+        self.trim_start.set(params.get("trim_start", 0.0))
+        self.trim_end.set(params.get("trim_end", 100.0))
+        self.update_trim()
         self.sync_var.set(params.get("sync_rates", True))
         self.toggle_rate_sync(self.sync_var.get())
 
