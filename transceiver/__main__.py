@@ -949,7 +949,7 @@ class TransceiverUI(tk.Tk):
             c.get_tk_widget().destroy()
         self.gen_canvases.clear()
 
-        modes = ["Signal", "Freq", "InstantFreq"]
+        modes = ["Signal", "Freq", "InstantFreq", "Autocorr"]
         for idx, mode in enumerate(modes):
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
