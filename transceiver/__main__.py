@@ -1129,6 +1129,11 @@ class TransceiverUI(tk.Tk):
                     ["pkill", "-f", "rfnoc_replay_samples_from_file"],
                     capture_output=True,
                 )
+                # Force kill any remaining processes
+                subprocess.run(
+                    ["pkill", "-9", "-f", "rfnoc_replay_samples_from_file"],
+                    capture_output=True,
+                )
         except Exception:
             pass
 
@@ -1530,9 +1535,14 @@ class TransceiverUI(tk.Tk):
             try:
                 self._proc.terminate()
                 self._proc.wait(timeout=5)
+                if self._proc.poll() is None:
+                    self._proc.kill()
+                    self._proc.wait(timeout=2)
                 self._proc = None
             except Exception:
                 pass
+        # Ensure no orphaned processes remain
+        self._kill_stale_tx()
         self._stop_requested = True
         self._tx_running = False
         self._last_tx_end = time.monotonic()
