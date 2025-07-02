@@ -787,6 +787,13 @@ class TransceiverUI(tk.Tk):
             "<Configure>",
             lambda _e: self.rx_canvas.configure(scrollregion=self.rx_canvas.bbox("all")),
         )
+        # show TX stats in the receive column as reference
+        self.rx_tx_stats_label = ttk.Label(
+            self.rx_plots_frame,
+            justify="left",
+            anchor="w",
+        )
+        self.rx_tx_stats_label.grid(row=5, column=0, sticky="ew", pady=2)
         rx_frame.rowconfigure(8, weight=1)
         self.rx_canvases = []
         self.update_waveform_fields()
@@ -906,6 +913,9 @@ class TransceiverUI(tk.Tk):
             )
             self.gen_stats_label.grid(row=len(modes), column=0, sticky='ew', pady=2)
         self.gen_stats_label.configure(text=text)
+        self.last_gen_stats_text = text
+        if hasattr(self, 'rx_tx_stats_label'):
+            self.rx_tx_stats_label.configure(text=text)
 
     def _display_rx_plots(self, data: np.ndarray, fs: float) -> None:
         """Render preview plots below the receive parameters."""
@@ -955,6 +965,8 @@ class TransceiverUI(tk.Tk):
             )
             self.rx_stats_label.grid(row=len(modes), column=0, sticky='ew', pady=2)
         self.rx_stats_label.configure(text=text)
+        if hasattr(self, 'last_gen_stats_text') and hasattr(self, 'rx_tx_stats_label'):
+            self.rx_tx_stats_label.configure(text=self.last_gen_stats_text)
 
     def _open_console(self, title: str) -> None:
         if self.console is None or not self.console.winfo_exists():
