@@ -302,6 +302,12 @@ def _calc_stats(data: np.ndarray, fs: float) -> dict:
 
     stats["amp"] = float(np.max(np.abs(data))) if np.any(data) else 0.0
 
+    # Suppress DC components which would otherwise dominate the spectrum and
+    # mask the actual signal.  This prevents the f_low/f_high detection from
+    # always returning 0 Hz when a noticeable DC offset is present in the
+    # received samples.
+    data = data - np.mean(data)
+
     spec = np.fft.fftshift(np.fft.fft(data))
     freqs = np.fft.fftshift(np.fft.fftfreq(len(data), d=1 / fs))
     mag = 20 * np.log10(np.abs(spec) / len(data) + 1e-12)
