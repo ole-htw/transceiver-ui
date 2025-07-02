@@ -956,6 +956,15 @@ class TransceiverUI(tk.Tk):
             self.rx_stats_label.grid(row=len(modes), column=0, sticky='ew', pady=2)
         self.rx_stats_label.configure(text=text)
 
+        # ----- Trim button -----
+        if not hasattr(self, 'rx_trim_button'):
+            self.rx_trim_button = ttk.Button(
+                self.rx_plots_frame,
+                text='Trim Signal',
+                command=self.open_trim_window
+            )
+        self.rx_trim_button.grid(row=len(modes)+1, column=0, sticky='ew', pady=2)
+
     def _open_console(self, title: str) -> None:
         if self.console is None or not self.console.winfo_exists():
             self.console = ConsoleWindow(self, title)
@@ -1161,6 +1170,59 @@ class TransceiverUI(tk.Tk):
             pass
         pg.exec()
         self._plot_win = None
+
+    def open_trim_window(self) -> None:
+        """Allow interactive trimming of the current RX data."""
+        data = getattr(self, "latest_data", None)
+        fs = getattr(self, "latest_fs", None)
+        if data is None or data.size == 0:
+            messagebox.showerror("Trim", "No RX data available")
+            return
+        pg.setConfigOption("background", "w")
+        pg.setConfigOption("foreground", "k")
+        app = pg.mkQApp()
+        QtWidgets = pg.QtWidgets  # type: ignore[attr-defined]
+
+        dlg = QtWidgets.QDialog()
+        dlg.setWindowTitle("Trim RX Signal")
+        layout = QtWidgets.QVBoxLayout(dlg)
+
+        plot = pg.PlotWidget()
+        _plot_on_pg(plot.getPlotItem(), data, fs, "Signal", "RX Signal")
+        layout.addWidget(plot)
+
+        region = pg.LinearRegionItem(values=[0, len(data)])
+        region.setZValue(10)
+        plot.addItem(region)
+
+        info = QtWidgets.QLabel()
+        layout.addWidget(info)
+
+        def _update():
+            start, end = region.getRegion()
+            info.setText(f"Start: {100*start/len(data):.1f}%  End: {100*end/len(data):.1f}%")
+
+        region.sigRegionChanged.connect(_update)
+        _update()
+
+        btn = QtWidgets.QPushButton("Apply")
+        layout.addWidget(btn)
+
+        result = {"data": data}
+
+        def _apply():
+            start, end = region.getRegion()
+            s = max(0, int(round(start)))
+            e = max(s + 1, min(len(data), int(round(end))))
+            result["data"] = data[s:e]
+            dlg.accept()
+
+        btn.clicked.connect(_apply)
+        dlg.exec()
+
+        if result["data"] is not data:
+            self.latest_data = result["data"]
+            self._display_rx_plots(self.latest_data, fs)
 
     # ----- Preset handling --------------------------------------------------
     def _get_current_params(self) -> dict:
