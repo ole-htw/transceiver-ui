@@ -1154,6 +1154,25 @@ class TransceiverUI(tk.Tk):
         except Exception:
             pass
 
+    def _ping_device(self, arg_str: str) -> None:
+        """Send a single ping to the configured device address."""
+        addr = None
+        for part in arg_str.split(','):
+            if part.strip().startswith('addr='):
+                addr = part.split('=', 1)[1].strip()
+                break
+        if not addr:
+            return
+        try:
+            subprocess.run(
+                ["ping", "-c", "1", addr],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+        except Exception:
+            pass
+
     def _run_cmd(
         self,
         cmd: list[str],
@@ -1173,7 +1192,9 @@ class TransceiverUI(tk.Tk):
                         bufsize=1,
                     )
                     self._proc = proc
+                    output_lines = []
                     for line in proc.stdout:
+                        output_lines.append(line)
                         self._out_queue.put(line)
                     proc.wait()
                     self._out_queue.put(
@@ -1182,8 +1203,13 @@ class TransceiverUI(tk.Tk):
                 except Exception as exc:
                     self._out_queue.put(f"Error: {exc}\n")
                     proc = None
+                    output_lines = []
                 finally:
                     self._proc = None
+
+                # If the device was not found, try pinging the target once
+                if output_lines and any("No devices found" in l for l in output_lines):
+                    self._ping_device(self.tx_args.get())
 
                 if self._stop_requested or (
                     proc is not None and proc.returncode == 0
