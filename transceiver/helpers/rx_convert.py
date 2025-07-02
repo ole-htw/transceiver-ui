@@ -39,8 +39,16 @@ def load_sc16(path: Path) -> np.ndarray:
     raw = raw.reshape(-1, 2).astype(np.float32)
     return raw[:, 0] + 1j * raw[:, 1]
 
-def save_sc16(path: Path, data: np.ndarray):
-    scale = INT16_MAX / (np.abs(data).max() or 1.0)
+def save_sc16(path: Path, data: np.ndarray, amplitude: float | None = None):
+    """Speichert *data* im SC16-Format.
+
+    Wenn ``amplitude`` angegeben ist, wird das Signal so skaliert, dass
+    dessen Maximalwert diese Amplitude erreicht.  Standardmäßig wird – wie
+    bisher – auf den vollen int16-Bereich (±32767) skaliert.
+    """
+
+    target = INT16_MAX if amplitude is None else float(amplitude)
+    scale = target / (np.abs(data).max() or 1.0)
     data = data * scale
     real = np.clip(np.round(data.real), -32768, 32767).astype(np.int16)
     imag = np.clip(np.round(data.imag), -32768, 32767).astype(np.int16)
@@ -60,6 +68,15 @@ def main():
     ap.add_argument("infile", help="Quelldatei (SC16 oder FC32)")
     ap.add_argument("--to", choices=["sc16", "fc32"],
                     default="sc16", help="Ziel­format (Default sc16)")
+    ap.add_argument(
+        "--amplitude",
+        type=float,
+        default=None,
+        help=(
+            "Zielamplitude für SC16-Ausgabe. Ohne Angabe wird auf ±32767 "
+            "skaliert."
+        ),
+    )
     args = ap.parse_args()
 
     infile = Path(args.infile).resolve()
@@ -74,7 +91,7 @@ def main():
 
     # Speichern
     if dst_fmt == "sc16":
-        save_sc16(out_name, data)
+        save_sc16(out_name, data, args.amplitude)
     else:
         save_fc32(out_name, data)
 
