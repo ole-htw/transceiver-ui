@@ -217,6 +217,21 @@ def _reduce_pair(a: np.ndarray, b: np.ndarray, max_bytes: int = 1_000_000) -> tu
     return a, b, step
 
 
+def _xcorr_fft(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Return the full cross-correlation of *a* and *b* using FFT."""
+    n = len(a) + len(b) - 1
+    nfft = 1 << (n - 1).bit_length()
+    A = np.fft.fft(a, nfft)
+    B = np.fft.fft(b, nfft)
+    cc = np.fft.ifft(A * np.conj(B))
+    return np.concatenate((cc[-(len(b) - 1):], cc[:len(a)]))
+
+
+def _autocorr_fft(x: np.ndarray) -> np.ndarray:
+    """Return the full autocorrelation of *x* using FFT."""
+    return _xcorr_fft(x, x)
+
+
 def _pretty(val: float) -> str:
     """Shorten numeric values for filenames."""
     abs_v = abs(val)
@@ -380,7 +395,7 @@ def visualize(data: np.ndarray, fs: float, mode: str, title: str, ref_data: np.n
         win.setLabel("left", "Frequency [Hz]")
         win.showGrid(x=True, y=True)
     elif mode == "Autocorr":
-        ac = np.correlate(data, data, mode="full")
+        ac = _autocorr_fft(data)
         lags = np.arange(-len(data) + 1, len(data))
         win = pg.plot(lags, np.abs(ac), pen="b", title=f"Autocorrelation: {title}")
         win.setLabel("bottom", "Lag")
@@ -390,8 +405,10 @@ def visualize(data: np.ndarray, fs: float, mode: str, title: str, ref_data: np.n
         if ref_data is None or ref_data.size == 0:
             messagebox.showinfo("Info", "Crosscorrelation requires TX data.")
             return
+        data, ref_data, step_r = _reduce_pair(data, ref_data)
+        fs /= step_r
         n = min(len(data), len(ref_data))
-        cc = np.correlate(data[:n], ref_data[:n], mode="full")
+        cc = _xcorr_fft(data[:n], ref_data[:n])
         lags = np.arange(-n + 1, n)
         win = pg.plot(lags, np.abs(cc), pen="b", title=f"Crosscorr. with TX: {title}")
         win.setLabel("bottom", "Lag")
@@ -432,7 +449,7 @@ def _plot_on_pg(plot: pg.PlotItem, data: np.ndarray, fs: float, mode: str, title
         plot.setLabel("bottom", "Time [s]")
         plot.setLabel("left", "Frequency [Hz]")
     elif mode == "Autocorr":
-        ac = np.correlate(data, data, mode="full")
+        ac = _autocorr_fft(data)
         lags = np.arange(-len(data) + 1, len(data))
         plot.plot(lags, np.abs(ac), pen="b")
         plot.setTitle(f"Autocorrelation: {title}")
@@ -444,7 +461,7 @@ def _plot_on_pg(plot: pg.PlotItem, data: np.ndarray, fs: float, mode: str, title
         data, ref_data, step_r = _reduce_pair(data, ref_data)
         fs /= step_r
         n = min(len(data), len(ref_data))
-        cc = np.correlate(data[:n], ref_data[:n], mode='full')
+        cc = _xcorr_fft(data[:n], ref_data[:n])
         lags = np.arange(-n + 1, n)
         plot.plot(lags, np.abs(cc), pen="b")
         plot.setTitle(f"Crosscorr. with TX: {title}")
@@ -478,7 +495,7 @@ def _plot_on_mpl(ax, data: np.ndarray, fs: float, mode: str, title: str, ref_dat
         ax.set_xlabel("Time [s]")
         ax.set_ylabel("Frequency [Hz]")
     elif mode == "Autocorr":
-        ac = np.correlate(data, data, mode="full")
+        ac = _autocorr_fft(data)
         lags = np.arange(-len(data) + 1, len(data))
         ax.plot(lags, np.abs(ac), "b")
         ax.set_xlabel("Lag")
@@ -491,7 +508,7 @@ def _plot_on_mpl(ax, data: np.ndarray, fs: float, mode: str, title: str, ref_dat
         data, ref_data, step_r = _reduce_pair(data, ref_data)
         fs /= step_r
         n = min(len(data), len(ref_data))
-        cc = np.correlate(data[:n], ref_data[:n], mode='full')
+        cc = _xcorr_fft(data[:n], ref_data[:n])
         lags = np.arange(-n + 1, n)
         ax.plot(lags, np.abs(cc), "b")
         ax.set_xlabel("Lag")
