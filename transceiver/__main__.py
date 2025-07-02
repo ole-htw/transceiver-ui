@@ -1493,6 +1493,8 @@ class TransceiverUI(tk.Tk):
         if self._proc:
             try:
                 self._proc.terminate()
+                self._proc.wait(timeout=5)
+                self._proc = None
             except Exception:
                 pass
         self._stop_requested = True
@@ -1515,6 +1517,8 @@ class TransceiverUI(tk.Tk):
         if self._proc:
             try:
                 self._proc.terminate()
+                self._proc.wait(timeout=5)
+                self._proc = None
             except Exception:
                 pass
         if hasattr(self, "rx_stop"):
