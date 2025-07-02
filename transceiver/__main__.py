@@ -770,12 +770,19 @@ class TransceiverUI(tk.Tk):
 
         rx_btn_frame = ttk.Frame(rx_frame)
         rx_btn_frame.grid(row=7, column=0, columnspan=2, pady=5)
-        rx_btn_frame.columnconfigure((0, 1), weight=1)
+        rx_btn_frame.columnconfigure((0, 1, 2), weight=1)
 
         self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
         self.rx_button.grid(row=0, column=0, padx=2)
         self.rx_stop = ttk.Button(rx_btn_frame, text="Stop", command=self.stop_receive, state="disabled")
         self.rx_stop.grid(row=0, column=1, padx=2)
+        self.rx_trim_button = ttk.Button(
+            rx_btn_frame,
+            text="Trim",
+            command=self.open_trim_window,
+            state="disabled",
+        )
+        self.rx_trim_button.grid(row=0, column=2, padx=2)
 
         rx_scroll_container = ttk.Frame(rx_frame)
         rx_scroll_container.grid(row=8, column=0, columnspan=2, sticky="nsew")
@@ -956,14 +963,10 @@ class TransceiverUI(tk.Tk):
             self.rx_stats_label.grid(row=len(modes), column=0, sticky='ew', pady=2)
         self.rx_stats_label.configure(text=text)
 
-        # ----- Trim button -----
-        if not hasattr(self, 'rx_trim_button'):
-            self.rx_trim_button = ttk.Button(
-                self.rx_plots_frame,
-                text='Trim Signal',
-                command=self.open_trim_window
-            )
-        self.rx_trim_button.grid(row=len(modes)+1, column=0, sticky='ew', pady=2)
+        # Enable trim button when data is available
+        if hasattr(self, 'rx_trim_button'):
+            state = 'normal' if data.size else 'disabled'
+            self.rx_trim_button.config(state=state)
 
     def _open_console(self, title: str) -> None:
         if self.console is None or not self.console.winfo_exists():
