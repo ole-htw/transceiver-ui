@@ -787,7 +787,7 @@ class TransceiverUI(tk.Tk):
         self.trim_start_scale = ttk.Scale(
             trim_frame,
             from_=0,
-            to=100,
+            to=50,
             orient="horizontal",
             variable=self.trim_start,
             command=lambda _e: self.update_trim(),
@@ -796,13 +796,18 @@ class TransceiverUI(tk.Tk):
 
         self.trim_end_scale = ttk.Scale(
             trim_frame,
-            from_=0,
+            from_=50,
             to=100,
             orient="horizontal",
             variable=self.trim_end,
             command=lambda _e: self.update_trim(),
         )
         self.trim_end_scale.grid(row=0, column=2, sticky="ew")
+
+        self.trim_start_label = ttk.Label(trim_frame, width=5)
+        self.trim_start_label.grid(row=1, column=1, sticky="e")
+        self.trim_end_label = ttk.Label(trim_frame, width=5)
+        self.trim_end_label.grid(row=1, column=2, sticky="e")
 
         rx_btn_frame = ttk.Frame(rx_frame)
         rx_btn_frame.grid(row=8, column=0, columnspan=2, pady=5)
@@ -839,6 +844,7 @@ class TransceiverUI(tk.Tk):
         self.auto_update_tx_filename()
         self.auto_update_rx_filename()
         self.toggle_rate_sync(self.sync_var.get())
+        self.update_trim()
 
     def update_waveform_fields(self) -> None:
         """Show or hide waveform specific parameters."""
@@ -1016,6 +1022,13 @@ class TransceiverUI(tk.Tk):
                 widget.configure(state=state)
             except Exception:
                 pass
+        try:
+            self.trim_start_label.configure(
+                text=f"{self.trim_start.get():.0f}%")
+            self.trim_end_label.configure(
+                text=f"{self.trim_end.get():.0f}%")
+        except Exception:
+            pass
         if hasattr(self, "raw_rx_data") and self.raw_rx_data is not None:
             self._display_rx_plots(self.raw_rx_data, self.latest_fs)
 
