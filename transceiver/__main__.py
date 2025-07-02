@@ -1129,12 +1129,20 @@ class TransceiverUI(tk.Tk):
         if proc is not None and proc.returncode == 0:
             try:
                 subprocess.run(
-                    [sys.executable, "-m", "transceiver.helpers.rx_convert", out_file, "--to", "fc32"],
+                    [
+                        sys.executable,
+                        "-m",
+                        "transceiver.helpers.rx_convert",
+                        out_file,
+                        "--to",
+                        "fc32",
+                    ],
                     check=True,
                 )
                 conv_file = out_file.replace(".bin", "_conv.bin")
                 data = np.fromfile(conv_file, dtype=np.complex64)
-                data *= 32768.0
+                amp = float(eval(self.amp_entry.get())) if self.amp_entry.get() else 10000.0
+                data *= amp
                 self._display_rx_plots(data, float(eval(self.rx_rate.get())))
             except Exception as exc:
                 self._out_queue.put(f"Error: {exc}\n")
