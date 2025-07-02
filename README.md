@@ -32,3 +32,7 @@ The helper modules can also be executed individually, e.g.
 python -m transceiver.helpers.rx_to_file --help
 ```
 
+The GUI shows basic signal statistics (minimum/maximum frequency, maximum
+amplitude and 3\ dB bandwidth) for both the generated and the received
+signals.
+
