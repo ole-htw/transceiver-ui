@@ -1186,14 +1186,16 @@ class TransceiverUI(tk.Tk):
                         "transceiver.helpers.rx_convert",
                         out_file,
                         "--to",
-                        "fc32",
+                        "sc16",
                     ],
                     check=True,
                 )
                 conv_file = out_file.replace(".bin", "_conv.bin")
-                data = np.fromfile(conv_file, dtype=np.complex64)
-                amp = float(eval(self.amp_entry.get())) if self.amp_entry.get() else 10000.0
-                data *= amp
+                raw = np.fromfile(conv_file, dtype=np.int16)
+                if raw.size % 2:
+                    raw = raw[:-1]
+                raw = raw.reshape(-1, 2).astype(np.float32)
+                data = raw[:, 0] + 1j * raw[:, 1]
                 self._display_rx_plots(data, float(eval(self.rx_rate.get())))
             except Exception as exc:
                 self._out_queue.put(f"Error: {exc}\n")
