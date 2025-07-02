@@ -909,7 +909,7 @@ class TransceiverUI(tk.Tk):
                 justify='left',
                 anchor='w'
             )
-            self.gen_stats_label.grid(row=len(modes), column=0, sticky='ew', pady=2)
+        self.gen_stats_label.grid(row=len(modes), column=0, sticky='ew', pady=2)
         self.gen_stats_label.configure(text=text)
 
     def _display_rx_plots(self, data: np.ndarray, fs: float) -> None:
@@ -953,7 +953,7 @@ class TransceiverUI(tk.Tk):
                 justify='left',
                 anchor='w'
             )
-            self.rx_stats_label.grid(row=len(modes), column=0, sticky='ew', pady=2)
+        self.rx_stats_label.grid(row=len(modes), column=0, sticky='ew', pady=2)
         self.rx_stats_label.configure(text=text)
 
         # ----- Trim button -----
