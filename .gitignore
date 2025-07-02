@@ -12,3 +12,5 @@ signals/rx/*
 __pycache__
 
 presets.json
+
+transceiver/state.json
