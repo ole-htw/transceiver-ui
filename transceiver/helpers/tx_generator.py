@@ -83,8 +83,6 @@ def generate_filename(args) -> Path:
         parts.append(f"f{_pretty(args.f)}")
     elif args.waveform == "zadoffchu":
         parts.append(f"q{args.q}")
-        if getattr(args, "oversample", 1) > 1:
-            parts.append(f"os{args.oversample}")
     elif args.waveform == "chirp":
         parts.append(f"{_pretty(args.f0)}_{_pretty(args.f1)}")
     parts.append(f"N{args.samples}")
@@ -93,48 +91,31 @@ def generate_filename(args) -> Path:
     return Path(args.output_dir) / name
 
 
-def oversample(signal: np.ndarray, factor: int, method: str = "fft") -> np.ndarray:
-    """Oversample *signal* by integer *factor* using the given *method*.
-
-    Parameters
-    ----------
-    signal : np.ndarray
-        Complex input signal.
-    factor : int
-        Oversampling factor (>=1).
-    method : str
-        Either ``"fft"`` for zero-padding in the frequency domain or
-        ``"filter"`` for sinc interpolation in the time domain.
-    """
-
-    if factor <= 1:
-        return signal
-
-    method = method.lower()
-    if method == "fft":
-        N = len(signal)
-        spec = np.fft.fft(signal)
-        half = N // 2
-        if N % 2:
-            first = spec[: half + 1]
-            second = spec[half + 1 :]
+def rrc_coeffs(beta: float, span: int, sps: int = 1) -> np.ndarray:
+    """Koeffizienten für einen Root-Raised-Cosine-Filter erzeugen."""
+    N = span * sps
+    t = np.arange(-N, N + 1) / sps
+    h = np.zeros_like(t, dtype=np.float64)
+    for i, ti in enumerate(t):
+        if abs(ti) < 1e-10:
+            h[i] = 1.0 - beta + 4 * beta / np.pi
+        elif beta > 0 and abs(abs(ti) - 1 / (4 * beta)) < 1e-10:
+            h[i] = (
+                beta
+                / np.sqrt(2)
+                * (
+                    (1 + 2 / np.pi) * np.sin(np.pi / (4 * beta))
+                    + (1 - 2 / np.pi) * np.cos(np.pi / (4 * beta))
+                )
+            )
         else:
-            first = spec[:half]
-            second = spec[half:]
-        pad = np.zeros(N * (factor - 1), dtype=spec.dtype)
-        spec_os = np.concatenate([first, pad, second])
-        oversampled = np.fft.ifft(spec_os) * factor
-        return oversampled.astype(np.complex64)
-
-    if method == "filter":
-        up = np.zeros(len(signal) * factor, dtype=signal.dtype)
-        up[::factor] = signal
-        t = np.arange(-4 * factor, 4 * factor + 1) / factor
-        h = np.sinc(t)
-        oversampled = np.convolve(up, h, mode="same")
-        return oversampled.astype(np.complex64)
-
-    raise ValueError(f"Unknown oversampling method: {method}")
+            num = np.sin(np.pi * ti * (1 - beta)) + 4 * beta * ti * np.cos(
+                np.pi * ti * (1 + beta)
+            )
+            den = np.pi * ti * (1 - (4 * beta * ti) ** 2)
+            h[i] = num / den
+    h /= np.sqrt(np.sum(h**2))
+    return h.astype(np.float32)
 
 
 # ---------- Waveform‑Generator ----------------------------------------------
@@ -148,15 +129,13 @@ def generate_waveform(
     q: int = 1,
     f0: Optional[float] = None,
     f1: Optional[float] = None,
-    oversample_factor: int = 1,
-    oversample_method: str = "fft",
+    rrc_beta: float = 0.25,
+    rrc_span: int = 6,
 ) -> np.ndarray:
     """Erzeugt komplexe Samples einer der unterstützten Wellenformen.
 
-    Mit ``oversample_factor`` kann eine Überabtastung angegeben werden. ``oversample_factor``
-    muss dabei ein ganzzahliger Faktor sein. Die Methode ``oversample_method``
-    bestimmt, ob per FFT-Zero‑Padding (``"fft"``) oder mittels Sinc‑Filter
-    (``"filter"``) interpoliert wird.
+    Die Option ``rrc_beta`` gibt den Roll‑off-Faktor des Root-Raised-Cosine-Filters
+    an, ``rrc_span`` bestimmt dessen Länge in Symbolen.
     """
 
     if N <= 0:
@@ -194,7 +173,10 @@ def generate_waveform(
         raise ValueError(f"Unbekannte Wellenform: {waveform}")
 
     signal = signal.astype(np.complex64)
-    return oversample(signal, oversample_factor, oversample_method)
+    if rrc_span > 0:
+        h = rrc_coeffs(rrc_beta, rrc_span)
+        signal = np.convolve(signal, h, mode="same")
+    return signal.astype(np.complex64)
 
 
 # ---------- Hauptprogramm ----------------------------------------------------
@@ -247,16 +229,16 @@ def main() -> None:
         "--q", type=int, default=1, help="Zadoff‑Chu‑Parameter q (Standard: 1)"
     )
     parser.add_argument(
-        "--oversample",
-        type=int,
-        default=1,
-        help="Überabtastungsfaktor für Zadoff‑Chu; Ausgabe behält Länge --samples (Standard: 1)",
+        "--rrc-beta",
+        type=float,
+        default=0.25,
+        help="RRC-Rollofffaktor (Standard: 0.25)",
     )
     parser.add_argument(
-        "--method",
-        choices=["fft", "filter"],
-        default="fft",
-        help="Methode für Oversampling (fft oder filter)",
+        "--rrc-span",
+        type=int,
+        default=6,
+        help="RRC-Filterspan in Symbolen (Standard: 6)",
     )
 
     # Chirp‑spezifisch
@@ -309,7 +291,7 @@ def main() -> None:
         args.f1 = args.fs / 2 - 1  # Maximal fast bis Nyquist
 
     N_output = args.samples
-    N_waveform = math.ceil(N_output / args.oversample)
+    N_waveform = N_output
 
     # Blockgröße ggf. an Primzahl anpassen (nur ZC)
     if args.waveform == "zadoffchu":
@@ -323,14 +305,10 @@ def main() -> None:
     # ------------------------------------------------------------------
     if append_zeros:
         print(
-            f"Erzeuge {N_output} Samples {args.waveform} + {N_output} Null-Samples "
-            f"(Oversample {args.oversample}×)."
+            f"Erzeuge {N_output} Samples {args.waveform} + {N_output} Null-Samples"
         )
     else:
-        print(
-            f"Erzeuge {N_output} Samples {args.waveform} (ohne Null-Samples, "
-            f"Oversample {args.oversample}×)."
-        )
+        print(f"Erzeuge {N_output} Samples {args.waveform} (ohne Null-Samples)")
 
     if args.waveform == "chirp":
         print(f"  Chirp: {args.f0/1e6:.3f} MHz → {args.f1/1e6:.3f} MHz")
@@ -344,16 +322,13 @@ def main() -> None:
         args.q,
         f0=args.f0,
         f1=args.f1,
-        oversample_factor=args.oversample,
-        oversample_method=args.method,
+        rrc_beta=args.rrc_beta,
+        rrc_span=args.rrc_span,
     )
 
-    if args.oversample > 1:
-        waveform_signal = waveform_signal[:N_output]
-
-    oversampled_len = len(waveform_signal)
+    final_len = len(waveform_signal)
     if append_zeros:
-        zeros = np.zeros(oversampled_len, dtype=np.complex64)
+        zeros = np.zeros(final_len, dtype=np.complex64)
         final_signal = np.concatenate([waveform_signal, zeros])
     else:
         final_signal = waveform_signal
