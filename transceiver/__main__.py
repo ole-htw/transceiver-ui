@@ -11,6 +11,8 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import json
 import math
+import signal
+import contextlib
 from pathlib import Path
 from datetime import datetime
 
@@ -1542,8 +1544,10 @@ class TransceiverUI(tk.Tk):
 
     def transmit(self):
         now = time.monotonic()
-        if now - self._last_tx_end < 10:
-            wait = 10 - (now - self._last_tx_end)
+        MIN_GAP = 0.3   # Sekunden (statt 10)
+
+        if now - self._last_tx_end < MIN_GAP:
+            wait = MIN_GAP - (now - self._last_tx_end)
             self.after(int(wait * 1000), self.transmit)
             return
         self._kill_stale_tx()
@@ -1574,33 +1578,39 @@ class TransceiverUI(tk.Tk):
         self._process_queue()
 
     def stop_transmit(self) -> None:
+        """Gracefully stop rfnoc_replay_samples_from_file in --nsamps 0 mode."""
         if self._proc:
+            # 1) Freundlich: SIGINT (entspricht Ctrl‑C)
             try:
-                self._proc.terminate()
-                self._proc.wait(timeout=5)
-                if self._proc.poll() is None:
-                    self._proc.kill()
-                    self._proc.wait(timeout=2)
+                self._proc.send_signal(signal.SIGINT)
+                self._proc.wait(timeout=3)      # <‑ Helfer macht replay->stop()
+            except subprocess.TimeoutExpired:
+                # 2) Immer noch aktiv? Leicht härter: SIGTERM
+                with contextlib.suppress(Exception):
+                    self._proc.terminate()
+                    self._proc.wait(timeout=3)
+            finally:
+                # 3) Wenn alles schiefgeht, letzter Ausweg SIGKILL
+                if self._proc and self._proc.poll() is None:
+                    with contextlib.suppress(Exception):
+                        self._proc.kill()
+                        self._proc.wait(timeout=2)
                 self._proc = None
-            except Exception:
-                pass
-        # Ensure no orphaned processes remain
-        self._kill_stale_tx()
+
+        # FPGA‑Block ist jetzt freigegeben → UI zurücksetzen
         self._stop_requested = True
         self._tx_running = False
         self._last_tx_end = time.monotonic()
-        if hasattr(self, "tx_stop"):
-            self.tx_stop.config(state="disabled")
-        if hasattr(self, "tx_button"):
-            self.tx_button.config(state="normal")
-        if hasattr(self, "tx_retrans"):
-            self.tx_retrans.config(state="disabled")
+
+        self.tx_stop.config(state="disabled")
+        self.tx_button.config(state="normal")
+        self.tx_retrans.config(state="disabled")
 
     def retransmit(self) -> None:
         """Stop any ongoing transmission and start a new one."""
         self.stop_transmit()
         # Give the previous process a moment to terminate
-        self.after(200, self.transmit)
+        self.transmit()
 
     def stop_receive(self) -> None:
         if self._proc:
