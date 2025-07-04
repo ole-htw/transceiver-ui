@@ -617,23 +617,17 @@ class TransceiverUI(tk.Tk):
         self.repeat_entry.insert(0, "1")
         self.repeat_entry.grid(row=5, column=1, sticky="ew")
 
-        self.os_label = ttk.Label(gen_frame, text="Oversample")
-        self.os_label.grid(row=6, column=0, sticky="w")
-        self.os_entry = SuggestEntry(gen_frame, "os_entry")
-        self.os_entry.insert(0, "1")
-        self.os_entry.grid(row=6, column=1, sticky="ew")
+        self.rrc_beta_label = ttk.Label(gen_frame, text="RRC β")
+        self.rrc_beta_label.grid(row=6, column=0, sticky="w")
+        self.rrc_beta_entry = SuggestEntry(gen_frame, "rrc_beta_entry")
+        self.rrc_beta_entry.insert(0, "0.25")
+        self.rrc_beta_entry.grid(row=6, column=1, sticky="ew")
 
-        self.method_label = ttk.Label(gen_frame, text="Method")
-        self.method_label.grid(row=7, column=0, sticky="w")
-        self.os_method = tk.StringVar(value="fft")
-        self.os_method_box = ttk.Combobox(
-            gen_frame,
-            textvariable=self.os_method,
-            values=["fft", "filter"],
-            state="readonly",
-            width=10,
-        )
-        self.os_method_box.grid(row=7, column=1, sticky="ew")
+        self.rrc_span_label = ttk.Label(gen_frame, text="RRC Span")
+        self.rrc_span_label.grid(row=7, column=0, sticky="w")
+        self.rrc_span_entry = SuggestEntry(gen_frame, "rrc_span_entry")
+        self.rrc_span_entry.insert(0, "6")
+        self.rrc_span_entry.grid(row=7, column=1, sticky="ew")
 
         ttk.Label(gen_frame, text="Zeros").grid(row=8, column=0, sticky="w")
         self.zeros_var = tk.StringVar(value="none")
@@ -897,12 +891,12 @@ class TransceiverUI(tk.Tk):
         self.f1_entry.grid_remove()
         self.q_label.grid_remove()
         self.q_entry.grid_remove()
-        self.os_label.grid_remove()
-        self.os_entry.grid_remove()
-        self.method_label.grid_remove()
-        self.os_method_box.grid_remove()
-        self.os_entry.entry.configure(state="disabled")
-        self.os_method_box.configure(state="disabled")
+        self.rrc_beta_label.grid_remove()
+        self.rrc_beta_entry.grid_remove()
+        self.rrc_span_label.grid_remove()
+        self.rrc_span_entry.grid_remove()
+        self.rrc_beta_entry.entry.configure(state="disabled")
+        self.rrc_span_entry.entry.configure(state="disabled")
 
         if w == "sinus":
             self.f_label.configure(text="f")
@@ -911,12 +905,12 @@ class TransceiverUI(tk.Tk):
         elif w == "zadoffchu":
             self.q_label.grid(row=2, column=0, sticky="w")
             self.q_entry.grid(row=2, column=1, sticky="ew")
-            self.os_label.grid(row=6, column=0, sticky="w")
-            self.os_entry.grid(row=6, column=1, sticky="ew")
-            self.method_label.grid(row=7, column=0, sticky="w")
-            self.os_method_box.grid(row=7, column=1, sticky="ew")
-            self.os_entry.entry.configure(state="normal")
-            self.os_method_box.configure(state="readonly")
+            self.rrc_beta_label.grid(row=6, column=0, sticky="w")
+            self.rrc_beta_entry.grid(row=6, column=1, sticky="ew")
+            self.rrc_span_label.grid(row=7, column=0, sticky="w")
+            self.rrc_span_entry.grid(row=7, column=1, sticky="ew")
+            self.rrc_beta_entry.entry.configure(state="normal")
+            self.rrc_span_entry.entry.configure(state="normal")
         elif w == "chirp":
             self.f_label.configure(text="f0")
             self.f_label.grid(row=2, column=0, sticky="w")
@@ -1330,8 +1324,8 @@ class TransceiverUI(tk.Tk):
             "q": self.q_entry.get(),
             "samples": self.samples_entry.get(),
             "repeats": self.repeat_entry.get(),
-            "oversample": self.os_entry.get(),
-            "method": self.os_method.get(),
+            "rrc_beta": self.rrc_beta_entry.get(),
+            "rrc_span": self.rrc_span_entry.get(),
             "zeros": self.zeros_var.get(),
             "amplitude": self.amp_entry.get(),
             "file": self.file_entry.get(),
@@ -1368,9 +1362,10 @@ class TransceiverUI(tk.Tk):
         self.samples_entry.insert(0, params.get("samples", ""))
         self.repeat_entry.delete(0, tk.END)
         self.repeat_entry.insert(0, params.get("repeats", "1"))
-        self.os_entry.delete(0, tk.END)
-        self.os_entry.insert(0, params.get("oversample", "1"))
-        self.os_method.set(params.get("method", "fft"))
+        self.rrc_beta_entry.delete(0, tk.END)
+        self.rrc_beta_entry.insert(0, params.get("rrc_beta", "0.25"))
+        self.rrc_span_entry.delete(0, tk.END)
+        self.rrc_span_entry.insert(0, params.get("rrc_span", "6"))
         self.zeros_var.set(params.get("zeros", "none"))
         self.amp_entry.delete(0, tk.END)
         self.amp_entry.insert(0, params.get("amplitude", ""))
@@ -1494,20 +1489,17 @@ class TransceiverUI(tk.Tk):
                 data = generate_waveform(waveform, fs, freq, samples)
             elif waveform == "zadoffchu":
                 q = int(self.q_entry.get()) if self.q_entry.get() else 1
-                osf = int(self.os_entry.get()) if self.os_entry.get() else 1
-                method = self.os_method.get()
-                base_samples = math.ceil(samples / osf) if osf > 1 else samples
+                beta = float(self.rrc_beta_entry.get()) if self.rrc_beta_entry.get() else 0.25
+                span = int(self.rrc_span_entry.get()) if self.rrc_span_entry.get() else 6
                 data = generate_waveform(
                     waveform,
                     fs,
                     0.0,
-                    base_samples,
+                    samples,
                     q=q,
-                    oversample_factor=osf,
-                    oversample_method=method,
+                    rrc_beta=beta,
+                    rrc_span=span,
                 )
-                if osf > 1:
-                    data = data[:samples]
             else:  # chirp
                 f0 = float(eval(self.f_entry.get())) if self.f_entry.get() else 0.0
                 f1 = float(eval(self.f1_entry.get())) if self.f1_entry.get() else None
