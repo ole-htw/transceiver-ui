@@ -10,6 +10,8 @@ Unterstützt jetzt drei Wellenformen:
 Neu: Option **--no-zeros**
     Gibt an, dass *keine* Null‑Samples an die Wellenform angehängt werden.
     Standard ist weiterhin das alte Verhalten (Waveform + Null‑Sequenz).
+Neu: Option **--oversampling**
+    Erzeugt zusätzliche Zwischenwerte für die Zadoff-Chu-Sequenz.
 
 Die erzeugte Folge wird als interleaved int16 (IQ IQ …) in eine Binärdatei
  geschrieben.
@@ -83,9 +85,11 @@ def generate_filename(args) -> Path:
         parts.append(f"f{_pretty(args.f)}")
     elif args.waveform == "zadoffchu":
         parts.append(f"q{args.q}")
+        if args.oversampling != 1:
+            parts.append(f"os{args.oversampling}")
     elif args.waveform == "chirp":
         parts.append(f"{_pretty(args.f0)}_{_pretty(args.f1)}")
-    parts.append(f"N{args.samples}")
+    parts.append(f"N{args.samples * getattr(args, 'oversampling', 1)}")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     name = "_".join(parts) + f"_{stamp}.bin"
     return Path(args.output_dir) / name
@@ -131,6 +135,7 @@ def generate_waveform(
     f1: Optional[float] = None,
     rrc_beta: float = 0.25,
     rrc_span: int = 6,
+    oversampling: int = 1,
 ) -> np.ndarray:
     """Erzeugt komplexe Samples einer der unterstützten Wellenformen.
 
@@ -141,7 +146,10 @@ def generate_waveform(
     if N <= 0:
         raise ValueError("N muss > 0 sein.")
 
-    n = np.arange(N)
+    if oversampling <= 0:
+        raise ValueError("oversampling muss >= 1 sein")
+
+    n = np.arange(N * oversampling) / oversampling
 
     w = waveform.lower()
 
@@ -268,6 +276,12 @@ def main() -> None:
         default=40000,
         help="Anzahl Samples der Wellenform (Standard: 40000)",
     )
+    parser.add_argument(
+        "--oversampling",
+        type=int,
+        default=1,
+        help="Oversampling-Faktor nur f\xC3\xBCr Zadoff-Chu (Standard: 1)",
+    )
 
     # Neue Option: Null-Sequenz weglassen
     parser.add_argument(
@@ -290,8 +304,8 @@ def main() -> None:
     if args.waveform == "chirp" and args.f1 is None:
         args.f1 = args.fs / 2 - 1  # Maximal fast bis Nyquist
 
-    N_output = args.samples
-    N_waveform = N_output
+    N_waveform = args.samples
+    N_output = N_waveform * args.oversampling
 
     # Blockgröße ggf. an Primzahl anpassen (nur ZC)
     if args.waveform == "zadoffchu":
@@ -299,6 +313,7 @@ def main() -> None:
         if prime != N_waveform:
             print(f"Info: samples={N_waveform} angepasst auf Primzahl {prime} für ZC.")
             N_waveform = prime
+        N_output = N_waveform * args.oversampling
 
     append_zeros = not args.no_zeros
 
@@ -309,6 +324,8 @@ def main() -> None:
         )
     else:
         print(f"Erzeuge {N_output} Samples {args.waveform} (ohne Null-Samples)")
+    if args.waveform == "zadoffchu" and args.oversampling != 1:
+        print(f"  Oversampling: {args.oversampling}×")
 
     if args.waveform == "chirp":
         print(f"  Chirp: {args.f0/1e6:.3f} MHz → {args.f1/1e6:.3f} MHz")
@@ -324,6 +341,7 @@ def main() -> None:
         f1=args.f1,
         rrc_beta=args.rrc_beta,
         rrc_span=args.rrc_span,
+        oversampling=args.oversampling,
     )
 
     final_len = len(waveform_signal)
