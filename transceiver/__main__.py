@@ -270,6 +270,10 @@ def _gen_tx_filename(app) -> str:
         samples = int(app.samples_entry.get())
     except Exception:
         samples = 0
+    try:
+        oversampling = int(app.os_entry.get())
+    except Exception:
+        oversampling = 1
 
     if w == "sinus":
         try:
@@ -280,6 +284,8 @@ def _gen_tx_filename(app) -> str:
     elif w == "zadoffchu":
         q = app.q_entry.get() or "1"
         parts.append(f"q{q}")
+        if oversampling != 1:
+            parts.append(f"os{oversampling}")
     elif w == "chirp":
         try:
             f0 = float(eval(app.f_entry.get()))
@@ -292,7 +298,7 @@ def _gen_tx_filename(app) -> str:
         parts.append(f"{_pretty(f0)}_{_pretty(f1)}")
 
     parts.append(f"fs{_pretty(fs)}")
-    parts.append(f"N{samples}")
+    parts.append(f"N{samples * oversampling}")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     name = "_".join(parts) + f"_{stamp}.bin"
     return str(Path("signals/tx") / name)
@@ -612,24 +618,29 @@ class TransceiverUI(tk.Tk):
         self.samples_entry.grid(row=4, column=1, sticky="ew")
         self.samples_entry.entry.bind("<FocusOut>", lambda _e: self.auto_update_tx_filename())
 
-        ttk.Label(gen_frame, text="Repeats").grid(row=5, column=0, sticky="w")
+        ttk.Label(gen_frame, text="Oversampling").grid(row=5, column=0, sticky="w")
+        self.os_entry = SuggestEntry(gen_frame, "os_entry")
+        self.os_entry.insert(0, "1")
+        self.os_entry.grid(row=5, column=1, sticky="ew")
+
+        ttk.Label(gen_frame, text="Repeats").grid(row=6, column=0, sticky="w")
         self.repeat_entry = SuggestEntry(gen_frame, "repeat_entry")
         self.repeat_entry.insert(0, "1")
-        self.repeat_entry.grid(row=5, column=1, sticky="ew")
+        self.repeat_entry.grid(row=6, column=1, sticky="ew")
 
         self.rrc_beta_label = ttk.Label(gen_frame, text="RRC β")
-        self.rrc_beta_label.grid(row=6, column=0, sticky="w")
+        self.rrc_beta_label.grid(row=7, column=0, sticky="w")
         self.rrc_beta_entry = SuggestEntry(gen_frame, "rrc_beta_entry")
         self.rrc_beta_entry.insert(0, "0.25")
         self.rrc_beta_entry.grid(row=6, column=1, sticky="ew")
 
         self.rrc_span_label = ttk.Label(gen_frame, text="RRC Span")
-        self.rrc_span_label.grid(row=7, column=0, sticky="w")
+        self.rrc_span_label.grid(row=8, column=0, sticky="w")
         self.rrc_span_entry = SuggestEntry(gen_frame, "rrc_span_entry")
         self.rrc_span_entry.insert(0, "6")
-        self.rrc_span_entry.grid(row=7, column=1, sticky="ew")
+        self.rrc_span_entry.grid(row=8, column=1, sticky="ew")
 
-        ttk.Label(gen_frame, text="Zeros").grid(row=8, column=0, sticky="w")
+        ttk.Label(gen_frame, text="Zeros").grid(row=9, column=0, sticky="w")
         self.zeros_var = tk.StringVar(value="none")
         ttk.Combobox(
             gen_frame,
@@ -645,22 +656,22 @@ class TransceiverUI(tk.Tk):
             ],
             state="readonly",
             width=10,
-        ).grid(row=8, column=1, sticky="ew")
+        ).grid(row=9, column=1, sticky="ew")
 
-        ttk.Label(gen_frame, text="Amplitude").grid(row=9, column=0, sticky="w")
+        ttk.Label(gen_frame, text="Amplitude").grid(row=10, column=0, sticky="w")
         self.amp_entry = SuggestEntry(gen_frame, "amp_entry")
         self.amp_entry.insert(0, "10000")
-        self.amp_entry.grid(row=9, column=1, sticky="ew")
+        self.amp_entry.grid(row=10, column=1, sticky="ew")
 
-        ttk.Label(gen_frame, text="File").grid(row=10, column=0, sticky="w")
+        ttk.Label(gen_frame, text="File").grid(row=11, column=0, sticky="w")
         self.file_entry = SuggestEntry(gen_frame, "file_entry")
         self.file_entry.insert(0, "tx_signal.bin")
-        self.file_entry.grid(row=10, column=1, sticky="ew")
+        self.file_entry.grid(row=11, column=1, sticky="ew")
 
-        ttk.Button(gen_frame, text="Generate", command=self.generate).grid(row=11, column=0, columnspan=2, pady=5)
+        ttk.Button(gen_frame, text="Generate", command=self.generate).grid(row=12, column=0, columnspan=2, pady=5)
 
         scroll_container = ttk.Frame(gen_frame)
-        scroll_container.grid(row=12, column=0, columnspan=2, sticky="nsew")
+        scroll_container.grid(row=13, column=0, columnspan=2, sticky="nsew")
         scroll_container.columnconfigure(0, weight=1)
         scroll_container.rowconfigure(0, weight=1)
 
@@ -681,7 +692,7 @@ class TransceiverUI(tk.Tk):
             "<Configure>",
             lambda _e: self.gen_canvas.configure(scrollregion=self.gen_canvas.bbox("all")),
         )
-        gen_frame.rowconfigure(12, weight=1)
+        gen_frame.rowconfigure(13, weight=1)
         self.gen_canvases = []
         self.latest_data = None
         self.latest_fs = 0.0
@@ -905,10 +916,10 @@ class TransceiverUI(tk.Tk):
         elif w == "zadoffchu":
             self.q_label.grid(row=2, column=0, sticky="w")
             self.q_entry.grid(row=2, column=1, sticky="ew")
-            self.rrc_beta_label.grid(row=6, column=0, sticky="w")
-            self.rrc_beta_entry.grid(row=6, column=1, sticky="ew")
-            self.rrc_span_label.grid(row=7, column=0, sticky="w")
-            self.rrc_span_entry.grid(row=7, column=1, sticky="ew")
+            self.rrc_beta_label.grid(row=7, column=0, sticky="w")
+            self.rrc_beta_entry.grid(row=7, column=1, sticky="ew")
+            self.rrc_span_label.grid(row=8, column=0, sticky="w")
+            self.rrc_span_entry.grid(row=8, column=1, sticky="ew")
             self.rrc_beta_entry.entry.configure(state="normal")
             self.rrc_span_entry.entry.configure(state="normal")
         elif w == "chirp":
@@ -1479,6 +1490,7 @@ class TransceiverUI(tk.Tk):
         try:
             fs = float(eval(self.fs_entry.get()))
             samples = int(self.samples_entry.get())
+            oversampling = int(self.os_entry.get()) if self.os_entry.get() else 1
             repeats = int(self.repeat_entry.get()) if self.repeat_entry.get() else 1
             zeros_mode = self.zeros_var.get()
             amp = float(self.amp_entry.get())
@@ -1486,7 +1498,7 @@ class TransceiverUI(tk.Tk):
 
             if waveform == "sinus":
                 freq = float(eval(self.f_entry.get())) if self.f_entry.get() else 0.0
-                data = generate_waveform(waveform, fs, freq, samples)
+                data = generate_waveform(waveform, fs, freq, samples, oversampling=oversampling)
             elif waveform == "zadoffchu":
                 q = int(self.q_entry.get()) if self.q_entry.get() else 1
                 beta = float(self.rrc_beta_entry.get()) if self.rrc_beta_entry.get() else 0.25
@@ -1499,11 +1511,20 @@ class TransceiverUI(tk.Tk):
                     q=q,
                     rrc_beta=beta,
                     rrc_span=span,
+                    oversampling=oversampling,
                 )
             else:  # chirp
                 f0 = float(eval(self.f_entry.get())) if self.f_entry.get() else 0.0
                 f1 = float(eval(self.f1_entry.get())) if self.f1_entry.get() else None
-                data = generate_waveform(waveform, fs, f0, samples, f0=f0, f1=f1)
+                data = generate_waveform(
+                    waveform,
+                    fs,
+                    f0,
+                    samples,
+                    f0=f0,
+                    f1=f1,
+                    oversampling=oversampling,
+                )
 
             if repeats > 1:
                 data = np.tile(data, repeats)
