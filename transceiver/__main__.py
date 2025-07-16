@@ -1531,6 +1531,23 @@ class TransceiverUI(tk.Tk):
         except Exception:
             pass
 
+    def _initial_stop(self) -> None:
+        """Send a single stop signal to any running transmit helper."""
+        if self._proc:
+            try:
+                self._proc.send_signal(signal.SIGINT)
+                self._proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                with contextlib.suppress(Exception):
+                    self._proc.terminate()
+                    self._proc.wait(timeout=3)
+            finally:
+                if self._proc and self._proc.poll() is None:
+                    with contextlib.suppress(Exception):
+                        self._proc.kill()
+                        self._proc.wait(timeout=2)
+                self._proc = None
+
     def _run_cmd(
         self,
         cmd: list[str],
@@ -1538,6 +1555,8 @@ class TransceiverUI(tk.Tk):
         delay: float = 5.0,
     ) -> None:
         attempt = 1
+        # Ensure the replay block is stopped before retrying
+        self._initial_stop()
         try:
             while attempt <= max_attempts and not self._stop_requested:
                 self._kill_stale_tx()
