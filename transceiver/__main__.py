@@ -289,20 +289,85 @@ class SignalViewer(tk.Toplevel):
         self.stats_label.configure(text=text)
 
 
+
+
+
+
+
+
 class SignalColumn(ttk.Frame):
     """Frame to load and display a single signal."""
 
     def __init__(self, parent, main_parent) -> None:
         super().__init__(parent)
         self.main_parent = main_parent
+
+        self.trim_var = tk.BooleanVar(value=False)
+        self.trim_start = tk.DoubleVar(value=0.0)
+        self.trim_end = tk.DoubleVar(value=100.0)
+        self.trim_dirty = False
+
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
+        self.rowconfigure(3, weight=1)
+
         ttk.Button(self, text="Open Signal", command=self.open_signal).grid(
             row=0, column=0, pady=2
         )
 
+        trim_frame = ttk.Frame(self)
+        trim_frame.grid(row=1, column=0, sticky="ew")
+        trim_frame.columnconfigure((1, 2), weight=1)
+
+        ttk.Checkbutton(
+            trim_frame,
+            text="Trim",
+            variable=self.trim_var,
+            command=self._on_trim_change,
+        ).grid(row=0, column=0, sticky="w")
+
+        self.trim_start_scale = ttk.Scale(
+            trim_frame,
+            from_=0,
+            to=50,
+            orient="horizontal",
+            variable=self.trim_start,
+            command=lambda _e: self._on_trim_change(),
+        )
+        self.trim_start_scale.grid(row=0, column=1, sticky="ew", padx=2)
+
+        self.trim_end_scale = ttk.Scale(
+            trim_frame,
+            from_=50,
+            to=100,
+            orient="horizontal",
+            variable=self.trim_end,
+            command=lambda _e: self._on_trim_change(),
+        )
+        self.trim_end_scale.grid(row=0, column=2, sticky="ew")
+
+        self.apply_trim_btn = ttk.Button(
+            trim_frame,
+            text="Apply",
+            command=self.update_trim,
+            state="disabled",
+        )
+        self.apply_trim_btn.grid(row=0, column=3, padx=2)
+
+        self.trim_start_label = ttk.Label(trim_frame, width=5)
+        self.trim_start_label.grid(row=1, column=1, sticky="e")
+        self.trim_end_label = ttk.Label(trim_frame, width=5)
+        self.trim_end_label.grid(row=1, column=2, sticky="e")
+
+        btn_frame = ttk.Frame(self)
+        btn_frame.grid(row=2, column=0, pady=5)
+        btn_frame.columnconfigure(0, weight=1)
+
+        ttk.Button(
+            btn_frame, text="Save Trim", command=self.save_trimmed
+        ).grid(row=0, column=0, padx=2)
+
         scroll = ttk.Frame(self)
-        scroll.grid(row=1, column=0, sticky="nsew")
+        scroll.grid(row=3, column=0, sticky="nsew")
         scroll.columnconfigure(0, weight=1)
         scroll.rowconfigure(0, weight=1)
 
@@ -326,6 +391,9 @@ class SignalColumn(ttk.Frame):
         self.canvases: list[FigureCanvasTkAgg] = []
         self.latest_data = None
         self.latest_fs = None
+        self.raw_data = None
+        self.latest_title = ""
+        self.stats_label = ttk.Label(self.plots_frame, justify="left", anchor="w")
 
     def open_signal(self) -> None:
         """Open a signal and display it inside this column."""
@@ -364,8 +432,12 @@ class SignalColumn(ttk.Frame):
         self._display(data, fs, Path(filename).name)
 
     def _display(self, data: np.ndarray, fs: float, title: str) -> None:
-        self.latest_data = data
+        self.raw_data = data
         self.latest_fs = fs
+        self.latest_title = title
+        if self.trim_var.get():
+            data = self._trim_data(data)
+        self.latest_data = data
 
         try:
             raw = np.fromfile(self.main_parent.tx_file.get(), dtype=np.int16)
@@ -396,6 +468,55 @@ class SignalColumn(ttk.Frame):
                 ),
             )
             self.canvases.append(canvas)
+
+        stats = _calc_stats(data, fs)
+        text = _format_stats_text(stats)
+        self.stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
+        self.stats_label.configure(text=text)
+
+    def _trim_data(self, data: np.ndarray) -> np.ndarray:
+        if data.size == 0:
+            return data
+        start_pct = max(0.0, min(100.0, self.trim_start.get()))
+        end_pct = max(0.0, min(100.0, self.trim_end.get()))
+        if end_pct <= start_pct:
+            end_pct = min(100.0, start_pct + 1.0)
+        s = int(round(len(data) * start_pct / 100))
+        e = int(round(len(data) * end_pct / 100))
+        e = max(s + 1, min(len(data), e))
+        return data[s:e]
+
+    def _on_trim_change(self, *_args) -> None:
+        state = "normal" if self.trim_var.get() else "disabled"
+        for widget in (self.trim_start_scale, self.trim_end_scale):
+            widget.configure(state=state)
+        self.trim_start_label.configure(text=f"{self.trim_start.get():.0f}%")
+        self.trim_end_label.configure(text=f"{self.trim_end.get():.0f}%")
+        self.trim_dirty = True
+        self.apply_trim_btn.configure(state="normal")
+
+    def update_trim(self, *_args) -> None:
+        self._on_trim_change()
+        self.apply_trim_btn.configure(state="disabled")
+        self.trim_dirty = False
+        if self.raw_data is not None:
+            self._display(self.raw_data, self.latest_fs, self.latest_title)
+
+    def save_trimmed(self) -> None:
+        if self.latest_data is None:
+            messagebox.showerror("Save Trim", "No data available")
+            return
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".bin",
+            initialfile="rx_trimmed.bin",
+            filetypes=[("Binary files", "*.bin"), ("All files", "*.*")],
+        )
+        if not filename:
+            return
+        try:
+            save_interleaved(filename, self.latest_data)
+        except Exception as exc:
+            messagebox.showerror("Save Trim", str(exc))
 
 
 class CompareWindow(tk.Toplevel):
