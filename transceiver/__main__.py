@@ -289,6 +289,129 @@ class SignalViewer(tk.Toplevel):
         self.stats_label.configure(text=text)
 
 
+class SignalColumn(ttk.Frame):
+    """Frame to load and display a single signal."""
+
+    def __init__(self, parent, main_parent) -> None:
+        super().__init__(parent)
+        self.main_parent = main_parent
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
+        ttk.Button(self, text="Open Signal", command=self.open_signal).grid(
+            row=0, column=0, pady=2
+        )
+
+        scroll = ttk.Frame(self)
+        scroll.grid(row=1, column=0, sticky="nsew")
+        scroll.columnconfigure(0, weight=1)
+        scroll.rowconfigure(0, weight=1)
+
+        self.canvas = tk.Canvas(scroll)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        vscroll = ttk.Scrollbar(
+            scroll, orient="vertical", command=self.canvas.yview
+        )
+        vscroll.grid(row=0, column=1, sticky="ns")
+        self.canvas.configure(yscrollcommand=vscroll.set)
+
+        self.plots_frame = ttk.Frame(self.canvas)
+        self.plots_frame.columnconfigure(0, weight=1)
+        self.canvas.create_window((0, 0), window=self.plots_frame, anchor="nw")
+        self.plots_frame.bind(
+            "<Configure>",
+            lambda _e: self.canvas.configure(
+                scrollregion=self.canvas.bbox("all")
+            ),
+        )
+        self.canvases: list[FigureCanvasTkAgg] = []
+        self.latest_data = None
+        self.latest_fs = None
+
+    def open_signal(self) -> None:
+        """Open a signal and display it inside this column."""
+        filename = filedialog.askopenfilename(
+            title="Open Signal",
+            filetypes=[("Binary files", "*.bin"), ("All files", "*.*")],
+            initialdir="signals/rx",
+        )
+        if not filename:
+            return
+        try:
+            raw = np.fromfile(filename, dtype=np.int16)
+            if raw.size % 2:
+                raw = raw[:-1]
+            raw = raw.reshape(-1, 2).astype(np.float32)
+            data = raw[:, 0] + 1j * raw[:, 1]
+        except Exception as exc:
+            messagebox.showerror("Open Signal", str(exc))
+            return
+
+        try:
+            fs = float(
+                simpledialog.askstring(
+                    "Sample Rate",
+                    "Sample rate [Hz]",
+                    initialvalue=self.main_parent.rx_rate.get(),
+                )
+            )
+        except Exception:
+            fs = None
+        if not fs:
+            return
+
+        self._display(data, fs, Path(filename).name)
+
+    def _display(self, data: np.ndarray, fs: float, title: str) -> None:
+        self.latest_data = data
+        self.latest_fs = fs
+
+        try:
+            raw = np.fromfile(self.main_parent.tx_file.get(), dtype=np.int16)
+            if raw.size % 2:
+                raw = raw[:-1]
+            raw = raw.reshape(-1, 2).astype(np.float32)
+            tx_data = raw[:, 0] + 1j * raw[:, 1]
+        except Exception:
+            tx_data = np.array([], dtype=np.complex64)
+
+        for c in self.canvases:
+            c.get_tk_widget().destroy()
+        self.canvases.clear()
+
+        modes = ["Signal", "Freq", "InstantFreq", "Crosscorr"]
+        for idx, mode in enumerate(modes):
+            fig = Figure(figsize=(4, 2), dpi=100)
+            ax = fig.add_subplot(111)
+            _plot_on_mpl(ax, data, fs, mode, f"{title} {mode}", tx_data)
+            canvas = FigureCanvasTkAgg(fig, master=self.plots_frame)
+            canvas.draw()
+            widget = canvas.get_tk_widget()
+            widget.grid(row=idx, column=0, sticky="nsew", pady=2)
+            widget.bind(
+                "<Button-1>",
+                lambda _e, m=mode, d=data, s=fs: self.main_parent._show_fullscreen(
+                    d, s, m, f"{title} {m}"
+                ),
+            )
+            self.canvases.append(canvas)
+
+
+class CompareWindow(tk.Toplevel):
+    """Window with four columns to compare signals."""
+
+    def __init__(self, parent) -> None:
+        super().__init__(parent)
+        self.parent = parent
+        self.title("Compare Signals")
+        for i in range(4):
+            self.columnconfigure(i, weight=1)
+        self.rowconfigure(0, weight=1)
+        self.columns: list[SignalColumn] = []
+        for i in range(4):
+            col = SignalColumn(self, parent)
+            col.grid(row=0, column=i, sticky="nsew", padx=5, pady=5)
+            self.columns.append(col)
+
 class SuggestEntry(tk.Frame):
     """Entry widget with removable suggestion buttons.
 
@@ -1052,7 +1175,7 @@ class TransceiverUI(tk.Tk):
         self.rx_stop.grid(row=0, column=1, padx=2)
         self.rx_save_trim = ttk.Button(rx_btn_frame, text="Save Trim", command=self.save_trimmed)
         self.rx_save_trim.grid(row=0, column=2, padx=2)
-        ttk.Button(rx_btn_frame, text="Open Signal", command=self.open_signal).grid(row=0, column=3, padx=2)
+        ttk.Button(rx_btn_frame, text="Compare", command=self.open_signal).grid(row=0, column=3, padx=2)
 
         rx_scroll_container = ttk.Frame(rx_frame)
         rx_scroll_container.grid(row=9, column=0, columnspan=2, sticky="nsew")
@@ -1293,32 +1416,8 @@ class TransceiverUI(tk.Tk):
             messagebox.showerror("Save Trim", str(exc))
 
     def open_signal(self) -> None:
-        """Open a previously recorded signal in a new window."""
-        filename = filedialog.askopenfilename(
-            title="Open Signal",
-            filetypes=[("Binary files", "*.bin"), ("All files", "*.*")],
-            initialdir="signals/rx",
-        )
-        if not filename:
-            return
-        try:
-            raw = np.fromfile(filename, dtype=np.int16)
-            if raw.size % 2:
-                raw = raw[:-1]
-            raw = raw.reshape(-1, 2).astype(np.float32)
-            data = raw[:, 0] + 1j * raw[:, 1]
-        except Exception as exc:
-            messagebox.showerror("Open Signal", str(exc))
-            return
-
-        try:
-            fs = float(simpledialog.askstring("Sample Rate", "Sample rate [Hz]", initialvalue=self.rx_rate.get()))
-        except Exception:
-            fs = None
-        if not fs:
-            return
-
-        SignalViewer(self, data, fs, filename)
+        """Open a window to compare up to four signals."""
+        CompareWindow(self)
 
     def _open_console(self, title: str) -> None:
         if self.console is None or not self.console.winfo_exists():
