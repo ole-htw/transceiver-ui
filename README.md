@@ -36,3 +36,6 @@ The GUI shows basic signal statistics (minimum/maximum frequency, maximum
 amplitude and 3\ dB bandwidth) for both the generated and the received
 signals.
 
+Recent signals can be reloaded via the **Load** button in the receive
+section to review past captures without recording again.
+

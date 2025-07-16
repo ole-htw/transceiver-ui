@@ -4,8 +4,7 @@ import subprocess
 import threading
 import queue
 import tkinter as tk
-from tkinter import ttk, messagebox
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox, simpledialog, filedialog
 import time
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
@@ -22,6 +21,7 @@ import pyqtgraph as pg
 
 import sys
 from .helpers.tx_generator import generate_waveform
+from .helpers import rx_convert
 
 # --- suggestion helper -------------------------------------------------------
 
@@ -856,12 +856,14 @@ class TransceiverUI(tk.Tk):
 
         rx_btn_frame = ttk.Frame(rx_frame)
         rx_btn_frame.grid(row=8, column=0, columnspan=2, pady=5)
-        rx_btn_frame.columnconfigure((0, 1), weight=1)
+        rx_btn_frame.columnconfigure((0, 1, 2), weight=1)
 
         self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
         self.rx_button.grid(row=0, column=0, padx=2)
         self.rx_stop = ttk.Button(rx_btn_frame, text="Stop", command=self.stop_receive, state="disabled")
         self.rx_stop.grid(row=0, column=1, padx=2)
+        self.rx_load = ttk.Button(rx_btn_frame, text="Load", command=self.load_rx_file)
+        self.rx_load.grid(row=0, column=2, padx=2)
 
         rx_scroll_container = ttk.Frame(rx_frame)
         rx_scroll_container.grid(row=9, column=0, columnspan=2, sticky="nsew")
@@ -1624,6 +1626,29 @@ class TransceiverUI(tk.Tk):
         self.stop_transmit()
         # Give the previous process a moment to terminate
         self.transmit()
+
+    def load_rx_file(self) -> None:
+        """Load a previously recorded RX file and display it."""
+        fname = filedialog.askopenfilename(
+            initialdir="signals/rx",
+            title="Open RX file",
+            filetypes=[("Binary files", "*.bin"), ("All files", "*.*")],
+        )
+        if not fname:
+            return
+        self.rx_file.delete(0, tk.END)
+        self.rx_file.insert(0, fname)
+        try:
+            path = Path(fname)
+            fmt = rx_convert.detect_format(path)
+            if fmt == "sc16":
+                data = rx_convert.load_sc16(path)
+            else:
+                data = rx_convert.load_fc32(path)
+            rate = float(eval(self.rx_rate.get())) if self.rx_rate.get() else 0.0
+            self._display_rx_plots(data, rate)
+        except Exception as exc:
+            messagebox.showerror("Load RX file", str(exc))
 
     def stop_receive(self) -> None:
         if self._proc:
