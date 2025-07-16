@@ -333,6 +333,7 @@ class SignalColumn(ttk.Frame):
             title="Open Signal",
             filetypes=[("Binary files", "*.bin"), ("All files", "*.*")],
             initialdir="signals/rx",
+            parent=self,
         )
         if not filename:
             return
@@ -352,6 +353,7 @@ class SignalColumn(ttk.Frame):
                     "Sample Rate",
                     "Sample rate [Hz]",
                     initialvalue=self.main_parent.rx_rate.get(),
+                    parent=self,
                 )
             )
         except Exception:
@@ -403,6 +405,13 @@ class CompareWindow(tk.Toplevel):
         super().__init__(parent)
         self.parent = parent
         self.title("Compare Signals")
+        try:
+            self.state("zoomed")
+        except Exception:
+            try:
+                self.attributes("-zoomed", True)
+            except Exception:
+                pass
         for i in range(4):
             self.columnconfigure(i, weight=1)
         self.rowconfigure(0, weight=1)
