@@ -124,6 +124,7 @@ class SignalViewer(tk.Toplevel):
         self.trim_var = tk.BooleanVar(value=False)
         self.trim_start = tk.DoubleVar(value=0.0)
         self.trim_end = tk.DoubleVar(value=100.0)
+        self.trim_dirty = False
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
@@ -136,7 +137,7 @@ class SignalViewer(tk.Toplevel):
             trim_frame,
             text="Trim",
             variable=self.trim_var,
-            command=self.update_trim,
+            command=self._on_trim_change,
         ).grid(row=0, column=0, sticky="w")
 
         self.trim_start_scale = ttk.Scale(
@@ -145,7 +146,7 @@ class SignalViewer(tk.Toplevel):
             to=50,
             orient="horizontal",
             variable=self.trim_start,
-            command=lambda _e: self.update_trim(),
+            command=lambda _e: self._on_trim_change(),
         )
         self.trim_start_scale.grid(row=0, column=1, sticky="ew", padx=2)
 
@@ -155,9 +156,17 @@ class SignalViewer(tk.Toplevel):
             to=100,
             orient="horizontal",
             variable=self.trim_end,
-            command=lambda _e: self.update_trim(),
+            command=lambda _e: self._on_trim_change(),
         )
         self.trim_end_scale.grid(row=0, column=2, sticky="ew")
+
+        self.apply_trim_btn = ttk.Button(
+            trim_frame,
+            text="Apply",
+            command=self.update_trim,
+            state="disabled",
+        )
+        self.apply_trim_btn.grid(row=0, column=3, padx=2)
 
         self.trim_start_label = ttk.Label(trim_frame, width=5)
         self.trim_start_label.grid(row=1, column=1, sticky="e")
@@ -208,12 +217,19 @@ class SignalViewer(tk.Toplevel):
         e = max(s + 1, min(len(data), e))
         return data[s:e]
 
-    def update_trim(self, *_args) -> None:
+    def _on_trim_change(self, *_args) -> None:
         state = "normal" if self.trim_var.get() else "disabled"
         for widget in (self.trim_start_scale, self.trim_end_scale):
             widget.configure(state=state)
         self.trim_start_label.configure(text=f"{self.trim_start.get():.0f}%")
         self.trim_end_label.configure(text=f"{self.trim_end.get():.0f}%")
+        self.trim_dirty = True
+        self.apply_trim_btn.configure(state="normal")
+
+    def update_trim(self, *_args) -> None:
+        self._on_trim_change()
+        self.apply_trim_btn.configure(state="disabled")
+        self.trim_dirty = False
         if self.raw_data is not None:
             self._display_plots(self.raw_data, self.latest_fs)
 
@@ -980,6 +996,7 @@ class TransceiverUI(tk.Tk):
         self.trim_var = tk.BooleanVar(value=False)
         self.trim_start = tk.DoubleVar(value=0.0)
         self.trim_end = tk.DoubleVar(value=100.0)
+        self.trim_dirty = False
 
         trim_frame = ttk.Frame(rx_frame)
         trim_frame.grid(row=7, column=0, columnspan=2, sticky="ew")
@@ -989,7 +1006,7 @@ class TransceiverUI(tk.Tk):
             trim_frame,
             text="Trim",
             variable=self.trim_var,
-            command=self.update_trim,
+            command=self._on_trim_change,
         ).grid(row=0, column=0, sticky="w")
 
         self.trim_start_scale = ttk.Scale(
@@ -998,7 +1015,7 @@ class TransceiverUI(tk.Tk):
             to=50,
             orient="horizontal",
             variable=self.trim_start,
-            command=lambda _e: self.update_trim(),
+            command=lambda _e: self._on_trim_change(),
         )
         self.trim_start_scale.grid(row=0, column=1, sticky="ew", padx=2)
 
@@ -1008,9 +1025,17 @@ class TransceiverUI(tk.Tk):
             to=100,
             orient="horizontal",
             variable=self.trim_end,
-            command=lambda _e: self.update_trim(),
+            command=lambda _e: self._on_trim_change(),
         )
         self.trim_end_scale.grid(row=0, column=2, sticky="ew")
+
+        self.apply_trim_btn = ttk.Button(
+            trim_frame,
+            text="Apply",
+            command=self.update_trim,
+            state="disabled",
+        )
+        self.apply_trim_btn.grid(row=0, column=3, padx=2)
 
         self.trim_start_label = ttk.Label(trim_frame, width=5)
         self.trim_start_label.grid(row=1, column=1, sticky="e")
@@ -1225,8 +1250,7 @@ class TransceiverUI(tk.Tk):
         e = max(s + 1, min(len(data), e))
         return data[s:e]
 
-    def update_trim(self, *_args) -> None:
-        """Re-apply trimming and refresh RX plots."""
+    def _on_trim_change(self, *_args) -> None:
         state = "normal" if self.trim_var.get() else "disabled"
         for widget in (self.trim_start_scale, self.trim_end_scale):
             try:
@@ -1240,6 +1264,14 @@ class TransceiverUI(tk.Tk):
                 text=f"{self.trim_end.get():.0f}%")
         except Exception:
             pass
+        self.trim_dirty = True
+        self.apply_trim_btn.configure(state="normal")
+
+    def update_trim(self, *_args) -> None:
+        """Re-apply trimming and refresh RX plots."""
+        self._on_trim_change()
+        self.apply_trim_btn.configure(state="disabled")
+        self.trim_dirty = False
         if hasattr(self, "raw_rx_data") and self.raw_rx_data is not None:
             self._display_rx_plots(self.raw_rx_data, self.latest_fs)
 
