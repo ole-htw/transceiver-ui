@@ -5,7 +5,7 @@ import threading
 import queue
 import tkinter as tk
 from tkinter import ttk, messagebox
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox, simpledialog, filedialog
 import time
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
@@ -856,12 +856,14 @@ class TransceiverUI(tk.Tk):
 
         rx_btn_frame = ttk.Frame(rx_frame)
         rx_btn_frame.grid(row=8, column=0, columnspan=2, pady=5)
-        rx_btn_frame.columnconfigure((0, 1), weight=1)
+        rx_btn_frame.columnconfigure((0, 1, 2), weight=1)
 
         self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
         self.rx_button.grid(row=0, column=0, padx=2)
         self.rx_stop = ttk.Button(rx_btn_frame, text="Stop", command=self.stop_receive, state="disabled")
         self.rx_stop.grid(row=0, column=1, padx=2)
+        self.rx_save_trim = ttk.Button(rx_btn_frame, text="Save Trim", command=self.save_trimmed)
+        self.rx_save_trim.grid(row=0, column=2, padx=2)
 
         rx_scroll_container = ttk.Frame(rx_frame)
         rx_scroll_container.grid(row=9, column=0, columnspan=2, sticky="nsew")
@@ -1076,6 +1078,23 @@ class TransceiverUI(tk.Tk):
             pass
         if hasattr(self, "raw_rx_data") and self.raw_rx_data is not None:
             self._display_rx_plots(self.raw_rx_data, self.latest_fs)
+
+    def save_trimmed(self) -> None:
+        """Save the currently trimmed RX data to a file."""
+        if not hasattr(self, "latest_data") or self.latest_data is None:
+            messagebox.showerror("Save Trim", "No RX data available")
+            return
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".bin",
+            initialfile="rx_trimmed.bin",
+            filetypes=[("Binary files", "*.bin"), ("All files", "*.*")],
+        )
+        if not filename:
+            return
+        try:
+            save_interleaved(filename, self.latest_data)
+        except Exception as exc:
+            messagebox.showerror("Save Trim", str(exc))
 
     def _open_console(self, title: str) -> None:
         if self.console is None or not self.console.winfo_exists():
