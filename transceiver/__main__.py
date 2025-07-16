@@ -110,6 +110,169 @@ class ConsoleWindow(tk.Toplevel):
         self.text.see(tk.END)
 
 
+class SignalViewer(tk.Toplevel):
+    """Window to display a previously recorded signal."""
+
+    def __init__(self, parent, data: np.ndarray, fs: float, title: str) -> None:
+        super().__init__(parent)
+        self.parent = parent
+        self.title(Path(title).name)
+        self.raw_data = data
+        self.latest_data = data
+        self.latest_fs = fs
+
+        self.trim_var = tk.BooleanVar(value=False)
+        self.trim_start = tk.DoubleVar(value=0.0)
+        self.trim_end = tk.DoubleVar(value=100.0)
+
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(2, weight=1)
+
+        trim_frame = ttk.Frame(self)
+        trim_frame.grid(row=0, column=0, sticky="ew")
+        trim_frame.columnconfigure((1, 2), weight=1)
+
+        ttk.Checkbutton(
+            trim_frame,
+            text="Trim",
+            variable=self.trim_var,
+            command=self.update_trim,
+        ).grid(row=0, column=0, sticky="w")
+
+        self.trim_start_scale = ttk.Scale(
+            trim_frame,
+            from_=0,
+            to=50,
+            orient="horizontal",
+            variable=self.trim_start,
+            command=lambda _e: self.update_trim(),
+        )
+        self.trim_start_scale.grid(row=0, column=1, sticky="ew", padx=2)
+
+        self.trim_end_scale = ttk.Scale(
+            trim_frame,
+            from_=50,
+            to=100,
+            orient="horizontal",
+            variable=self.trim_end,
+            command=lambda _e: self.update_trim(),
+        )
+        self.trim_end_scale.grid(row=0, column=2, sticky="ew")
+
+        self.trim_start_label = ttk.Label(trim_frame, width=5)
+        self.trim_start_label.grid(row=1, column=1, sticky="e")
+        self.trim_end_label = ttk.Label(trim_frame, width=5)
+        self.trim_end_label.grid(row=1, column=2, sticky="e")
+
+        btn_frame = ttk.Frame(self)
+        btn_frame.grid(row=1, column=0, pady=5)
+        btn_frame.columnconfigure(0, weight=1)
+
+        ttk.Button(
+            btn_frame, text="Save Trim", command=self.save_trimmed
+        ).grid(row=0, column=0, padx=2)
+
+        scroll = ttk.Frame(self)
+        scroll.grid(row=2, column=0, sticky="nsew")
+        scroll.columnconfigure(0, weight=1)
+        scroll.rowconfigure(0, weight=1)
+
+        self.canvas = tk.Canvas(scroll)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        vscroll = ttk.Scrollbar(scroll, orient="vertical", command=self.canvas.yview)
+        vscroll.grid(row=0, column=1, sticky="ns")
+        self.canvas.configure(yscrollcommand=vscroll.set)
+
+        self.plots_frame = ttk.Frame(self.canvas)
+        self.plots_frame.columnconfigure(0, weight=1)
+        self.canvas.create_window((0, 0), window=self.plots_frame, anchor="nw")
+        self.plots_frame.bind(
+            "<Configure>",
+            lambda _e: self.canvas.configure(scrollregion=self.canvas.bbox("all")),
+        )
+        self.canvases: list[FigureCanvasTkAgg] = []
+
+        self.stats_label = ttk.Label(self.plots_frame, justify="left", anchor="w")
+
+        self._display_plots(data, fs)
+
+    def _trim_data(self, data: np.ndarray) -> np.ndarray:
+        if data.size == 0:
+            return data
+        start_pct = max(0.0, min(100.0, self.trim_start.get()))
+        end_pct = max(0.0, min(100.0, self.trim_end.get()))
+        if end_pct <= start_pct:
+            end_pct = min(100.0, start_pct + 1.0)
+        s = int(round(len(data) * start_pct / 100))
+        e = int(round(len(data) * end_pct / 100))
+        e = max(s + 1, min(len(data), e))
+        return data[s:e]
+
+    def update_trim(self, *_args) -> None:
+        state = "normal" if self.trim_var.get() else "disabled"
+        for widget in (self.trim_start_scale, self.trim_end_scale):
+            widget.configure(state=state)
+        self.trim_start_label.configure(text=f"{self.trim_start.get():.0f}%")
+        self.trim_end_label.configure(text=f"{self.trim_end.get():.0f}%")
+        if self.raw_data is not None:
+            self._display_plots(self.raw_data, self.latest_fs)
+
+    def save_trimmed(self) -> None:
+        if self.latest_data is None:
+            messagebox.showerror("Save Trim", "No data available")
+            return
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".bin",
+            initialfile="rx_trimmed.bin",
+            filetypes=[("Binary files", "*.bin"), ("All files", "*.*")],
+        )
+        if not filename:
+            return
+        try:
+            save_interleaved(filename, self.latest_data)
+        except Exception as exc:
+            messagebox.showerror("Save Trim", str(exc))
+
+    def _display_plots(self, data: np.ndarray, fs: float) -> None:
+        self.latest_fs = fs
+        if self.trim_var.get():
+            data = self._trim_data(data)
+        self.latest_data = data
+
+        try:
+            raw = np.fromfile(self.parent.tx_file.get(), dtype=np.int16)
+            if raw.size % 2:
+                raw = raw[:-1]
+            raw = raw.reshape(-1, 2).astype(np.float32)
+            self.tx_data = raw[:, 0] + 1j * raw[:, 1]
+        except Exception:
+            self.tx_data = np.array([], dtype=np.complex64)
+
+        for c in self.canvases:
+            c.get_tk_widget().destroy()
+        self.canvases.clear()
+
+        modes = ["Signal", "Freq", "InstantFreq", "Crosscorr"]
+        for idx, mode in enumerate(modes):
+            fig = Figure(figsize=(5, 2), dpi=100)
+            ax = fig.add_subplot(111)
+            _plot_on_mpl(ax, data, fs, mode, f"RX {mode}", self.tx_data)
+            canvas = FigureCanvasTkAgg(fig, master=self.plots_frame)
+            canvas.draw()
+            widget = canvas.get_tk_widget()
+            widget.grid(row=idx, column=0, sticky="nsew", pady=2)
+            widget.bind(
+                "<Button-1>",
+                lambda _e, m=mode, d=data, s=fs: self.parent._show_fullscreen(d, s, m, f"RX {m}")
+            )
+            self.canvases.append(canvas)
+
+        stats = _calc_stats(data, fs)
+        text = _format_stats_text(stats)
+        self.stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
+        self.stats_label.configure(text=text)
+
+
 class SuggestEntry(tk.Frame):
     """Entry widget with removable suggestion buttons.
 
@@ -856,7 +1019,7 @@ class TransceiverUI(tk.Tk):
 
         rx_btn_frame = ttk.Frame(rx_frame)
         rx_btn_frame.grid(row=8, column=0, columnspan=2, pady=5)
-        rx_btn_frame.columnconfigure((0, 1, 2), weight=1)
+        rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
         self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
         self.rx_button.grid(row=0, column=0, padx=2)
@@ -864,6 +1027,7 @@ class TransceiverUI(tk.Tk):
         self.rx_stop.grid(row=0, column=1, padx=2)
         self.rx_save_trim = ttk.Button(rx_btn_frame, text="Save Trim", command=self.save_trimmed)
         self.rx_save_trim.grid(row=0, column=2, padx=2)
+        ttk.Button(rx_btn_frame, text="Open Signal", command=self.open_signal).grid(row=0, column=3, padx=2)
 
         rx_scroll_container = ttk.Frame(rx_frame)
         rx_scroll_container.grid(row=9, column=0, columnspan=2, sticky="nsew")
@@ -1095,6 +1259,34 @@ class TransceiverUI(tk.Tk):
             save_interleaved(filename, self.latest_data)
         except Exception as exc:
             messagebox.showerror("Save Trim", str(exc))
+
+    def open_signal(self) -> None:
+        """Open a previously recorded signal in a new window."""
+        filename = filedialog.askopenfilename(
+            title="Open Signal",
+            filetypes=[("Binary files", "*.bin"), ("All files", "*.*")],
+            initialdir="signals/rx",
+        )
+        if not filename:
+            return
+        try:
+            raw = np.fromfile(filename, dtype=np.int16)
+            if raw.size % 2:
+                raw = raw[:-1]
+            raw = raw.reshape(-1, 2).astype(np.float32)
+            data = raw[:, 0] + 1j * raw[:, 1]
+        except Exception as exc:
+            messagebox.showerror("Open Signal", str(exc))
+            return
+
+        try:
+            fs = float(simpledialog.askstring("Sample Rate", "Sample rate [Hz]", initialvalue=self.rx_rate.get()))
+        except Exception:
+            fs = None
+        if not fs:
+            return
+
+        SignalViewer(self, data, fs, filename)
 
     def _open_console(self, title: str) -> None:
         if self.console is None or not self.console.winfo_exists():
