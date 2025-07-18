@@ -90,6 +90,8 @@ def _save_state(data: dict) -> None:
 
 _STATE = _load_state()
 
+AUTOSAVE_INTERVAL = 5  # seconds
+
 # Paths to external helpers
 ROOT_DIR = Path(__file__).resolve().parents[1]
 BIN_DIR = ROOT_DIR / "bin"
@@ -1006,6 +1008,8 @@ class TransceiverUI(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         if _STATE:
             self._apply_params(_STATE)
+        self._last_saved_state = self._get_current_params()
+        self.after(AUTOSAVE_INTERVAL * 1000, self._autosave_state)
 
     def create_widgets(self):
         self.rowconfigure(0, weight=1)
@@ -1854,6 +1858,13 @@ class TransceiverUI(tk.Tk):
             "trim_start": self.trim_start.get(),
             "trim_end": self.trim_end.get(),
         }
+
+    def _autosave_state(self) -> None:
+        current = self._get_current_params()
+        if current != getattr(self, "_last_saved_state", None):
+            _save_state(current)
+            self._last_saved_state = current
+        self.after(AUTOSAVE_INTERVAL * 1000, self._autosave_state)
 
     def _apply_params(self, params: dict) -> None:
         self.wave_var.set(params.get("waveform", "sinus"))
