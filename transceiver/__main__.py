@@ -96,6 +96,99 @@ BIN_DIR = ROOT_DIR / "bin"
 REPLAY_BIN = str(BIN_DIR / "rfnoc_replay_samples_from_file")
 
 
+class RangeSlider(ttk.Frame):
+    """Horizontal slider with two handles and optional signal preview."""
+
+    def __init__(self, parent, start_var: tk.DoubleVar, end_var: tk.DoubleVar,
+                 command=None, width: int = 200, height: int = 40) -> None:
+        super().__init__(parent)
+        self.start_var = start_var
+        self.end_var = end_var
+        self.command = command
+        self.enabled = True
+        self.width = width
+        self.height = height
+        self.canvas = tk.Canvas(self, width=width, height=height, highlightthickness=0)
+        self.canvas.grid(row=0, column=0, sticky="ew")
+        self.columnconfigure(0, weight=1)
+        self.data = np.array([], dtype=np.float32)
+        self.region = self.canvas.create_rectangle(0, 0, 0, height, fill="#ccf", outline="")
+        self.handle_start = self.canvas.create_line(0, 0, 0, height, fill="red", width=2)
+        self.handle_end = self.canvas.create_line(width, 0, width, height, fill="red", width=2)
+        self.active = None
+        self.canvas.bind("<Button-1>", self._on_press)
+        self.canvas.bind("<B1-Motion>", self._on_drag)
+        start_var.trace_add("write", self._update_from_vars)
+        end_var.trace_add("write", self._update_from_vars)
+        self._update_from_vars()
+
+    def set_data(self, data: np.ndarray) -> None:
+        self.data = np.asarray(data)
+        self._draw_signal()
+
+    def configure_state(self, state: str) -> None:
+        self.enabled = state == "normal"
+
+    # Internal helpers -------------------------------------------------
+    def _draw_signal(self) -> None:
+        self.canvas.delete("signal")
+        if self.data.size:
+            y = np.abs(self.data)
+            step = max(1, len(y) // self.width)
+            y = y[::step]
+            if np.max(y) > 0:
+                y = y / np.max(y)
+            prev_x = 0
+            prev_y = self.height / 2
+            for i, val in enumerate(y):
+                x = int(i * self.width / (len(y) - 1)) if len(y) > 1 else 0
+                yv = self.height / 2 - val * (self.height / 2 - 2)
+                self.canvas.create_line(prev_x, prev_y, x, yv, fill="gray",
+                                       tags="signal")
+                prev_x, prev_y = x, yv
+        self._update_from_vars()
+
+    def _update_from_vars(self, *_args) -> None:
+        start = max(0.0, min(100.0, self.start_var.get()))
+        end = max(0.0, min(100.0, self.end_var.get()))
+        if end < start:
+            end = start
+        x1 = start / 100 * self.width
+        x2 = end / 100 * self.width
+        self.canvas.coords(self.handle_start, x1, 0, x1, self.height)
+        self.canvas.coords(self.handle_end, x2, 0, x2, self.height)
+        self.canvas.coords(self.region, x1, 0, x2, self.height)
+
+    def _on_press(self, event) -> None:
+        if not self.enabled:
+            return
+        x = max(0, min(self.width, event.x))
+        x1 = self.canvas.coords(self.handle_start)[0]
+        x2 = self.canvas.coords(self.handle_end)[0]
+        self.active = "start" if abs(x - x1) <= abs(x - x2) else "end"
+        self._move(x)
+
+    def _on_drag(self, event) -> None:
+        if not self.enabled or self.active is None:
+            return
+        self._move(event.x)
+
+    def _move(self, x: float) -> None:
+        x = max(0, min(self.width, x))
+        pct = 100 * x / self.width
+        if self.active == "start":
+            if pct > self.end_var.get():
+                self.end_var.set(pct)
+            self.start_var.set(pct)
+        else:
+            if pct < self.start_var.get():
+                self.start_var.set(pct)
+            self.end_var.set(pct)
+        if self.command:
+            self.command(None)
+
+
+
 class ConsoleWindow(tk.Toplevel):
     """Simple window to display text output."""
 
@@ -131,7 +224,7 @@ class SignalViewer(tk.Toplevel):
 
         trim_frame = ttk.Frame(self)
         trim_frame.grid(row=0, column=0, sticky="ew")
-        trim_frame.columnconfigure((1, 2), weight=1)
+        trim_frame.columnconfigure(1, weight=1)
 
         ttk.Checkbutton(
             trim_frame,
@@ -140,25 +233,13 @@ class SignalViewer(tk.Toplevel):
             command=self._on_trim_change,
         ).grid(row=0, column=0, sticky="w")
 
-        self.trim_start_scale = ttk.Scale(
+        self.range_slider = RangeSlider(
             trim_frame,
-            from_=0,
-            to=50,
-            orient="horizontal",
-            variable=self.trim_start,
-            command=lambda _e: self._on_trim_change(),
+            self.trim_start,
+            self.trim_end,
+            command=self._on_trim_change,
         )
-        self.trim_start_scale.grid(row=0, column=1, sticky="ew", padx=2)
-
-        self.trim_end_scale = ttk.Scale(
-            trim_frame,
-            from_=50,
-            to=100,
-            orient="horizontal",
-            variable=self.trim_end,
-            command=lambda _e: self._on_trim_change(),
-        )
-        self.trim_end_scale.grid(row=0, column=2, sticky="ew")
+        self.range_slider.grid(row=0, column=1, sticky="ew", padx=2)
 
         self.apply_trim_btn = ttk.Button(
             trim_frame,
@@ -166,7 +247,7 @@ class SignalViewer(tk.Toplevel):
             command=self.update_trim,
             state="disabled",
         )
-        self.apply_trim_btn.grid(row=0, column=3, padx=2)
+        self.apply_trim_btn.grid(row=0, column=2, padx=2)
 
         self.trim_start_label = ttk.Label(trim_frame, width=5)
         self.trim_start_label.grid(row=1, column=1, sticky="e")
@@ -219,8 +300,7 @@ class SignalViewer(tk.Toplevel):
 
     def _on_trim_change(self, *_args) -> None:
         state = "normal" if self.trim_var.get() else "disabled"
-        for widget in (self.trim_start_scale, self.trim_end_scale):
-            widget.configure(state=state)
+        self.range_slider.configure_state(state)
         self.trim_start_label.configure(text=f"{self.trim_start.get():.0f}%")
         self.trim_end_label.configure(text=f"{self.trim_end.get():.0f}%")
         self.trim_dirty = True
@@ -251,6 +331,7 @@ class SignalViewer(tk.Toplevel):
 
     def _display_plots(self, data: np.ndarray, fs: float) -> None:
         self.latest_fs = fs
+        self.range_slider.set_data(data)
         if self.trim_var.get():
             data = self._trim_data(data)
         self.latest_data = data
@@ -316,7 +397,7 @@ class SignalColumn(ttk.Frame):
 
         trim_frame = ttk.Frame(self)
         trim_frame.grid(row=1, column=0, sticky="ew")
-        trim_frame.columnconfigure((1, 2), weight=1)
+        trim_frame.columnconfigure(1, weight=1)
 
         ttk.Checkbutton(
             trim_frame,
@@ -325,25 +406,13 @@ class SignalColumn(ttk.Frame):
             command=self._on_trim_change,
         ).grid(row=0, column=0, sticky="w")
 
-        self.trim_start_scale = ttk.Scale(
+        self.range_slider = RangeSlider(
             trim_frame,
-            from_=0,
-            to=50,
-            orient="horizontal",
-            variable=self.trim_start,
-            command=lambda _e: self._on_trim_change(),
+            self.trim_start,
+            self.trim_end,
+            command=self._on_trim_change,
         )
-        self.trim_start_scale.grid(row=0, column=1, sticky="ew", padx=2)
-
-        self.trim_end_scale = ttk.Scale(
-            trim_frame,
-            from_=50,
-            to=100,
-            orient="horizontal",
-            variable=self.trim_end,
-            command=lambda _e: self._on_trim_change(),
-        )
-        self.trim_end_scale.grid(row=0, column=2, sticky="ew")
+        self.range_slider.grid(row=0, column=1, sticky="ew", padx=2)
 
         self.apply_trim_btn = ttk.Button(
             trim_frame,
@@ -351,7 +420,7 @@ class SignalColumn(ttk.Frame):
             command=self.update_trim,
             state="disabled",
         )
-        self.apply_trim_btn.grid(row=0, column=3, padx=2)
+        self.apply_trim_btn.grid(row=0, column=2, padx=2)
 
         self.trim_start_label = ttk.Label(trim_frame, width=5)
         self.trim_start_label.grid(row=1, column=1, sticky="e")
@@ -435,6 +504,7 @@ class SignalColumn(ttk.Frame):
         self.raw_data = data
         self.latest_fs = fs
         self.latest_title = title
+        self.range_slider.set_data(data)
         if self.trim_var.get():
             data = self._trim_data(data)
         self.latest_data = data
@@ -488,8 +558,7 @@ class SignalColumn(ttk.Frame):
 
     def _on_trim_change(self, *_args) -> None:
         state = "normal" if self.trim_var.get() else "disabled"
-        for widget in (self.trim_start_scale, self.trim_end_scale):
-            widget.configure(state=state)
+        self.range_slider.configure_state(state)
         self.trim_start_label.configure(text=f"{self.trim_start.get():.0f}%")
         self.trim_end_label.configure(text=f"{self.trim_end.get():.0f}%")
         self.trim_dirty = True
@@ -1253,7 +1322,7 @@ class TransceiverUI(tk.Tk):
 
         trim_frame = ttk.Frame(rx_frame)
         trim_frame.grid(row=7, column=0, columnspan=2, sticky="ew")
-        trim_frame.columnconfigure((1, 2), weight=1)
+        trim_frame.columnconfigure(1, weight=1)
 
         ttk.Checkbutton(
             trim_frame,
@@ -1262,25 +1331,13 @@ class TransceiverUI(tk.Tk):
             command=self._on_trim_change,
         ).grid(row=0, column=0, sticky="w")
 
-        self.trim_start_scale = ttk.Scale(
+        self.range_slider = RangeSlider(
             trim_frame,
-            from_=0,
-            to=50,
-            orient="horizontal",
-            variable=self.trim_start,
-            command=lambda _e: self._on_trim_change(),
+            self.trim_start,
+            self.trim_end,
+            command=self._on_trim_change,
         )
-        self.trim_start_scale.grid(row=0, column=1, sticky="ew", padx=2)
-
-        self.trim_end_scale = ttk.Scale(
-            trim_frame,
-            from_=50,
-            to=100,
-            orient="horizontal",
-            variable=self.trim_end,
-            command=lambda _e: self._on_trim_change(),
-        )
-        self.trim_end_scale.grid(row=0, column=2, sticky="ew")
+        self.range_slider.grid(row=0, column=1, sticky="ew", padx=2)
 
         self.apply_trim_btn = ttk.Button(
             trim_frame,
@@ -1288,7 +1345,7 @@ class TransceiverUI(tk.Tk):
             command=self.update_trim,
             state="disabled",
         )
-        self.apply_trim_btn.grid(row=0, column=3, padx=2)
+        self.apply_trim_btn.grid(row=0, column=2, padx=2)
 
         self.trim_start_label = ttk.Label(trim_frame, width=5)
         self.trim_start_label.grid(row=1, column=1, sticky="e")
@@ -1447,6 +1504,7 @@ class TransceiverUI(tk.Tk):
         """Render preview plots below the receive parameters."""
         self.raw_rx_data = data
         self.latest_fs = fs
+        self.range_slider.set_data(data)
         if self.trim_var.get():
             data = self._trim_data(data)
         self.latest_data = data
@@ -1505,11 +1563,7 @@ class TransceiverUI(tk.Tk):
 
     def _on_trim_change(self, *_args) -> None:
         state = "normal" if self.trim_var.get() else "disabled"
-        for widget in (self.trim_start_scale, self.trim_end_scale):
-            try:
-                widget.configure(state=state)
-            except Exception:
-                pass
+        self.range_slider.configure_state(state)
         try:
             self.trim_start_label.configure(
                 text=f"{self.trim_start.get():.0f}%")
