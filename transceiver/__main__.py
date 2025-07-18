@@ -113,6 +113,7 @@ class RangeSlider(ttk.Frame):
         self.canvas = tk.Canvas(self, width=width, height=height, highlightthickness=0)
         self.canvas.grid(row=0, column=0, sticky="ew")
         self.columnconfigure(0, weight=1)
+        self.canvas.bind("<Configure>", self._on_resize)
         self.data = np.array([], dtype=np.float32)
         self.region = self.canvas.create_rectangle(0, 0, 0, height, fill="#ccf", outline="")
         self.handle_start = self.canvas.create_line(0, 0, 0, height, fill="red", width=2)
@@ -160,6 +161,14 @@ class RangeSlider(ttk.Frame):
         self.canvas.coords(self.handle_start, x1, 0, x1, self.height)
         self.canvas.coords(self.handle_end, x2, 0, x2, self.height)
         self.canvas.coords(self.region, x1, 0, x2, self.height)
+
+    def _on_resize(self, event) -> None:
+        if event.width == self.width and event.height == self.height:
+            return
+        self.width = event.width
+        self.height = event.height
+        self.canvas.configure(width=self.width, height=self.height)
+        self._draw_signal()
 
     def _on_press(self, event) -> None:
         if not self.enabled:
