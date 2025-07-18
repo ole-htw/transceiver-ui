@@ -812,10 +812,8 @@ def _gen_tx_filename(app) -> str:
         parts.append(f"{_pretty(f0)}_{_pretty(f1)}")
 
     parts.append(f"fs{_pretty(fs)}")
-    # ``samples`` already represents the number of output samples. Using
-    # ``samples * oversampling`` would misrepresent the actual length when
-    # oversampling is enabled.
-    parts.append(f"N{samples}")
+    total_samples = samples * oversampling
+    parts.append(f"N{total_samples}")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     name = "_".join(parts) + f"_{stamp}.bin"
     return str(Path("signals/tx") / name)
@@ -2116,16 +2114,7 @@ class TransceiverUI(tk.Tk):
                 if not self.rrc_enable.get():
                     span = 0
 
-                if oversampling > 1:
-                    if samples % oversampling != 0:
-                        messagebox.showerror(
-                            "Generate error",
-                            "Samples muss durch Oversampling teilbar sein",
-                        )
-                        return
-                    base_samples = samples // oversampling
-                else:
-                    base_samples = samples
+                base_samples = samples
 
                 data = generate_waveform(
                     waveform,
