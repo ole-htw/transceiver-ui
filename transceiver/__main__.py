@@ -2005,11 +2005,23 @@ class TransceiverUI(tk.Tk):
                 q = int(self.q_entry.get()) if self.q_entry.get() else 1
                 beta = float(self.rrc_beta_entry.get()) if self.rrc_beta_entry.get() else 0.25
                 span = int(self.rrc_span_entry.get()) if self.rrc_span_entry.get() else 6
+
+                if oversampling > 1:
+                    if samples % oversampling != 0:
+                        messagebox.showerror(
+                            "Generate error",
+                            "Samples muss durch Oversampling teilbar sein",
+                        )
+                        return
+                    base_samples = samples // oversampling
+                else:
+                    base_samples = samples
+
                 data = generate_waveform(
                     waveform,
                     fs,
                     0.0,
-                    samples,
+                    base_samples,
                     q=q,
                     rrc_beta=beta,
                     rrc_span=span,
