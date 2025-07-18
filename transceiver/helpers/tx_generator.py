@@ -305,15 +305,21 @@ def main() -> None:
         args.f1 = args.fs / 2 - 1  # Maximal fast bis Nyquist
 
     N_waveform = args.samples
-    N_output = N_waveform * args.oversampling
+    N_output = N_waveform
 
     # Blockgröße ggf. an Primzahl anpassen (nur ZC)
     if args.waveform == "zadoffchu":
-        prime = find_prime_near(N_waveform, search_up=True)
-        if prime != N_waveform:
-            print(f"Info: samples={N_waveform} angepasst auf Primzahl {prime} für ZC.")
-            N_waveform = prime
-        N_output = N_waveform * args.oversampling
+        if args.oversampling > 1:
+            if args.samples % args.oversampling != 0:
+                raise ValueError("samples muss ein Vielfaches von oversampling sein")
+            N_waveform = args.samples // args.oversampling
+            N_output = args.samples
+        else:
+            prime = find_prime_near(N_waveform, search_up=True)
+            if prime != N_waveform:
+                print(f"Info: samples={N_waveform} angepasst auf Primzahl {prime} für ZC.")
+                N_waveform = prime
+            N_output = N_waveform
 
     append_zeros = not args.no_zeros
 
