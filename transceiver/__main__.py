@@ -110,6 +110,42 @@ class ConsoleWindow(tk.Toplevel):
         self.text.see(tk.END)
 
 
+class RangeSlider(ttk.Frame):
+    """Simple range slider using two overlaid ``ttk.Scale`` widgets."""
+
+    def __init__(self, parent, start_var: tk.DoubleVar, end_var: tk.DoubleVar,
+                 command=None, from_=0.0, to=100.0) -> None:
+        super().__init__(parent)
+        self.command = command
+        self.start_scale = ttk.Scale(
+            self,
+            from_=from_,
+            to=to,
+            orient="horizontal",
+            variable=start_var,
+            command=lambda e: self._on_change(),
+        )
+        self.start_scale.place(relx=0, rely=0, relwidth=1)
+        self.end_scale = ttk.Scale(
+            self,
+            from_=from_,
+            to=to,
+            orient="horizontal",
+            variable=end_var,
+            command=lambda e: self._on_change(),
+        )
+        self.end_scale.place(relx=0, rely=0, relwidth=1)
+        self.end_scale.lift()
+
+    def _on_change(self) -> None:
+        if self.command:
+            self.command(None)
+
+    def set_state(self, state: str) -> None:
+        self.start_scale.configure(state=state)
+        self.end_scale.configure(state=state)
+
+
 class SignalViewer(tk.Toplevel):
     """Window to display a previously recorded signal."""
 
@@ -140,25 +176,15 @@ class SignalViewer(tk.Toplevel):
             command=self._on_trim_change,
         ).grid(row=0, column=0, sticky="w")
 
-        self.trim_start_scale = ttk.Scale(
+        slider = RangeSlider(
             trim_frame,
-            from_=0,
-            to=50,
-            orient="horizontal",
-            variable=self.trim_start,
-            command=lambda _e: self._on_trim_change(),
+            self.trim_start,
+            self.trim_end,
+            command=self._on_trim_change,
         )
-        self.trim_start_scale.grid(row=0, column=1, sticky="ew", padx=2)
-
-        self.trim_end_scale = ttk.Scale(
-            trim_frame,
-            from_=50,
-            to=100,
-            orient="horizontal",
-            variable=self.trim_end,
-            command=lambda _e: self._on_trim_change(),
-        )
-        self.trim_end_scale.grid(row=0, column=2, sticky="ew")
+        slider.grid(row=0, column=1, columnspan=2, sticky="ew", padx=2)
+        self.trim_start_scale = slider.start_scale
+        self.trim_end_scale = slider.end_scale
 
         self.apply_trim_btn = ttk.Button(
             trim_frame,
@@ -325,25 +351,15 @@ class SignalColumn(ttk.Frame):
             command=self._on_trim_change,
         ).grid(row=0, column=0, sticky="w")
 
-        self.trim_start_scale = ttk.Scale(
+        slider = RangeSlider(
             trim_frame,
-            from_=0,
-            to=50,
-            orient="horizontal",
-            variable=self.trim_start,
-            command=lambda _e: self._on_trim_change(),
+            self.trim_start,
+            self.trim_end,
+            command=self._on_trim_change,
         )
-        self.trim_start_scale.grid(row=0, column=1, sticky="ew", padx=2)
-
-        self.trim_end_scale = ttk.Scale(
-            trim_frame,
-            from_=50,
-            to=100,
-            orient="horizontal",
-            variable=self.trim_end,
-            command=lambda _e: self._on_trim_change(),
-        )
-        self.trim_end_scale.grid(row=0, column=2, sticky="ew")
+        slider.grid(row=0, column=1, columnspan=2, sticky="ew", padx=2)
+        self.trim_start_scale = slider.start_scale
+        self.trim_end_scale = slider.end_scale
 
         self.apply_trim_btn = ttk.Button(
             trim_frame,
@@ -1262,25 +1278,15 @@ class TransceiverUI(tk.Tk):
             command=self._on_trim_change,
         ).grid(row=0, column=0, sticky="w")
 
-        self.trim_start_scale = ttk.Scale(
+        slider = RangeSlider(
             trim_frame,
-            from_=0,
-            to=50,
-            orient="horizontal",
-            variable=self.trim_start,
-            command=lambda _e: self._on_trim_change(),
+            self.trim_start,
+            self.trim_end,
+            command=self._on_trim_change,
         )
-        self.trim_start_scale.grid(row=0, column=1, sticky="ew", padx=2)
-
-        self.trim_end_scale = ttk.Scale(
-            trim_frame,
-            from_=50,
-            to=100,
-            orient="horizontal",
-            variable=self.trim_end,
-            command=lambda _e: self._on_trim_change(),
-        )
-        self.trim_end_scale.grid(row=0, column=2, sticky="ew")
+        slider.grid(row=0, column=1, columnspan=2, sticky="ew", padx=2)
+        self.trim_start_scale = slider.start_scale
+        self.trim_end_scale = slider.end_scale
 
         self.apply_trim_btn = ttk.Button(
             trim_frame,
