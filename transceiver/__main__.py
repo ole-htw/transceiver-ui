@@ -1075,9 +1075,9 @@ class TransceiverUI(tk.Tk):
 
     def create_widgets(self):
         self.rowconfigure(0, weight=1)
-        self.columnconfigure(0, weight=1)
-        self.columnconfigure(1, weight=1)
-        self.columnconfigure(2, weight=1)
+        self.columnconfigure(0, weight=1, uniform="cols")
+        self.columnconfigure(1, weight=1, uniform="cols")
+        self.columnconfigure(2, weight=1, uniform="cols")
 
         # ----- Column 1: Generation -----
         gen_frame = ttk.LabelFrame(self, text="Signal Generation")
