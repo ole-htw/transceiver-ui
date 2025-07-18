@@ -28,6 +28,7 @@ from .helpers.tx_generator import generate_waveform
 # --- suggestion helper ---
 SUGGESTIONS_FILE = Path(__file__).with_name("suggestions.json")
 
+
 def _load_suggestions() -> dict:
     try:
         with open(SUGGESTIONS_FILE, "r") as f:
@@ -101,8 +102,15 @@ REPLAY_BIN = str(BIN_DIR / "rfnoc_replay_samples_from_file")
 class RangeSlider(ttk.Frame):
     """Horizontal slider with two handles and optional signal preview."""
 
-    def __init__(self, parent, start_var: tk.DoubleVar, end_var: tk.DoubleVar,
-                 command=None, width: int = 200, height: int = 40) -> None:
+    def __init__(
+        self,
+        parent,
+        start_var: tk.DoubleVar,
+        end_var: tk.DoubleVar,
+        command=None,
+        width: int = 200,
+        height: int = 40,
+    ) -> None:
         super().__init__(parent)
         self.start_var = start_var
         self.end_var = end_var
@@ -115,9 +123,15 @@ class RangeSlider(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.canvas.bind("<Configure>", self._on_resize)
         self.data = np.array([], dtype=np.float32)
-        self.region = self.canvas.create_rectangle(0, 0, 0, height, fill="#ccf", outline="")
-        self.handle_start = self.canvas.create_line(0, 0, 0, height, fill="red", width=2)
-        self.handle_end = self.canvas.create_line(width, 0, width, height, fill="red", width=2)
+        self.region = self.canvas.create_rectangle(
+            0, 0, 0, height, fill="#ccf", outline=""
+        )
+        self.handle_start = self.canvas.create_line(
+            0, 0, 0, height, fill="red", width=2
+        )
+        self.handle_end = self.canvas.create_line(
+            width, 0, width, height, fill="red", width=2
+        )
         self.active = None
         self.canvas.bind("<Button-1>", self._on_press)
         self.canvas.bind("<B1-Motion>", self._on_drag)
@@ -146,8 +160,9 @@ class RangeSlider(ttk.Frame):
             for i, val in enumerate(y):
                 x = int(i * self.width / (len(y) - 1)) if len(y) > 1 else 0
                 yv = self.height / 2 - val * (self.height / 2 - 2)
-                self.canvas.create_line(prev_x, prev_y, x, yv, fill="gray",
-                                       tags="signal")
+                self.canvas.create_line(
+                    prev_x, prev_y, x, yv, fill="gray", tags="signal"
+                )
                 prev_x, prev_y = x, yv
         self._update_from_vars()
 
@@ -197,7 +212,6 @@ class RangeSlider(ttk.Frame):
             self.end_var.set(pct)
         if self.command:
             self.command(None)
-
 
 
 class ConsoleWindow(tk.Toplevel):
@@ -269,9 +283,9 @@ class SignalViewer(tk.Toplevel):
         btn_frame.grid(row=1, column=0, pady=5)
         btn_frame.columnconfigure(0, weight=1)
 
-        ttk.Button(
-            btn_frame, text="Save Trim", command=self.save_trimmed
-        ).grid(row=0, column=0, padx=2)
+        ttk.Button(btn_frame, text="Save Trim", command=self.save_trimmed).grid(
+            row=0, column=0, padx=2
+        )
 
         scroll = ttk.Frame(self)
         scroll.grid(row=2, column=0, sticky="nsew")
@@ -371,7 +385,9 @@ class SignalViewer(tk.Toplevel):
             widget.grid(row=idx, column=0, sticky="nsew", pady=2)
             widget.bind(
                 "<Button-1>",
-                lambda _e, m=mode, d=data, s=fs: self.parent._show_fullscreen(d, s, m, f"RX {m}")
+                lambda _e, m=mode, d=data, s=fs: self.parent._show_fullscreen(
+                    d, s, m, f"RX {m}"
+                ),
             )
             self.canvases.append(canvas)
 
@@ -379,12 +395,6 @@ class SignalViewer(tk.Toplevel):
         text = _format_stats_text(stats)
         self.stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
         self.stats_label.configure(text=text)
-
-
-
-
-
-
 
 
 class SignalColumn(ttk.Frame):
@@ -442,9 +452,9 @@ class SignalColumn(ttk.Frame):
         btn_frame.grid(row=2, column=0, pady=5)
         btn_frame.columnconfigure(0, weight=1)
 
-        ttk.Button(
-            btn_frame, text="Save Trim", command=self.save_trimmed
-        ).grid(row=0, column=0, padx=2)
+        ttk.Button(btn_frame, text="Save Trim", command=self.save_trimmed).grid(
+            row=0, column=0, padx=2
+        )
 
         scroll = ttk.Frame(self)
         scroll.grid(row=3, column=0, sticky="nsew")
@@ -453,9 +463,7 @@ class SignalColumn(ttk.Frame):
 
         self.canvas = tk.Canvas(scroll)
         self.canvas.grid(row=0, column=0, sticky="nsew")
-        vscroll = ttk.Scrollbar(
-            scroll, orient="vertical", command=self.canvas.yview
-        )
+        vscroll = ttk.Scrollbar(scroll, orient="vertical", command=self.canvas.yview)
         vscroll.grid(row=0, column=1, sticky="ns")
         self.canvas.configure(yscrollcommand=vscroll.set)
 
@@ -464,9 +472,7 @@ class SignalColumn(ttk.Frame):
         self.canvas.create_window((0, 0), window=self.plots_frame, anchor="nw")
         self.plots_frame.bind(
             "<Configure>",
-            lambda _e: self.canvas.configure(
-                scrollregion=self.canvas.bbox("all")
-            ),
+            lambda _e: self.canvas.configure(scrollregion=self.canvas.bbox("all")),
         )
         self.canvases: list[FigureCanvasTkAgg] = []
         self.latest_data = None
@@ -622,6 +628,7 @@ class CompareWindow(tk.Toplevel):
             col.grid(row=0, column=i, sticky="nsew", padx=5, pady=5)
             self.columns.append(col)
 
+
 class SuggestEntry(tk.Frame):
     """Entry widget with removable suggestion buttons.
 
@@ -637,8 +644,13 @@ class SuggestEntry(tk.Frame):
         Shared variable for the underlying entry.
     """
 
-    def __init__(self, parent, name: str, width: int | None = None,
-                 textvariable: tk.StringVar | None = None) -> None:
+    def __init__(
+        self,
+        parent,
+        name: str,
+        width: int | None = None,
+        textvariable: tk.StringVar | None = None,
+    ) -> None:
         super().__init__(parent)
         self.name = name
         self.entry = ttk.Entry(self, width=width, textvariable=textvariable)
@@ -691,14 +703,21 @@ class SuggestEntry(tk.Frame):
             frame = tk.Frame(self.sugg_frame, bd=1, relief="ridge", padx=2)
             lbl = tk.Label(frame, text=val)
             lbl.pack(side="left")
-            rm = tk.Button(frame, text="x", command=lambda v=val: self._remove_suggestion(v), width=2)
+            rm = tk.Button(
+                frame,
+                text="x",
+                command=lambda v=val: self._remove_suggestion(v),
+                width=2,
+            )
             rm.pack(side="right")
             frame.pack(side="left", padx=2, pady=1)
             frame.bind("<Button-1>", lambda _e, v=val: self._fill_entry(v))
             lbl.bind("<Button-1>", lambda _e, v=val: self._fill_entry(v))
 
 
-def save_interleaved(filename: str, data: np.ndarray, amplitude: float = 10000.0) -> None:
+def save_interleaved(
+    filename: str, data: np.ndarray, amplitude: float = 10000.0
+) -> None:
     """Save complex64 data as interleaved int16."""
     max_abs = np.max(np.abs(data)) if np.any(data) else 1.0
     scale = amplitude / max_abs if max_abs > 1e-9 else 1.0
@@ -711,7 +730,9 @@ def save_interleaved(filename: str, data: np.ndarray, amplitude: float = 10000.0
     interleaved.tofile(filename)
 
 
-def _reduce_data(data: np.ndarray, max_bytes: int = 1_000_000) -> tuple[np.ndarray, int]:
+def _reduce_data(
+    data: np.ndarray, max_bytes: int = 1_000_000
+) -> tuple[np.ndarray, int]:
     """Return a downsampled view of *data* and the step used."""
     step = 1
     if data.nbytes > max_bytes:
@@ -720,7 +741,9 @@ def _reduce_data(data: np.ndarray, max_bytes: int = 1_000_000) -> tuple[np.ndarr
     return data, step
 
 
-def _reduce_pair(a: np.ndarray, b: np.ndarray, max_bytes: int = 1_000_000) -> tuple[np.ndarray, np.ndarray, int]:
+def _reduce_pair(
+    a: np.ndarray, b: np.ndarray, max_bytes: int = 1_000_000
+) -> tuple[np.ndarray, np.ndarray, int]:
     """Downsample *a* and *b* using the same step so both stay aligned."""
     step = 1
     max_nbytes = max(a.nbytes, b.nbytes)
@@ -738,7 +761,7 @@ def _xcorr_fft(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     A = np.fft.fft(a, nfft)
     B = np.fft.fft(b, nfft)
     cc = np.fft.ifft(A * np.conj(B))
-    return np.concatenate((cc[-(len(b) - 1):], cc[:len(a)]))
+    return np.concatenate((cc[-(len(b) - 1) :], cc[: len(a)]))
 
 
 def _autocorr_fft(x: np.ndarray) -> np.ndarray:
@@ -812,8 +835,10 @@ def _gen_tx_filename(app) -> str:
         parts.append(f"{_pretty(f0)}_{_pretty(f1)}")
 
     parts.append(f"fs{_pretty(fs)}")
-    total_samples = samples * oversampling
-    parts.append(f"N{total_samples}")
+    # ``samples`` already represents the number of output samples. Using
+    # ``samples * oversampling`` would misrepresent the actual length when
+    # oversampling is enabled.
+    parts.append(f"N{samples}")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     name = "_".join(parts) + f"_{stamp}.bin"
     return str(Path("signals/tx") / name)
@@ -880,7 +905,13 @@ def _format_stats_text(stats: dict) -> str:
     )
 
 
-def visualize(data: np.ndarray, fs: float, mode: str, title: str, ref_data: np.ndarray | None = None) -> None:
+def visualize(
+    data: np.ndarray,
+    fs: float,
+    mode: str,
+    title: str,
+    ref_data: np.ndarray | None = None,
+) -> None:
     """Visualize *data* using PyQtGraph."""
     if data.size == 0:
         messagebox.showerror("Error", "No data to visualize")
@@ -897,14 +928,21 @@ def visualize(data: np.ndarray, fs: float, mode: str, title: str, ref_data: np.n
         win = pg.plot(title=title)
         win.addLegend()
         win.plot(np.real(data), pen=pg.mkPen("b"), name="Real")
-        win.plot(np.imag(data), pen=pg.mkPen("r", style=QtCore.Qt.DashLine), name="Imag")
+        win.plot(
+            np.imag(data), pen=pg.mkPen("r", style=QtCore.Qt.DashLine), name="Imag"
+        )
         win.setLabel("bottom", "Sample Index")
         win.setLabel("left", "Amplitude")
         win.showGrid(x=True, y=True)
     elif mode in ("Freq", "Freq Analysis"):
         spec = np.fft.fftshift(np.fft.fft(data))
-        freqs = np.fft.fftshift(np.fft.fftfreq(len(data), d=1/fs))
-        win = pg.plot(freqs, 20*np.log10(np.abs(spec) + 1e-9), pen="b", title=f"Spectrum: {title}")
+        freqs = np.fft.fftshift(np.fft.fftfreq(len(data), d=1 / fs))
+        win = pg.plot(
+            freqs,
+            20 * np.log10(np.abs(spec) + 1e-9),
+            pen="b",
+            title=f"Spectrum: {title}",
+        )
         win.setLabel("bottom", "Frequency [Hz]")
         win.setLabel("left", "Magnitude [dB]")
         win.showGrid(x=True, y=True)
@@ -944,21 +982,30 @@ def visualize(data: np.ndarray, fs: float, mode: str, title: str, ref_data: np.n
     pg.exec()
 
 
-def _plot_on_pg(plot: pg.PlotItem, data: np.ndarray, fs: float, mode: str, title: str, ref_data: np.ndarray | None = None) -> None:
+def _plot_on_pg(
+    plot: pg.PlotItem,
+    data: np.ndarray,
+    fs: float,
+    mode: str,
+    title: str,
+    ref_data: np.ndarray | None = None,
+) -> None:
     """Helper to draw the selected visualization on a PyQtGraph PlotItem."""
     data, step = _reduce_data(data)
     fs /= step
     if mode == "Signal":
         plot.addLegend()
         plot.plot(np.real(data), pen=pg.mkPen("b"), name="Real")
-        plot.plot(np.imag(data), pen=pg.mkPen("r", style=QtCore.Qt.DashLine), name="Imag")
+        plot.plot(
+            np.imag(data), pen=pg.mkPen("r", style=QtCore.Qt.DashLine), name="Imag"
+        )
         plot.setTitle(title)
         plot.setLabel("bottom", "Sample Index")
         plot.setLabel("left", "Amplitude")
     elif mode in ("Freq", "Freq Analysis"):
         spec = np.fft.fftshift(np.fft.fft(data))
-        freqs = np.fft.fftshift(np.fft.fftfreq(len(data), d=1/fs))
-        plot.plot(freqs, 20*np.log10(np.abs(spec) + 1e-9), pen="b")
+        freqs = np.fft.fftshift(np.fft.fftfreq(len(data), d=1 / fs))
+        plot.plot(freqs, 20 * np.log10(np.abs(spec) + 1e-9), pen="b")
         plot.setTitle(f"Spectrum: {title}")
         plot.setLabel("bottom", "Frequency [Hz]")
         plot.setLabel("left", "Magnitude [dB]")
@@ -993,7 +1040,14 @@ def _plot_on_pg(plot: pg.PlotItem, data: np.ndarray, fs: float, mode: str, title
     plot.showGrid(x=True, y=True)
 
 
-def _plot_on_mpl(ax, data: np.ndarray, fs: float, mode: str, title: str, ref_data: np.ndarray | None = None) -> None:
+def _plot_on_mpl(
+    ax,
+    data: np.ndarray,
+    fs: float,
+    mode: str,
+    title: str,
+    ref_data: np.ndarray | None = None,
+) -> None:
     """Helper to draw a small matplotlib preview plot."""
     data, step = _reduce_data(data)
     fs /= step
@@ -1005,8 +1059,8 @@ def _plot_on_mpl(ax, data: np.ndarray, fs: float, mode: str, title: str, ref_dat
         ax.legend()
     elif mode in ("Freq", "Freq Analysis"):
         spec = np.fft.fftshift(np.fft.fft(data))
-        freqs = np.fft.fftshift(np.fft.fftfreq(len(data), d=1/fs))
-        ax.plot(freqs, 20*np.log10(np.abs(spec) + 1e-9), "b")
+        freqs = np.fft.fftshift(np.fft.fftfreq(len(data), d=1 / fs))
+        ax.plot(freqs, 20 * np.log10(np.abs(spec) + 1e-9), "b")
         ax.set_xlabel("Frequency [Hz]")
         ax.set_ylabel("Magnitude [dB]")
     elif mode == "InstantFreq":
@@ -1104,10 +1158,11 @@ class TransceiverUI(tk.Tk):
         )
 
         ttk.Label(gen_frame, text="fs").grid(row=1, column=0, sticky="w")
-        self.fs_entry = SuggestEntry(gen_frame, "fs_entry",
-                                     textvariable=self.fs_var)
+        self.fs_entry = SuggestEntry(gen_frame, "fs_entry", textvariable=self.fs_var)
         self.fs_entry.grid(row=1, column=1, sticky="ew")
-        self.fs_entry.entry.bind("<FocusOut>", lambda _e: self.auto_update_tx_filename())
+        self.fs_entry.entry.bind(
+            "<FocusOut>", lambda _e: self.auto_update_tx_filename()
+        )
 
         self.f_label = ttk.Label(gen_frame, text="f")
         self.f_label.grid(row=2, column=0, sticky="w")
@@ -1120,7 +1175,9 @@ class TransceiverUI(tk.Tk):
         self.f1_entry = SuggestEntry(gen_frame, "f1_entry")
         self.f1_label.grid(row=3, column=0, sticky="w")
         self.f1_entry.grid(row=3, column=1, sticky="ew")
-        self.f1_entry.entry.bind("<FocusOut>", lambda _e: self.auto_update_tx_filename())
+        self.f1_entry.entry.bind(
+            "<FocusOut>", lambda _e: self.auto_update_tx_filename()
+        )
 
         self.q_label = ttk.Label(gen_frame, text="q")
         self.q_entry = SuggestEntry(gen_frame, "q_entry")
@@ -1134,7 +1191,9 @@ class TransceiverUI(tk.Tk):
         self.samples_entry = SuggestEntry(gen_frame, "samples_entry")
         self.samples_entry.insert(0, "40000")
         self.samples_entry.grid(row=4, column=1, sticky="ew")
-        self.samples_entry.entry.bind("<FocusOut>", lambda _e: self.auto_update_tx_filename())
+        self.samples_entry.entry.bind(
+            "<FocusOut>", lambda _e: self.auto_update_tx_filename()
+        )
 
         ttk.Label(gen_frame, text="Oversampling").grid(row=5, column=0, sticky="w")
         self.os_entry = SuggestEntry(gen_frame, "os_entry")
@@ -1160,7 +1219,7 @@ class TransceiverUI(tk.Tk):
         self.rrc_beta_entry = SuggestEntry(gen_frame, "rrc_beta_entry")
         self.rrc_beta_entry.insert(0, "0.25")
         self.rrc_beta_entry.grid(row=7, column=1, sticky="ew")
-        
+
         self.rrc_span_label = ttk.Label(gen_frame, text="RRC Span")
         self.rrc_span_label.grid(row=8, column=0, sticky="w")
         self.rrc_span_entry = SuggestEntry(gen_frame, "rrc_span_entry")
@@ -1211,7 +1270,9 @@ class TransceiverUI(tk.Tk):
         self.file_entry.insert(0, "tx_signal.bin")
         self.file_entry.grid(row=11, column=1, sticky="ew")
 
-        ttk.Button(gen_frame, text="Generate", command=self.generate).grid(row=12, column=0, columnspan=2, pady=5)
+        ttk.Button(gen_frame, text="Generate", command=self.generate).grid(
+            row=12, column=0, columnspan=2, pady=5
+        )
 
         scroll_container = ttk.Frame(gen_frame)
         scroll_container.grid(row=13, column=0, columnspan=2, sticky="nsew")
@@ -1220,7 +1281,9 @@ class TransceiverUI(tk.Tk):
 
         self.gen_canvas = tk.Canvas(scroll_container)
         self.gen_canvas.grid(row=0, column=0, sticky="nsew")
-        self.gen_scroll = ttk.Scrollbar(scroll_container, orient="vertical", command=self.gen_canvas.yview)
+        self.gen_scroll = ttk.Scrollbar(
+            scroll_container, orient="vertical", command=self.gen_canvas.yview
+        )
         self.gen_scroll.grid(row=0, column=1, sticky="ns")
         self.gen_canvas.configure(yscrollcommand=self.gen_scroll.set)
 
@@ -1233,19 +1296,24 @@ class TransceiverUI(tk.Tk):
         self.gen_canvas.create_window((0, 0), window=self.gen_plots_frame, anchor="nw")
         self.gen_plots_frame.bind(
             "<Configure>",
-            lambda _e: self.gen_canvas.configure(scrollregion=self.gen_canvas.bbox("all")),
+            lambda _e: self.gen_canvas.configure(
+                scrollregion=self.gen_canvas.bbox("all")
+            ),
         )
         gen_frame.rowconfigure(13, weight=1)
         self.gen_canvases = []
         self.latest_data = None
         self.latest_fs = 0.0
 
-
         # ----- Presets -----
         preset_frame = ttk.LabelFrame(self, text="Presets")
         preset_frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
-        ttk.Button(preset_frame, text="Load Preset", command=self.open_load_preset_window).grid(row=0, column=0, padx=5)
-        ttk.Button(preset_frame, text="Save Preset", command=self.open_save_preset_window).grid(row=0, column=1, padx=5)
+        ttk.Button(
+            preset_frame, text="Load Preset", command=self.open_load_preset_window
+        ).grid(row=0, column=0, padx=5)
+        ttk.Button(
+            preset_frame, text="Save Preset", command=self.open_save_preset_window
+        ).grid(row=0, column=1, padx=5)
         ttk.Checkbutton(
             preset_frame,
             text="Sync Sample Rates",
@@ -1264,8 +1332,7 @@ class TransceiverUI(tk.Tk):
         self.tx_args.grid(row=0, column=1, sticky="ew")
 
         ttk.Label(tx_frame, text="Rate").grid(row=1, column=0, sticky="w")
-        self.tx_rate = SuggestEntry(tx_frame, "tx_rate",
-                                   textvariable=self.tx_rate_var)
+        self.tx_rate = SuggestEntry(tx_frame, "tx_rate", textvariable=self.tx_rate_var)
         self.tx_rate.grid(row=1, column=1, sticky="ew")
 
         ttk.Label(tx_frame, text="Freq").grid(row=2, column=0, sticky="w")
@@ -1295,7 +1362,9 @@ class TransceiverUI(tk.Tk):
         )
         self.tx_retrans.grid(row=0, column=1, padx=2)
 
-        self.tx_stop = ttk.Button(btn_frame, text="Stop", command=self.stop_transmit, state="disabled")
+        self.tx_stop = ttk.Button(
+            btn_frame, text="Stop", command=self.stop_transmit, state="disabled"
+        )
         self.tx_stop.grid(row=0, column=2, padx=2)
 
         log_frame = ttk.Frame(tx_frame)
@@ -1304,7 +1373,9 @@ class TransceiverUI(tk.Tk):
         log_frame.rowconfigure(0, weight=1)
         self.tx_log = tk.Text(log_frame, height=10, wrap="none")
         self.tx_log.grid(row=0, column=0, sticky="nsew")
-        log_scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.tx_log.yview)
+        log_scroll = ttk.Scrollbar(
+            log_frame, orient="vertical", command=self.tx_log.yview
+        )
         log_scroll.grid(row=0, column=1, sticky="ns")
         self.tx_log.configure(yscrollcommand=log_scroll.set)
         tx_frame.rowconfigure(6, weight=1)
@@ -1320,8 +1391,7 @@ class TransceiverUI(tk.Tk):
         self.rx_args.grid(row=0, column=1, sticky="ew")
 
         ttk.Label(rx_frame, text="Rate").grid(row=1, column=0, sticky="w")
-        self.rx_rate = SuggestEntry(rx_frame, "rx_rate",
-                                   textvariable=self.rx_rate_var)
+        self.rx_rate = SuggestEntry(rx_frame, "rx_rate", textvariable=self.rx_rate_var)
         self.rx_rate.grid(row=1, column=1, sticky="ew")
         self.rx_rate.entry.bind("<FocusOut>", lambda _e: self.auto_update_rx_filename())
 
@@ -1400,11 +1470,17 @@ class TransceiverUI(tk.Tk):
 
         self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
         self.rx_button.grid(row=0, column=0, padx=2)
-        self.rx_stop = ttk.Button(rx_btn_frame, text="Stop", command=self.stop_receive, state="disabled")
+        self.rx_stop = ttk.Button(
+            rx_btn_frame, text="Stop", command=self.stop_receive, state="disabled"
+        )
         self.rx_stop.grid(row=0, column=1, padx=2)
-        self.rx_save_trim = ttk.Button(rx_btn_frame, text="Save Trim", command=self.save_trimmed)
+        self.rx_save_trim = ttk.Button(
+            rx_btn_frame, text="Save Trim", command=self.save_trimmed
+        )
         self.rx_save_trim.grid(row=0, column=2, padx=2)
-        ttk.Button(rx_btn_frame, text="Compare", command=self.open_signal).grid(row=0, column=3, padx=2)
+        ttk.Button(rx_btn_frame, text="Compare", command=self.open_signal).grid(
+            row=0, column=3, padx=2
+        )
 
         rx_scroll_container = ttk.Frame(rx_frame)
         rx_scroll_container.grid(row=9, column=0, columnspan=2, sticky="nsew")
@@ -1413,7 +1489,9 @@ class TransceiverUI(tk.Tk):
 
         self.rx_canvas = tk.Canvas(rx_scroll_container)
         self.rx_canvas.grid(row=0, column=0, sticky="nsew")
-        self.rx_vscroll = ttk.Scrollbar(rx_scroll_container, orient="vertical", command=self.rx_canvas.yview)
+        self.rx_vscroll = ttk.Scrollbar(
+            rx_scroll_container, orient="vertical", command=self.rx_canvas.yview
+        )
         self.rx_vscroll.grid(row=0, column=1, sticky="ns")
         self.rx_canvas.configure(yscrollcommand=self.rx_vscroll.set)
         self.rx_canvas.bind("<Enter>", self._bind_rx_mousewheel)
@@ -1424,7 +1502,9 @@ class TransceiverUI(tk.Tk):
         self.rx_canvas.create_window((0, 0), window=self.rx_plots_frame, anchor="nw")
         self.rx_plots_frame.bind(
             "<Configure>",
-            lambda _e: self.rx_canvas.configure(scrollregion=self.rx_canvas.bbox("all")),
+            lambda _e: self.rx_canvas.configure(
+                scrollregion=self.rx_canvas.bbox("all")
+            ),
         )
         rx_frame.rowconfigure(9, weight=1)
         self.rx_canvases = []
@@ -1492,7 +1572,9 @@ class TransceiverUI(tk.Tk):
     def toggle_rate_sync(self, enable: bool) -> None:
         """Enable or disable rate synchronization between TX and RX."""
         if enable:
-            self.rate_var.set(self.fs_entry.get() or self.tx_rate.get() or self.rx_rate.get())
+            self.rate_var.set(
+                self.fs_entry.get() or self.tx_rate.get() or self.rx_rate.get()
+            )
             self.fs_var = self.rate_var
             self.tx_rate_var = self.rate_var
             self.rx_rate_var = self.rate_var
@@ -1506,7 +1588,6 @@ class TransceiverUI(tk.Tk):
         self.tx_rate.var = self.tx_rate_var
         self.rx_rate.entry.configure(textvariable=self.rx_rate_var)
         self.rx_rate.var = self.rx_rate_var
-
 
     def _display_gen_plots(self, data: np.ndarray, fs: float) -> None:
         """Render preview plots below the generation parameters."""
@@ -1528,19 +1609,19 @@ class TransceiverUI(tk.Tk):
             widget.grid(row=idx, column=0, sticky="nsew", pady=2)
             widget.bind(
                 "<Button-1>",
-                lambda _e, m=mode, d=data, s=fs: self._show_fullscreen(d, s, m, f"TX {m}")
+                lambda _e, m=mode, d=data, s=fs: self._show_fullscreen(
+                    d, s, m, f"TX {m}"
+                ),
             )
             self.gen_canvases.append(canvas)
 
         stats = _calc_stats(data, fs)
         text = _format_stats_text(stats)
-        if not hasattr(self, 'gen_stats_label'):
+        if not hasattr(self, "gen_stats_label"):
             self.gen_stats_label = ttk.Label(
-                self.gen_plots_frame,
-                justify='left',
-                anchor='w'
+                self.gen_plots_frame, justify="left", anchor="w"
             )
-        self.gen_stats_label.grid(row=len(modes), column=0, sticky='ew', pady=2)
+        self.gen_stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
         self.gen_stats_label.configure(text=text)
 
     def _display_rx_plots(self, data: np.ndarray, fs: float) -> None:
@@ -1576,19 +1657,19 @@ class TransceiverUI(tk.Tk):
             widget.grid(row=idx, column=0, sticky="nsew", pady=2)
             widget.bind(
                 "<Button-1>",
-                lambda _e, m=mode, d=data, s=fs: self._show_fullscreen(d, s, m, f"RX {m}")
+                lambda _e, m=mode, d=data, s=fs: self._show_fullscreen(
+                    d, s, m, f"RX {m}"
+                ),
             )
             self.rx_canvases.append(canvas)
 
         stats = _calc_stats(data, fs)
         text = _format_stats_text(stats)
-        if not hasattr(self, 'rx_stats_label'):
+        if not hasattr(self, "rx_stats_label"):
             self.rx_stats_label = ttk.Label(
-                self.rx_plots_frame,
-                justify='left',
-                anchor='w'
+                self.rx_plots_frame, justify="left", anchor="w"
             )
-        self.rx_stats_label.grid(row=len(modes), column=0, sticky='ew', pady=2)
+        self.rx_stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
         self.rx_stats_label.configure(text=text)
 
     def _trim_data(self, data: np.ndarray) -> np.ndarray:
@@ -1608,10 +1689,8 @@ class TransceiverUI(tk.Tk):
         state = "normal" if self.trim_var.get() else "disabled"
         self.range_slider.configure_state(state)
         try:
-            self.trim_start_label.configure(
-                text=f"{self.trim_start.get():.0f}%")
-            self.trim_end_label.configure(
-                text=f"{self.trim_end.get():.0f}%")
+            self.trim_start_label.configure(text=f"{self.trim_start.get():.0f}%")
+            self.trim_end_label.configure(text=f"{self.trim_end.get():.0f}%")
         except Exception:
             pass
         self.trim_dirty = True
@@ -1733,9 +1812,9 @@ class TransceiverUI(tk.Tk):
     def _ping_device(self, arg_str: str) -> None:
         """Send a single ping to the configured device address."""
         addr = None
-        for part in arg_str.split(','):
-            if part.strip().startswith('addr='):
-                addr = part.split('=', 1)[1].strip()
+        for part in arg_str.split(","):
+            if part.strip().startswith("addr="):
+                addr = part.split("=", 1)[1].strip()
                 break
         if not addr:
             return
@@ -1792,9 +1871,7 @@ class TransceiverUI(tk.Tk):
                         output_lines.append(line)
                         self._out_queue.put(line)
                     proc.wait()
-                    self._out_queue.put(
-                        f"[Exited with code {proc.returncode}]\n"
-                    )
+                    self._out_queue.put(f"[Exited with code {proc.returncode}]\n")
                 except Exception as exc:
                     self._out_queue.put(f"Error: {exc}\n")
                     proc = None
@@ -1806,9 +1883,7 @@ class TransceiverUI(tk.Tk):
                 if output_lines and any("No devices found" in l for l in output_lines):
                     self._ping_device(self.tx_args.get())
 
-                if self._stop_requested or (
-                    proc is not None and proc.returncode == 0
-                ):
+                if self._stop_requested or (proc is not None and proc.returncode == 0):
                     break
 
                 if attempt < max_attempts:
@@ -1877,7 +1952,9 @@ class TransceiverUI(tk.Tk):
             except Exception as exc:
                 self._out_queue.put(f"Error: {exc}\n")
 
-    def _show_fullscreen(self, data: np.ndarray, fs: float, mode: str, title: str) -> None:
+    def _show_fullscreen(
+        self, data: np.ndarray, fs: float, mode: str, title: str
+    ) -> None:
         if data is None:
             return
         pg.setConfigOption("background", "w")
@@ -1911,7 +1988,6 @@ class TransceiverUI(tk.Tk):
             pass
         pg.exec()
         self._plot_win = None
-
 
     # ----- Preset handling --------------------------------------------------
     def _get_current_params(self) -> dict:
@@ -1972,7 +2048,9 @@ class TransceiverUI(tk.Tk):
         self.os_entry.delete(0, tk.END)
         self.os_entry.insert(0, params.get("oversampling", "1"))
         self.os_enable.set(params.get("os_enabled", False))
-        self.os_entry.entry.configure(state="normal" if self.os_enable.get() else "disabled")
+        self.os_entry.entry.configure(
+            state="normal" if self.os_enable.get() else "disabled"
+        )
         self.repeat_entry.delete(0, tk.END)
         self.repeat_entry.insert(0, params.get("repeats", "1"))
         self.rrc_beta_entry.delete(0, tk.END)
@@ -2052,7 +2130,9 @@ class TransceiverUI(tk.Tk):
             self.save_preset(name)
             win.destroy()
 
-        ttk.Button(win, text="Save", command=save).grid(row=1, column=0, columnspan=2, pady=5)
+        ttk.Button(win, text="Save", command=save).grid(
+            row=1, column=0, columnspan=2, pady=5
+        )
 
     def load_preset(self, name: str) -> None:
         preset = _PRESETS.get(name)
@@ -2090,7 +2170,6 @@ class TransceiverUI(tk.Tk):
 
         ttk.Button(win, text="Delete", command=delete_selected).pack(pady=5)
 
-
     # ----- Actions -----
     def generate(self):
         try:
@@ -2106,15 +2185,32 @@ class TransceiverUI(tk.Tk):
 
             if waveform == "sinus":
                 freq = float(eval(self.f_entry.get())) if self.f_entry.get() else 0.0
-                data = generate_waveform(waveform, fs, freq, samples, oversampling=oversampling)
+                data = generate_waveform(
+                    waveform, fs, freq, samples, oversampling=oversampling
+                )
             elif waveform == "zadoffchu":
                 q = int(self.q_entry.get()) if self.q_entry.get() else 1
-                beta = float(self.rrc_beta_entry.get()) if self.rrc_beta_entry.get() else 0.25
-                span = int(self.rrc_span_entry.get()) if self.rrc_span_entry.get() else 6
+                beta = (
+                    float(self.rrc_beta_entry.get())
+                    if self.rrc_beta_entry.get()
+                    else 0.25
+                )
+                span = (
+                    int(self.rrc_span_entry.get()) if self.rrc_span_entry.get() else 6
+                )
                 if not self.rrc_enable.get():
                     span = 0
 
-                base_samples = samples
+                if oversampling > 1:
+                    if samples % oversampling != 0:
+                        messagebox.showerror(
+                            "Generate error",
+                            "Samples muss durch Oversampling teilbar sein",
+                        )
+                        return
+                    base_samples = samples // oversampling
+                else:
+                    base_samples = samples
 
                 data = generate_waveform(
                     waveform,
@@ -2170,7 +2266,7 @@ class TransceiverUI(tk.Tk):
 
     def transmit(self):
         now = time.monotonic()
-        MIN_GAP = 0.3   # Sekunden (statt 10)
+        MIN_GAP = 0.3  # Sekunden (statt 10)
 
         if now - self._last_tx_end < MIN_GAP:
             wait = MIN_GAP - (now - self._last_tx_end)
@@ -2178,13 +2274,21 @@ class TransceiverUI(tk.Tk):
             return
         self._kill_stale_tx()
         self._stop_requested = False
-        cmd = [REPLAY_BIN,
-               "--args", self.tx_args.get(),
-               "--rate", self.tx_rate.get(),
-               "--freq", self.tx_freq.get(),
-               "--gain", self.tx_gain.get(),
-               "--nsamps", "0",
-               "--file", self.tx_file.get()]
+        cmd = [
+            REPLAY_BIN,
+            "--args",
+            self.tx_args.get(),
+            "--rate",
+            self.tx_rate.get(),
+            "--freq",
+            self.tx_freq.get(),
+            "--gain",
+            self.tx_gain.get(),
+            "--nsamps",
+            "0",
+            "--file",
+            self.tx_file.get(),
+        ]
         if hasattr(self, "tx_log"):
             self.tx_log.delete("1.0", tk.END)
         self._cmd_running = True
@@ -2209,7 +2313,7 @@ class TransceiverUI(tk.Tk):
             # 1) Freundlich: SIGINT (entspricht Ctrl‑C)
             try:
                 self._proc.send_signal(signal.SIGINT)
-                self._proc.wait(timeout=3)      # <‑ Helfer macht replay->stop()
+                self._proc.wait(timeout=3)  # <‑ Helfer macht replay->stop()
             except subprocess.TimeoutExpired:
                 # 2) Immer noch aktiv? Leicht härter: SIGTERM
                 with contextlib.suppress(Exception):
@@ -2253,20 +2357,32 @@ class TransceiverUI(tk.Tk):
 
     def receive(self):
         out_file = self.rx_file.get()
-        cmd = [sys.executable, "-m", "transceiver.helpers.rx_to_file",
-               "-a", self.rx_args.get(),
-               "-f", self.rx_freq.get(),
-               "-r", self.rx_rate.get(),
-               "-d", self.rx_dur.get(),
-               "-g", self.rx_gain.get(),
-               "--dram",
-               "--output-file", out_file]
+        cmd = [
+            sys.executable,
+            "-m",
+            "transceiver.helpers.rx_to_file",
+            "-a",
+            self.rx_args.get(),
+            "-f",
+            self.rx_freq.get(),
+            "-r",
+            self.rx_rate.get(),
+            "-d",
+            self.rx_dur.get(),
+            "-g",
+            self.rx_gain.get(),
+            "--dram",
+            "--output-file",
+            out_file,
+        ]
         self._cmd_running = True
         if hasattr(self, "rx_stop"):
             self.rx_stop.config(state="normal")
         if hasattr(self, "rx_button"):
             self.rx_button.config(state="disabled")
-        threading.Thread(target=self._run_rx_cmd, args=(cmd, out_file), daemon=True).start()
+        threading.Thread(
+            target=self._run_rx_cmd, args=(cmd, out_file), daemon=True
+        ).start()
         self._process_queue()
 
     def on_close(self) -> None:

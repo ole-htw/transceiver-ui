@@ -90,9 +90,9 @@ def generate_filename(args) -> Path:
             parts.append(f"os{args.oversampling}")
     elif args.waveform == "chirp":
         parts.append(f"{_pretty(args.f0)}_{_pretty(args.f1)}")
-    # The filename should reflect the actual output length.  With oversampling
-    # enabled the sequence becomes longer by ``args.oversampling``.
-    parts.append(f"N{args.samples * args.oversampling}")
+    # The filename should reflect the actual output length which equals
+    # ``args.samples`` even when oversampling is enabled.
+    parts.append(f"N{args.samples}")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     name = "_".join(parts) + f"_{stamp}.bin"
     return Path(args.output_dir) / name
@@ -283,7 +283,7 @@ def main() -> None:
         "--oversampling",
         type=int,
         default=1,
-        help="Oversampling-Faktor nur f\xC3\xBCr Zadoff-Chu (Standard: 1)",
+        help="Oversampling-Faktor nur f\xc3\xbcr Zadoff-Chu (Standard: 1)",
     )
 
     # Neue Option: Null-Sequenz weglassen
@@ -308,26 +308,32 @@ def main() -> None:
         args.f1 = args.fs / 2 - 1  # Maximal fast bis Nyquist
 
     N_waveform = args.samples
+    N_output = N_waveform
 
     # Blockgröße ggf. an Primzahl anpassen (nur ZC)
     if args.waveform == "zadoffchu":
-        prime = find_prime_near(N_waveform, search_up=True)
-        if prime != N_waveform:
-            print(f"Info: samples={N_waveform} angepasst auf Primzahl {prime} für ZC.")
-            N_waveform = prime
-
-    N_output = N_waveform * args.oversampling
+        if args.oversampling > 1:
+            if args.samples % args.oversampling != 0:
+                raise ValueError("samples muss ein Vielfaches von oversampling sein")
+            N_waveform = args.samples // args.oversampling
+            N_output = args.samples
+        else:
+            prime = find_prime_near(N_waveform, search_up=True)
+            if prime != N_waveform:
+                print(
+                    f"Info: samples={N_waveform} angepasst auf Primzahl {prime} für ZC."
+                )
+                N_waveform = prime
+            N_output = N_waveform
 
     append_zeros = not args.no_zeros
 
     # ------------------------------------------------------------------
     if append_zeros:
-        print(
-            f"Erzeuge {N_output} Samples {args.waveform} + {N_output} Null-Samples"
-        )
+        print(f"Erzeuge {N_output} Samples {args.waveform} + {N_output} Null-Samples")
     else:
         print(f"Erzeuge {N_output} Samples {args.waveform} (ohne Null-Samples)")
-    if args.oversampling != 1:
+    if args.waveform == "zadoffchu" and args.oversampling != 1:
         print(f"  Oversampling: {args.oversampling}×")
 
     if args.waveform == "chirp":
