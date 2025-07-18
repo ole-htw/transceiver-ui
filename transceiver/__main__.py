@@ -812,7 +812,10 @@ def _gen_tx_filename(app) -> str:
         parts.append(f"{_pretty(f0)}_{_pretty(f1)}")
 
     parts.append(f"fs{_pretty(fs)}")
-    parts.append(f"N{samples * oversampling}")
+    # ``samples`` already represents the number of output samples. Using
+    # ``samples * oversampling`` would misrepresent the actual length when
+    # oversampling is enabled.
+    parts.append(f"N{samples}")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     name = "_".join(parts) + f"_{stamp}.bin"
     return str(Path("signals/tx") / name)
