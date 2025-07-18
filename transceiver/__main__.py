@@ -786,6 +786,8 @@ def _gen_tx_filename(app) -> str:
         oversampling = int(app.os_entry.get())
     except Exception:
         oversampling = 1
+    if not getattr(app, "os_enable", tk.BooleanVar(value=False)).get():
+        oversampling = 1
 
     if w == "sinus":
         try:
@@ -1083,6 +1085,7 @@ class TransceiverUI(tk.Tk):
         gen_frame = ttk.LabelFrame(self, text="Signal Generation")
         gen_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
         gen_frame.columnconfigure(1, weight=1)
+        gen_frame.columnconfigure(2, weight=0)
 
         ttk.Label(gen_frame, text="Waveform").grid(row=0, column=0, sticky="w")
         self.wave_var = tk.StringVar(value="sinus")
@@ -1136,6 +1139,15 @@ class TransceiverUI(tk.Tk):
         self.os_entry = SuggestEntry(gen_frame, "os_entry")
         self.os_entry.insert(0, "1")
         self.os_entry.grid(row=5, column=1, sticky="ew")
+        self.os_enable = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            gen_frame,
+            variable=self.os_enable,
+            command=lambda: self.os_entry.entry.configure(
+                state="normal" if self.os_enable.get() else "disabled"
+            ),
+        ).grid(row=5, column=2, sticky="w")
+        self.os_entry.entry.configure(state="disabled")
 
         ttk.Label(gen_frame, text="Repeats").grid(row=6, column=0, sticky="w")
         self.repeat_entry = SuggestEntry(gen_frame, "repeat_entry")
@@ -1146,13 +1158,29 @@ class TransceiverUI(tk.Tk):
         self.rrc_beta_label.grid(row=7, column=0, sticky="w")
         self.rrc_beta_entry = SuggestEntry(gen_frame, "rrc_beta_entry")
         self.rrc_beta_entry.insert(0, "0.25")
-        self.rrc_beta_entry.grid(row=6, column=1, sticky="ew")
-
+        self.rrc_beta_entry.grid(row=7, column=1, sticky="ew")
+        
         self.rrc_span_label = ttk.Label(gen_frame, text="RRC Span")
         self.rrc_span_label.grid(row=8, column=0, sticky="w")
         self.rrc_span_entry = SuggestEntry(gen_frame, "rrc_span_entry")
         self.rrc_span_entry.insert(0, "6")
         self.rrc_span_entry.grid(row=8, column=1, sticky="ew")
+        self.rrc_enable = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            gen_frame,
+            variable=self.rrc_enable,
+            command=lambda: [
+                self.rrc_beta_entry.entry.configure(
+                    state="normal" if self.rrc_enable.get() else "disabled"
+                ),
+                self.rrc_span_entry.entry.configure(
+                    state="normal" if self.rrc_enable.get() else "disabled"
+                ),
+            ],
+        ).grid(row=7, column=2, sticky="w", rowspan=2)
+        if not self.rrc_enable.get():
+            self.rrc_beta_entry.entry.configure(state="disabled")
+            self.rrc_span_entry.entry.configure(state="disabled")
 
         ttk.Label(gen_frame, text="Zeros").grid(row=9, column=0, sticky="w")
         self.zeros_var = tk.StringVar(value="none")
@@ -1434,8 +1462,9 @@ class TransceiverUI(tk.Tk):
             self.rrc_beta_entry.grid(row=7, column=1, sticky="ew")
             self.rrc_span_label.grid(row=8, column=0, sticky="w")
             self.rrc_span_entry.grid(row=8, column=1, sticky="ew")
-            self.rrc_beta_entry.entry.configure(state="normal")
-            self.rrc_span_entry.entry.configure(state="normal")
+            state = "normal" if self.rrc_enable.get() else "disabled"
+            self.rrc_beta_entry.entry.configure(state=state)
+            self.rrc_span_entry.entry.configure(state=state)
         elif w == "chirp":
             self.f_label.configure(text="f0")
             self.f_label.grid(row=2, column=0, sticky="w")
@@ -1892,9 +1921,12 @@ class TransceiverUI(tk.Tk):
             "f1": self.f1_entry.get(),
             "q": self.q_entry.get(),
             "samples": self.samples_entry.get(),
+            "oversampling": self.os_entry.get(),
+            "os_enabled": self.os_enable.get(),
             "repeats": self.repeat_entry.get(),
             "rrc_beta": self.rrc_beta_entry.get(),
             "rrc_span": self.rrc_span_entry.get(),
+            "rrc_enabled": self.rrc_enable.get(),
             "zeros": self.zeros_var.get(),
             "amplitude": self.amp_entry.get(),
             "file": self.file_entry.get(),
@@ -1936,12 +1968,20 @@ class TransceiverUI(tk.Tk):
         self.q_entry.insert(0, params.get("q", ""))
         self.samples_entry.delete(0, tk.END)
         self.samples_entry.insert(0, params.get("samples", ""))
+        self.os_entry.delete(0, tk.END)
+        self.os_entry.insert(0, params.get("oversampling", "1"))
+        self.os_enable.set(params.get("os_enabled", False))
+        self.os_entry.entry.configure(state="normal" if self.os_enable.get() else "disabled")
         self.repeat_entry.delete(0, tk.END)
         self.repeat_entry.insert(0, params.get("repeats", "1"))
         self.rrc_beta_entry.delete(0, tk.END)
         self.rrc_beta_entry.insert(0, params.get("rrc_beta", "0.25"))
         self.rrc_span_entry.delete(0, tk.END)
         self.rrc_span_entry.insert(0, params.get("rrc_span", "6"))
+        self.rrc_enable.set(params.get("rrc_enabled", True))
+        state = "normal" if self.rrc_enable.get() else "disabled"
+        self.rrc_beta_entry.entry.configure(state=state)
+        self.rrc_span_entry.entry.configure(state=state)
         self.zeros_var.set(params.get("zeros", "none"))
         self.amp_entry.delete(0, tk.END)
         self.amp_entry.insert(0, params.get("amplitude", ""))
@@ -2056,6 +2096,8 @@ class TransceiverUI(tk.Tk):
             fs = float(eval(self.fs_entry.get()))
             samples = int(self.samples_entry.get())
             oversampling = int(self.os_entry.get()) if self.os_entry.get() else 1
+            if not self.os_enable.get():
+                oversampling = 1
             repeats = int(self.repeat_entry.get()) if self.repeat_entry.get() else 1
             zeros_mode = self.zeros_var.get()
             amp = float(self.amp_entry.get())
@@ -2068,6 +2110,8 @@ class TransceiverUI(tk.Tk):
                 q = int(self.q_entry.get()) if self.q_entry.get() else 1
                 beta = float(self.rrc_beta_entry.get()) if self.rrc_beta_entry.get() else 0.25
                 span = int(self.rrc_span_entry.get()) if self.rrc_span_entry.get() else 6
+                if not self.rrc_enable.get():
+                    span = 0
 
                 if oversampling > 1:
                     if samples % oversampling != 0:
