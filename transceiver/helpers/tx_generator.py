@@ -89,7 +89,9 @@ def generate_filename(args) -> Path:
             parts.append(f"os{args.oversampling}")
     elif args.waveform == "chirp":
         parts.append(f"{_pretty(args.f0)}_{_pretty(args.f1)}")
-    parts.append(f"N{args.samples * getattr(args, 'oversampling', 1)}")
+    # The filename should reflect the actual output length which equals
+    # ``args.samples`` even when oversampling is enabled.
+    parts.append(f"N{args.samples}")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     name = "_".join(parts) + f"_{stamp}.bin"
     return Path(args.output_dir) / name
