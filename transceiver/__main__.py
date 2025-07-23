@@ -1045,10 +1045,12 @@ def _plot_on_pg(
     mode: str,
     title: str,
     ref_data: np.ndarray | None = None,
+    downsample: bool = True,
 ) -> None:
     """Helper to draw the selected visualization on a PyQtGraph PlotItem."""
-    data, step = _reduce_data(data)
-    fs /= step
+    if downsample:
+        data, step = _reduce_data(data)
+        fs /= step
     if mode == "Signal":
         plot.addLegend()
         plot.plot(np.real(data), pen=pg.mkPen("b"), name="Real")
@@ -1084,8 +1086,9 @@ def _plot_on_pg(
     elif mode == "Crosscorr":
         if ref_data is None or ref_data.size == 0:
             return
-        data, ref_data, step_r = _reduce_pair(data, ref_data)
-        fs /= step_r
+        if downsample:
+            data, ref_data, step_r = _reduce_pair(data, ref_data)
+            fs /= step_r
         n = min(len(data), len(ref_data))
         cc = _xcorr_fft(data[:n], ref_data[:n])
         lags = np.arange(-n + 1, n)
@@ -1562,7 +1565,7 @@ class TransceiverUI(tk.Tk):
 
         rx_btn_frame = ttk.Frame(rx_frame)
         rx_btn_frame.grid(row=10, column=0, columnspan=2, pady=5)
-        rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
+        rx_btn_frame.columnconfigure((0, 1, 2, 3, 4), weight=1)
 
         self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
         self.rx_button.grid(row=0, column=0, padx=2)
@@ -1576,6 +1579,9 @@ class TransceiverUI(tk.Tk):
         self.rx_save_trim.grid(row=0, column=2, padx=2)
         ttk.Button(rx_btn_frame, text="Compare", command=self.open_signal).grid(
             row=0, column=3, padx=2
+        )
+        ttk.Button(rx_btn_frame, text="Full XCorr", command=self.full_crosscorr).grid(
+            row=0, column=4, padx=2
         )
 
         rx_scroll_container = ttk.Frame(rx_frame)
@@ -1821,6 +1827,22 @@ class TransceiverUI(tk.Tk):
         """Open a window to compare up to four signals."""
         CompareWindow(self)
 
+    def full_crosscorr(self) -> None:
+        """Show full resolution cross-correlation of RX and TX data."""
+        if not hasattr(self, "latest_data") or self.latest_data.size == 0:
+            messagebox.showinfo("Full Crosscorr", "No RX data available")
+            return
+        if not hasattr(self, "tx_data") or self.tx_data.size == 0:
+            messagebox.showinfo("Full Crosscorr", "No TX data available")
+            return
+        self._show_fullscreen(
+            self.latest_data,
+            self.latest_fs,
+            "Crosscorr",
+            "RX Crosscorr (Full)",
+            downsample=False,
+        )
+
     def _open_console(self, title: str) -> None:
         if self.console is None or not self.console.winfo_exists():
             self.console = ConsoleWindow(self, title)
@@ -2049,7 +2071,12 @@ class TransceiverUI(tk.Tk):
                 self._out_queue.put(f"Error: {exc}\n")
 
     def _show_fullscreen(
-        self, data: np.ndarray, fs: float, mode: str, title: str
+        self,
+        data: np.ndarray,
+        fs: float,
+        mode: str,
+        title: str,
+        downsample: bool = True,
     ) -> None:
         if data is None:
             return
@@ -2072,6 +2099,7 @@ class TransceiverUI(tk.Tk):
             mode,
             title,
             getattr(self, "tx_data", None),
+            downsample=downsample,
         )
         try:
             win.showMaximized()
