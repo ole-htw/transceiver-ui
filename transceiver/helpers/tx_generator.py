@@ -185,7 +185,7 @@ def generate_waveform(
 
     signal = signal.astype(np.complex64)
     if rrc_span > 0:
-        h = rrc_coeffs(rrc_beta, rrc_span)
+        h = rrc_coeffs(rrc_beta, rrc_span, sps=oversampling)
         signal = np.convolve(signal, h, mode="same")
     return signal.astype(np.complex64)
 
@@ -310,13 +310,13 @@ def main() -> None:
     N_waveform = args.samples
     N_output = N_waveform
 
-    # Blockgröße ggf. an Primzahl anpassen (nur ZC)
+
     if args.waveform == "zadoffchu":
         if args.oversampling > 1:
-            if args.samples % args.oversampling != 0:
-                raise ValueError("samples muss ein Vielfaches von oversampling sein")
-            N_waveform = args.samples // args.oversampling
-            N_output = args.samples
+            # Anzahl Grundsymbole unverändert …
+            N_waveform = args.samples
+            # … und Gesamtlänge vergrößern
+            N_output   = N_waveform * args.oversampling
         else:
             prime = find_prime_near(N_waveform, search_up=True)
             if prime != N_waveform:
