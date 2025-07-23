@@ -391,7 +391,7 @@ class SignalViewer(tk.Toplevel):
             )
             self.canvases.append(canvas)
 
-        stats = _calc_stats(data, fs)
+        stats = _calc_stats(data, fs, self.tx_data)
         text = _format_stats_text(stats)
         self.stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
         self.stats_label.configure(text=text)
@@ -556,7 +556,7 @@ class SignalColumn(ttk.Frame):
             )
             self.canvases.append(canvas)
 
-        stats = _calc_stats(data, fs)
+        stats = _calc_stats(data, fs, tx_data)
         text = _format_stats_text(stats)
         self.stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
         self.stats_label.configure(text=text)
@@ -769,6 +769,37 @@ def _autocorr_fft(x: np.ndarray) -> np.ndarray:
     return _xcorr_fft(x, x)
 
 
+def _find_los_echo(cc: np.ndarray) -> tuple[int | None, int | None]:
+    """Return indices of the LOS peak and the first echo in ``cc``.
+
+    Parameters
+    ----------
+    cc : np.ndarray
+        Complex cross-correlation data.
+
+    Returns
+    -------
+    tuple[int | None, int | None]
+        Index of the LOS peak and the first echo. ``None`` if not found.
+    """
+
+    mag = np.abs(cc)
+    if mag.size == 0:
+        return None, None
+
+    los = int(np.argmax(mag))
+    echo = None
+    for i in range(los + 1, len(mag) - 1):
+        if mag[i] >= mag[i - 1] and mag[i] >= mag[i + 1]:
+            echo = int(i)
+            break
+
+    if echo is None and los + 1 < len(mag):
+        echo = int(np.argmax(mag[los + 1:]) + los + 1)
+
+    return los, echo
+
+
 def _pretty(val: float) -> str:
     """Shorten numeric values for filenames."""
     abs_v = abs(val)
@@ -862,13 +893,21 @@ def _gen_rx_filename(app) -> str:
     return str(Path("signals/rx") / name)
 
 
-def _calc_stats(data: np.ndarray, fs: float) -> dict:
-    """Return basic signal statistics for display."""
+def _calc_stats(
+    data: np.ndarray, fs: float, ref_data: np.ndarray | None = None
+) -> dict:
+    """Return basic signal statistics for display.
+
+    If ``ref_data`` is given, the delay between LOS peak and the first
+    echo is added as ``echo_delay`` (in samples).
+    """
+
     stats = {
         "f_low": 0.0,
         "f_high": 0.0,
         "bw": 0.0,
         "amp": 0.0,
+        "echo_delay": None,
     }
 
     if data.size == 0 or fs <= 0:
@@ -892,17 +931,28 @@ def _calc_stats(data: np.ndarray, fs: float) -> dict:
         stats["f_high"] = float(freqs[mask].max())
         stats["bw"] = stats["f_high"] - stats["f_low"]
 
+    if ref_data is not None and ref_data.size and data.size:
+        n = min(len(data), len(ref_data))
+        cc = _xcorr_fft(data[:n], ref_data[:n])
+        lags = np.arange(-n + 1, n)
+        los_idx, echo_idx = _find_los_echo(cc)
+        if los_idx is not None and echo_idx is not None:
+            stats["echo_delay"] = int(lags[echo_idx] - lags[los_idx])
+
     return stats
 
 
 def _format_stats_text(stats: dict) -> str:
     """Return a formatted multi-line string for signal statistics."""
-    return (
-        f"fmin: {_format_hz(stats['f_low'])}\n"
-        f"fmax: {_format_hz(stats['f_high'])}\n"
-        f"max Amp: {stats['amp']:.1f}\n"
-        f"BW (3dB): {_format_hz(stats['bw'])}"
-    )
+    lines = [
+        f"fmin: {_format_hz(stats['f_low'])}",
+        f"fmax: {_format_hz(stats['f_high'])}",
+        f"max Amp: {stats['amp']:.1f}",
+        f"BW (3dB): {_format_hz(stats['bw'])}",
+    ]
+    if stats.get("echo_delay") is not None:
+        lines.append(f"LOS-Echo: {stats['echo_delay']} samp")
+    return "\n".join(lines)
 
 
 def visualize(
@@ -971,9 +1021,15 @@ def visualize(
         n = min(len(data), len(ref_data))
         cc = _xcorr_fft(data[:n], ref_data[:n])
         lags = np.arange(-n + 1, n)
-        win = pg.plot(lags, np.abs(cc), pen="b", title=f"Crosscorr. with TX: {title}")
+        mag = np.abs(cc)
+        win = pg.plot(lags, mag, pen="b", title=f"Crosscorr. with TX: {title}")
         win.setLabel("bottom", "Lag")
         win.setLabel("left", "Magnitude")
+        los_idx, echo_idx = _find_los_echo(cc)
+        if los_idx is not None:
+            win.plot([lags[los_idx]], [mag[los_idx]], pen=None, symbol="o", symbolBrush="r")
+        if echo_idx is not None:
+            win.plot([lags[echo_idx]], [mag[echo_idx]], pen=None, symbol="o", symbolBrush="g")
         win.showGrid(x=True, y=True)
     else:
         messagebox.showerror("Error", f"Unknown mode {mode}")
@@ -1033,7 +1089,13 @@ def _plot_on_pg(
         n = min(len(data), len(ref_data))
         cc = _xcorr_fft(data[:n], ref_data[:n])
         lags = np.arange(-n + 1, n)
-        plot.plot(lags, np.abs(cc), pen="b")
+        mag = np.abs(cc)
+        plot.plot(lags, mag, pen="b")
+        los_idx, echo_idx = _find_los_echo(cc)
+        if los_idx is not None:
+            plot.plot([lags[los_idx]], [mag[los_idx]], pen=None, symbol="o", symbolBrush="r")
+        if echo_idx is not None:
+            plot.plot([lags[echo_idx]], [mag[echo_idx]], pen=None, symbol="o", symbolBrush="g")
         plot.setTitle(f"Crosscorr. with TX: {title}")
         plot.setLabel("bottom", "Lag")
         plot.setLabel("left", "Magnitude")
@@ -1087,7 +1149,13 @@ def _plot_on_mpl(
         n = min(len(data), len(ref_data))
         cc = _xcorr_fft(data[:n], ref_data[:n])
         lags = np.arange(-n + 1, n)
-        ax.plot(lags, np.abs(cc), "b")
+        mag = np.abs(cc)
+        ax.plot(lags, mag, "b")
+        los_idx, echo_idx = _find_los_echo(cc)
+        if los_idx is not None:
+            ax.plot(lags[los_idx], mag[los_idx], "ro")
+        if echo_idx is not None:
+            ax.plot(lags[echo_idx], mag[echo_idx], "go")
         ax.set_xlabel("Lag")
         ax.set_ylabel("Magnitude")
     ax.set_title(title)
@@ -1691,7 +1759,7 @@ class TransceiverUI(tk.Tk):
             )
             self.rx_canvases.append(canvas)
 
-        stats = _calc_stats(data, fs)
+        stats = _calc_stats(data, fs, self.tx_data)
         text = _format_stats_text(stats)
         if not hasattr(self, "rx_stats_label"):
             self.rx_stats_label = ttk.Label(

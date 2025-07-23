@@ -32,6 +32,22 @@ def read_signal_file(filename):
     print(f"Datei {filename} eingelesen: {len(signal)} komplexe Samples.")
     return signal
 
+
+def find_los_echo(cc: np.ndarray) -> tuple[int | None, int | None]:
+    """Return indices of the LOS peak and the first echo."""
+    mag = np.abs(cc)
+    if mag.size == 0:
+        return None, None
+    los = int(np.argmax(mag))
+    echo = None
+    for i in range(los + 1, len(mag) - 1):
+        if mag[i] >= mag[i - 1] and mag[i] >= mag[i + 1]:
+            echo = int(i)
+            break
+    if echo is None and los + 1 < len(mag):
+        echo = int(np.argmax(mag[los + 1:]) + los + 1)
+    return los, echo
+
 def main():
     parser = argparse.ArgumentParser(
         description="Berechnet und visualisiert die Kreuzkorrelation zwischen zwei Signalen aus Binärdateien. "
@@ -85,7 +101,12 @@ def main():
     # Der Output hat die Länge N + N - 1 = 2*N - 1
     # Lags reichen von -(N-1) bis +(N-1)
     lags = np.arange(-(N - 1), N)
-    zero_lag_index = N - 1 # Index des Lags 0
+    zero_lag_index = N - 1  # Index des Lags 0
+
+    los_idx_full, echo_idx_full = find_los_echo(cross_corr)
+    if los_idx_full is not None and echo_idx_full is not None:
+        delay_samples = int(lags[echo_idx_full] - lags[los_idx_full])
+        print(f"LOS-Echo Abstand: {delay_samples} Samples")
 
     # --- Daten für den Plot vorbereiten ---
     plot_title = f'Kreuzkorrelation (gekürzt auf {N} Samples)'
@@ -114,6 +135,17 @@ def main():
         step = int(np.ceil(plot_data.nbytes / 1_000_000))
         plot_data = plot_data[::step]
         lags = lags[::step]
+        if los_idx_full is not None:
+            los_idx = los_idx_full // step
+        else:
+            los_idx = None
+        if echo_idx_full is not None:
+            echo_idx = echo_idx_full // step
+        else:
+            echo_idx = None
+    else:
+        los_idx = los_idx_full
+        echo_idx = echo_idx_full
 
     # --- Plotten mit PyQtGraph ---
     pg.setConfigOption("background", "w")
@@ -126,6 +158,10 @@ def main():
     win.setWindowTitle(f"Kreuzkorrelation - {fname1_base} vs {fname2_base}")
     win.setLabel("bottom", "Lag / Verschiebung von Signal 2 zu Signal 1 [Samples]")
     win.setLabel("left", ylabel_text)
+    if los_idx is not None:
+        win.plot([lags[los_idx]], [plot_data[los_idx]], pen=None, symbol="o", symbolBrush="r")
+    if echo_idx is not None:
+        win.plot([lags[echo_idx]], [plot_data[echo_idx]], pen=None, symbol="o", symbolBrush="g")
     win.showGrid(x=True, y=True)
     win.setTitle(f"{plot_title}: {fname1_base} vs {fname2_base}{plot_title_suffix}")
 
