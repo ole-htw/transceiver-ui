@@ -50,6 +50,23 @@ def parse_args():
         action="store_true",
         help="If given, will attempt to stream via DRAM",
     )
+    parser.add_argument(
+        "--rrc",
+        action="store_true",
+        help="Apply Root-Raised-Cosine filtering to the received signal",
+    )
+    parser.add_argument(
+        "--rrc-beta",
+        type=float,
+        default=0.25,
+        help="RRC roll-off factor (default: 0.25)",
+    )
+    parser.add_argument(
+        "--rrc-span",
+        type=int,
+        default=6,
+        help="RRC filter span in symbols (default: 6; 0 disables)",
+    )
 
     args = parser.parse_args()
 
@@ -64,6 +81,33 @@ def parse_args():
     return args
 
 
+def rrc_coeffs(beta: float, span: int, sps: int = 1) -> np.ndarray:
+    """Return Root-Raised-Cosine filter coefficients."""
+    N = span * sps
+    t = np.arange(-N, N + 1) / sps
+    h = np.zeros_like(t, dtype=np.float64)
+    for i, ti in enumerate(t):
+        if abs(ti) < 1e-10:
+            h[i] = 1.0 - beta + 4 * beta / np.pi
+        elif beta > 0 and abs(abs(ti) - 1 / (4 * beta)) < 1e-10:
+            h[i] = (
+                beta
+                / np.sqrt(2)
+                * (
+                    (1 + 2 / np.pi) * np.sin(np.pi / (4 * beta))
+                    + (1 - 2 / np.pi) * np.cos(np.pi / (4 * beta))
+                )
+            )
+        else:
+            num = np.sin(np.pi * ti * (1 - beta)) + 4 * beta * ti * np.cos(
+                np.pi * ti * (1 + beta)
+            )
+            den = np.pi * ti * (1 - (4 * beta * ti) ** 2)
+            h[i] = num / den
+    h /= np.sqrt(np.sum(h**2))
+    return h.astype(np.float32)
+
+
 def multi_usrp_rx(args):
     """
     multi_usrp based RX example
@@ -75,6 +119,12 @@ def multi_usrp_rx(args):
     samps = usrp.recv_num_samps(
         num_samps, args.freq, args.rate, args.channels, args.gain
     )
+    if args.rrc and args.rrc_span > 0:
+        h = rrc_coeffs(args.rrc_beta, args.rrc_span)
+        if samps.ndim == 1:
+            samps = np.convolve(samps, h, mode="same")
+        else:
+            samps = np.stack([np.convolve(ch, h, mode="same") for ch in samps])
     with open(args.output_file, "wb") as out_file:
         if args.numpy:
             np.save(out_file, samps, allow_pickle=False, fix_imports=False)
@@ -131,6 +181,10 @@ def rfnoc_dram_rx(args):
     dram.issue_stream_cmd(stream_cmd)
     rx_md = uhd.types.RXMetadata()
     dram.recv(data, rx_md)
+    if args.rrc and args.rrc_span > 0:
+        h = rrc_coeffs(args.rrc_beta, args.rrc_span)
+        for idx in range(data.shape[0]):
+            data[idx] = np.convolve(data[idx], h, mode="same")
     with open(args.output_file, "wb") as out_file:
         if args.numpy:
             np.save(out_file, data, allow_pickle=False, fix_imports=False)

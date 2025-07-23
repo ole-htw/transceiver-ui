@@ -1413,18 +1413,46 @@ class TransceiverUI(tk.Tk):
         self.rx_gain.grid(row=4, column=1, sticky="ew")
         self.rx_gain.entry.bind("<FocusOut>", lambda _e: self.auto_update_rx_filename())
 
-        ttk.Label(rx_frame, text="Output").grid(row=5, column=0, sticky="w")
+        self.rx_rrc_beta_label = ttk.Label(rx_frame, text="RRC β")
+        self.rx_rrc_beta_label.grid(row=5, column=0, sticky="w")
+        self.rx_rrc_beta_entry = SuggestEntry(rx_frame, "rx_rrc_beta")
+        self.rx_rrc_beta_entry.insert(0, "0.25")
+        self.rx_rrc_beta_entry.grid(row=5, column=1, sticky="ew")
+
+        self.rx_rrc_span_label = ttk.Label(rx_frame, text="RRC Span")
+        self.rx_rrc_span_label.grid(row=6, column=0, sticky="w")
+        self.rx_rrc_span_entry = SuggestEntry(rx_frame, "rx_rrc_span")
+        self.rx_rrc_span_entry.insert(0, "6")
+        self.rx_rrc_span_entry.grid(row=6, column=1, sticky="ew")
+        self.rx_rrc_enable = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            rx_frame,
+            variable=self.rx_rrc_enable,
+            command=lambda: [
+                self.rx_rrc_beta_entry.entry.configure(
+                    state="normal" if self.rx_rrc_enable.get() else "disabled"
+                ),
+                self.rx_rrc_span_entry.entry.configure(
+                    state="normal" if self.rx_rrc_enable.get() else "disabled"
+                ),
+            ],
+        ).grid(row=5, column=2, sticky="w", rowspan=2)
+        if not self.rx_rrc_enable.get():
+            self.rx_rrc_beta_entry.entry.configure(state="disabled")
+            self.rx_rrc_span_entry.entry.configure(state="disabled")
+
+        ttk.Label(rx_frame, text="Output").grid(row=7, column=0, sticky="w")
         self.rx_file = SuggestEntry(rx_frame, "rx_file")
         self.rx_file.insert(0, "rx_signal.bin")
-        self.rx_file.grid(row=5, column=1, sticky="ew")
+        self.rx_file.grid(row=7, column=1, sticky="ew")
 
-        ttk.Label(rx_frame, text="View").grid(row=6, column=0, sticky="w")
+        ttk.Label(rx_frame, text="View").grid(row=8, column=0, sticky="w")
         ttk.Combobox(
             rx_frame,
             textvariable=self.rx_view,
             values=["Signal", "Freq", "InstantFreq", "Crosscorr"],
             width=12,
-        ).grid(row=6, column=1)
+        ).grid(row=8, column=1)
 
         # --- Trim controls -------------------------------------------------
         self.trim_var = tk.BooleanVar(value=False)
@@ -1433,7 +1461,7 @@ class TransceiverUI(tk.Tk):
         self.trim_dirty = False
 
         trim_frame = ttk.Frame(rx_frame)
-        trim_frame.grid(row=7, column=0, columnspan=2, sticky="ew")
+        trim_frame.grid(row=9, column=0, columnspan=2, sticky="ew")
         trim_frame.columnconfigure(1, weight=1)
 
         ttk.Checkbutton(
@@ -1465,7 +1493,7 @@ class TransceiverUI(tk.Tk):
         self.trim_end_label.grid(row=1, column=2, sticky="e")
 
         rx_btn_frame = ttk.Frame(rx_frame)
-        rx_btn_frame.grid(row=8, column=0, columnspan=2, pady=5)
+        rx_btn_frame.grid(row=10, column=0, columnspan=2, pady=5)
         rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
         self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
@@ -1483,7 +1511,7 @@ class TransceiverUI(tk.Tk):
         )
 
         rx_scroll_container = ttk.Frame(rx_frame)
-        rx_scroll_container.grid(row=9, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.grid(row=11, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
@@ -1506,7 +1534,7 @@ class TransceiverUI(tk.Tk):
                 scrollregion=self.rx_canvas.bbox("all")
             ),
         )
-        rx_frame.rowconfigure(9, weight=1)
+        rx_frame.rowconfigure(11, weight=1)
         self.rx_canvases = []
         self.update_waveform_fields()
         self.auto_update_tx_filename()
@@ -2018,6 +2046,9 @@ class TransceiverUI(tk.Tk):
             "rx_freq": self.rx_freq.get(),
             "rx_dur": self.rx_dur.get(),
             "rx_gain": self.rx_gain.get(),
+            "rx_rrc_beta": self.rx_rrc_beta_entry.get(),
+            "rx_rrc_span": self.rx_rrc_span_entry.get(),
+            "rx_rrc_enabled": self.rx_rrc_enable.get(),
             "rx_file": self.rx_file.get(),
             "rx_view": self.rx_view.get(),
             "trim": self.trim_var.get(),
@@ -2086,6 +2117,14 @@ class TransceiverUI(tk.Tk):
         self.rx_dur.insert(0, params.get("rx_dur", ""))
         self.rx_gain.delete(0, tk.END)
         self.rx_gain.insert(0, params.get("rx_gain", ""))
+        self.rx_rrc_beta_entry.delete(0, tk.END)
+        self.rx_rrc_beta_entry.insert(0, params.get("rx_rrc_beta", "0.25"))
+        self.rx_rrc_span_entry.delete(0, tk.END)
+        self.rx_rrc_span_entry.insert(0, params.get("rx_rrc_span", "6"))
+        self.rx_rrc_enable.set(params.get("rx_rrc_enabled", True))
+        state = "normal" if self.rx_rrc_enable.get() else "disabled"
+        self.rx_rrc_beta_entry.entry.configure(state=state)
+        self.rx_rrc_span_entry.entry.configure(state=state)
         self.rx_file.delete(0, tk.END)
         self.rx_file.insert(0, params.get("rx_file", ""))
         self.rx_view.set(params.get("rx_view", "Signal"))
@@ -2375,6 +2414,14 @@ class TransceiverUI(tk.Tk):
             "--output-file",
             out_file,
         ]
+        if self.rx_rrc_enable.get():
+            cmd += [
+                "--rrc",
+                "--rrc-beta",
+                self.rx_rrc_beta_entry.get(),
+                "--rrc-span",
+                self.rx_rrc_span_entry.get(),
+            ]
         self._cmd_running = True
         if hasattr(self, "rx_stop"):
             self.rx_stop.config(state="normal")
