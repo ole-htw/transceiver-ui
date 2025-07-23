@@ -1562,7 +1562,7 @@ class TransceiverUI(tk.Tk):
 
         rx_btn_frame = ttk.Frame(rx_frame)
         rx_btn_frame.grid(row=10, column=0, columnspan=2, pady=5)
-        rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
+        rx_btn_frame.columnconfigure((0, 1, 2, 3, 4), weight=1)
 
         self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
         self.rx_button.grid(row=0, column=0, padx=2)
@@ -1577,6 +1577,11 @@ class TransceiverUI(tk.Tk):
         ttk.Button(rx_btn_frame, text="Compare", command=self.open_signal).grid(
             row=0, column=3, padx=2
         )
+        ttk.Button(
+            rx_btn_frame,
+            text="XCorr Full",
+            command=self.crosscorr_full,
+        ).grid(row=0, column=4, padx=2)
 
         rx_scroll_container = ttk.Frame(rx_frame)
         rx_scroll_container.grid(row=11, column=0, columnspan=2, sticky="nsew")
@@ -2084,6 +2089,43 @@ class TransceiverUI(tk.Tk):
             pass
         pg.exec()
         self._plot_win = None
+
+    def crosscorr_full(self) -> None:
+        """Show cross-correlation without downsampling."""
+        if not hasattr(self, "latest_data") or self.latest_data is None:
+            messagebox.showerror("XCorr Full", "No RX data available")
+            return
+        if not hasattr(self, "tx_data") or self.tx_data.size == 0:
+            messagebox.showerror("XCorr Full", "No TX data available")
+            return
+        data = self.latest_data
+        ref = self.tx_data
+        n = min(len(data), len(ref))
+        cc = _xcorr_fft(data[:n], ref[:n])
+        lags = np.arange(-n + 1, n)
+        mag = np.abs(cc)
+        pg.setConfigOption("background", "w")
+        pg.setConfigOption("foreground", "k")
+        app = pg.mkQApp()
+        win = pg.plot(lags, mag, pen="b", title="Full Crosscorr with TX")
+        win.setLabel("bottom", "Lag")
+        win.setLabel("left", "Magnitude")
+        los_idx, echo_idx = _find_los_echo(cc)
+        if los_idx is not None:
+            win.plot([lags[los_idx]], [mag[los_idx]], pen=None, symbol="o", symbolBrush="r")
+        if echo_idx is not None:
+            win.plot([lags[echo_idx]], [mag[echo_idx]], pen=None, symbol="o", symbolBrush="g")
+        win.showGrid(x=True, y=True)
+        try:
+            win.showMaximized()
+        except Exception:
+            pass
+        try:
+            win.raise_()
+            win.activateWindow()
+        except Exception:
+            pass
+        pg.exec()
 
     # ----- Preset handling --------------------------------------------------
     def _get_current_params(self) -> dict:
