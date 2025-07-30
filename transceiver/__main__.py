@@ -391,7 +391,13 @@ class SignalViewer(tk.Toplevel):
             )
             self.canvases.append(canvas)
 
-        stats = _calc_stats(data, fs, self.tx_data)
+        os_factor = 1
+        if getattr(self, "rx_cc_os_enable", tk.BooleanVar(value=False)).get():
+            try:
+                os_factor = max(1, int(self.rx_cc_os_entry.get()))
+            except Exception:
+                os_factor = 1
+        stats = _calc_stats(data, fs, self.tx_data, os_factor)
         text = _format_stats_text(stats)
         self.stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
         self.stats_label.configure(text=text)
@@ -764,6 +770,24 @@ def _xcorr_fft(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return np.concatenate((cc[-(len(b) - 1) :], cc[: len(a)]))
 
 
+def _xcorr_fft_os(a: np.ndarray, b: np.ndarray, os: int) -> np.ndarray:
+    """Return oversampled cross-correlation of *a* and *b* using FFT."""
+    if os <= 1:
+        return _xcorr_fft(a, b)
+    n = len(a) + len(b) - 1
+    nfft = 1 << (n - 1).bit_length()
+    A = np.fft.fft(a, nfft)
+    B = np.fft.fft(b, nfft)
+    prod = A * np.conj(B)
+    nfft_os = nfft * os
+    P = np.zeros(nfft_os, dtype=complex)
+    half = nfft // 2
+    P[:half] = prod[:half]
+    P[-(nfft - half):] = prod[half:]
+    cc = np.fft.ifft(P)
+    return np.concatenate((cc[-(len(b) - 1) * os :], cc[: len(a) * os]))
+
+
 def _autocorr_fft(x: np.ndarray) -> np.ndarray:
     """Return the full autocorrelation of *x* using FFT."""
     return _xcorr_fft(x, x)
@@ -894,7 +918,10 @@ def _gen_rx_filename(app) -> str:
 
 
 def _calc_stats(
-    data: np.ndarray, fs: float, ref_data: np.ndarray | None = None
+    data: np.ndarray,
+    fs: float,
+    ref_data: np.ndarray | None = None,
+    xcorr_os: int = 1,
 ) -> dict:
     """Return basic signal statistics for display.
 
@@ -933,11 +960,15 @@ def _calc_stats(
 
     if ref_data is not None and ref_data.size and data.size:
         n = min(len(data), len(ref_data))
-        cc = _xcorr_fft(data[:n], ref_data[:n])
-        lags = np.arange(-n + 1, n)
+        if xcorr_os > 1:
+            cc = _xcorr_fft_os(data[:n], ref_data[:n], xcorr_os)
+            lags = np.arange(-n + 1, n, 1 / xcorr_os)
+        else:
+            cc = _xcorr_fft(data[:n], ref_data[:n])
+            lags = np.arange(-n + 1, n)
         los_idx, echo_idx = _find_los_echo(cc)
         if los_idx is not None and echo_idx is not None:
-            stats["echo_delay"] = int(lags[echo_idx] - lags[los_idx])
+            stats["echo_delay"] = float(lags[echo_idx] - lags[los_idx])
 
     return stats
 
@@ -951,7 +982,8 @@ def _format_stats_text(stats: dict) -> str:
         f"BW (3dB): {_format_hz(stats['bw'])}",
     ]
     if stats.get("echo_delay") is not None:
-        lines.append(f"LOS-Echo: {stats['echo_delay']} samp")
+        delay = stats["echo_delay"]
+        lines.append(f"LOS-Echo: {delay:.2f} samp")
     return "\n".join(lines)
 
 
@@ -1522,6 +1554,20 @@ class TransceiverUI(tk.Tk):
             width=12,
         ).grid(row=8, column=1)
 
+        ttk.Label(rx_frame, text="XCorr OS").grid(row=9, column=0, sticky="w")
+        self.rx_cc_os_entry = SuggestEntry(rx_frame, "rx_cc_os")
+        self.rx_cc_os_entry.insert(0, "16")
+        self.rx_cc_os_entry.grid(row=9, column=1, sticky="ew")
+        self.rx_cc_os_enable = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            rx_frame,
+            variable=self.rx_cc_os_enable,
+            command=lambda: self.rx_cc_os_entry.entry.configure(
+                state="normal" if self.rx_cc_os_enable.get() else "disabled"
+            ),
+        ).grid(row=9, column=2, sticky="w")
+        self.rx_cc_os_entry.entry.configure(state="disabled")
+
         # --- Trim controls -------------------------------------------------
         self.trim_var = tk.BooleanVar(value=False)
         self.trim_start = tk.DoubleVar(value=0.0)
@@ -1529,7 +1575,7 @@ class TransceiverUI(tk.Tk):
         self.trim_dirty = False
 
         trim_frame = ttk.Frame(rx_frame)
-        trim_frame.grid(row=9, column=0, columnspan=2, sticky="ew")
+        trim_frame.grid(row=10, column=0, columnspan=2, sticky="ew")
         trim_frame.columnconfigure(1, weight=1)
 
         ttk.Checkbutton(
@@ -1561,7 +1607,7 @@ class TransceiverUI(tk.Tk):
         self.trim_end_label.grid(row=1, column=2, sticky="e")
 
         rx_btn_frame = ttk.Frame(rx_frame)
-        rx_btn_frame.grid(row=10, column=0, columnspan=2, pady=5)
+        rx_btn_frame.grid(row=11, column=0, columnspan=2, pady=5)
         rx_btn_frame.columnconfigure((0, 1, 2, 3, 4), weight=1)
 
         self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
@@ -1584,7 +1630,7 @@ class TransceiverUI(tk.Tk):
         ).grid(row=0, column=4, padx=2)
 
         rx_scroll_container = ttk.Frame(rx_frame)
-        rx_scroll_container.grid(row=11, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.grid(row=12, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
@@ -1607,7 +1653,7 @@ class TransceiverUI(tk.Tk):
                 scrollregion=self.rx_canvas.bbox("all")
             ),
         )
-        rx_frame.rowconfigure(11, weight=1)
+        rx_frame.rowconfigure(12, weight=1)
         self.rx_canvases = []
         self.update_waveform_fields()
         self.auto_update_tx_filename()
@@ -2101,8 +2147,18 @@ class TransceiverUI(tk.Tk):
         data = self.latest_data
         ref = self.tx_data
         n = min(len(data), len(ref))
-        cc = _xcorr_fft(data[:n], ref[:n])
-        lags = np.arange(-n + 1, n)
+        os_factor = 1
+        if self.rx_cc_os_enable.get():
+            try:
+                os_factor = max(1, int(self.rx_cc_os_entry.get()))
+            except Exception:
+                os_factor = 1
+        if os_factor > 1:
+            cc = _xcorr_fft_os(data[:n], ref[:n], os_factor)
+            lags = np.arange(-n + 1, n, 1 / os_factor)
+        else:
+            cc = _xcorr_fft(data[:n], ref[:n])
+            lags = np.arange(-n + 1, n)
         mag = np.abs(cc)
         pg.setConfigOption("background", "w")
         pg.setConfigOption("foreground", "k")
@@ -2159,6 +2215,8 @@ class TransceiverUI(tk.Tk):
             "rx_rrc_beta": self.rx_rrc_beta_entry.get(),
             "rx_rrc_span": self.rx_rrc_span_entry.get(),
             "rx_rrc_enabled": self.rx_rrc_enable.get(),
+            "rx_xcorr_os": self.rx_cc_os_entry.get(),
+            "rx_xcorr_os_enabled": self.rx_cc_os_enable.get(),
             "rx_file": self.rx_file.get(),
             "rx_view": self.rx_view.get(),
             "trim": self.trim_var.get(),
@@ -2235,6 +2293,12 @@ class TransceiverUI(tk.Tk):
         state = "normal" if self.rx_rrc_enable.get() else "disabled"
         self.rx_rrc_beta_entry.entry.configure(state=state)
         self.rx_rrc_span_entry.entry.configure(state=state)
+        self.rx_cc_os_entry.delete(0, tk.END)
+        self.rx_cc_os_entry.insert(0, params.get("rx_xcorr_os", "16"))
+        self.rx_cc_os_enable.set(params.get("rx_xcorr_os_enabled", False))
+        self.rx_cc_os_entry.entry.configure(
+            state="normal" if self.rx_cc_os_enable.get() else "disabled"
+        )
         self.rx_file.delete(0, tk.END)
         self.rx_file.insert(0, params.get("rx_file", ""))
         self.rx_view.set(params.get("rx_view", "Signal"))
