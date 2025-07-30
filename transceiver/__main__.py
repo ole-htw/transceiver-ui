@@ -753,17 +753,6 @@ def _reduce_pair(
     return a, b, step
 
 
-def _interp_complex(x: np.ndarray, factor: int) -> np.ndarray:
-    """Return *x* with linear interpolation by ``factor``."""
-    if factor <= 1:
-        return x
-    idx = np.arange(len(x))
-    new_idx = np.linspace(0, len(x) - 1, (len(x) - 1) * factor + 1)
-    real = np.interp(new_idx, idx, np.real(x))
-    imag = np.interp(new_idx, idx, np.imag(x))
-    return real + 1j * imag
-
-
 def _xcorr_fft(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """Return the full cross-correlation of *a* and *b* using FFT."""
     n = len(a) + len(b) - 1
@@ -1532,20 +1521,6 @@ class TransceiverUI(tk.Tk):
             width=12,
         ).grid(row=8, column=1)
 
-        ttk.Label(rx_frame, text="XCorr OS").grid(row=9, column=0, sticky="w")
-        self.rx_cc_os_entry = SuggestEntry(rx_frame, "rx_cc_os")
-        self.rx_cc_os_entry.insert(0, "16")
-        self.rx_cc_os_entry.grid(row=9, column=1, sticky="ew")
-        self.rx_cc_os_enable = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            rx_frame,
-            variable=self.rx_cc_os_enable,
-            command=lambda: self.rx_cc_os_entry.entry.configure(
-                state="normal" if self.rx_cc_os_enable.get() else "disabled"
-            ),
-        ).grid(row=9, column=2, sticky="w")
-        self.rx_cc_os_entry.entry.configure(state="disabled")
-
         # --- Trim controls -------------------------------------------------
         self.trim_var = tk.BooleanVar(value=False)
         self.trim_start = tk.DoubleVar(value=0.0)
@@ -1553,7 +1528,7 @@ class TransceiverUI(tk.Tk):
         self.trim_dirty = False
 
         trim_frame = ttk.Frame(rx_frame)
-        trim_frame.grid(row=10, column=0, columnspan=2, sticky="ew")
+        trim_frame.grid(row=9, column=0, columnspan=2, sticky="ew")
         trim_frame.columnconfigure(1, weight=1)
 
         ttk.Checkbutton(
@@ -1585,7 +1560,7 @@ class TransceiverUI(tk.Tk):
         self.trim_end_label.grid(row=1, column=2, sticky="e")
 
         rx_btn_frame = ttk.Frame(rx_frame)
-        rx_btn_frame.grid(row=11, column=0, columnspan=2, pady=5)
+        rx_btn_frame.grid(row=10, column=0, columnspan=2, pady=5)
         rx_btn_frame.columnconfigure((0, 1, 2, 3, 4), weight=1)
 
         self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
@@ -1608,7 +1583,7 @@ class TransceiverUI(tk.Tk):
         ).grid(row=0, column=4, padx=2)
 
         rx_scroll_container = ttk.Frame(rx_frame)
-        rx_scroll_container.grid(row=12, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.grid(row=11, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
@@ -1631,7 +1606,7 @@ class TransceiverUI(tk.Tk):
                 scrollregion=self.rx_canvas.bbox("all")
             ),
         )
-        rx_frame.rowconfigure(12, weight=1)
+        rx_frame.rowconfigure(11, weight=1)
         self.rx_canvases = []
         self.update_waveform_fields()
         self.auto_update_tx_filename()
@@ -2139,18 +2114,7 @@ class TransceiverUI(tk.Tk):
         ref = self.tx_data
         n = min(len(data), len(ref))
         cc = _xcorr_fft(data[:n], ref[:n])
-        lags = np.arange(-n + 1, n)
-        factor = 1
-        try:
-            factor = int(self.rx_cc_os_entry.get())
-        except Exception:
-            factor = 1
-        if not self.rx_cc_os_enable.get():
-            factor = 1
-        if factor > 1:
-            cc = _interp_complex(cc, factor)
-            lags = np.linspace(lags[0], lags[-1], (len(lags) - 1) * factor + 1)
-        self.full_xcorr_lags = lags
+        self.full_xcorr_lags = np.arange(-n + 1, n)
         self.full_xcorr_mag = np.abs(cc)
         self._show_toast("Cross-correlation calculated")
 
@@ -2186,8 +2150,6 @@ class TransceiverUI(tk.Tk):
             "rx_rrc_beta": self.rx_rrc_beta_entry.get(),
             "rx_rrc_span": self.rx_rrc_span_entry.get(),
             "rx_rrc_enabled": self.rx_rrc_enable.get(),
-            "rx_cc_os": self.rx_cc_os_entry.get(),
-            "rx_cc_os_enabled": self.rx_cc_os_enable.get(),
             "rx_file": self.rx_file.get(),
             "rx_view": self.rx_view.get(),
             "trim": self.trim_var.get(),
@@ -2264,11 +2226,6 @@ class TransceiverUI(tk.Tk):
         state = "normal" if self.rx_rrc_enable.get() else "disabled"
         self.rx_rrc_beta_entry.entry.configure(state=state)
         self.rx_rrc_span_entry.entry.configure(state=state)
-        self.rx_cc_os_entry.delete(0, tk.END)
-        self.rx_cc_os_entry.insert(0, params.get("rx_cc_os", "16"))
-        self.rx_cc_os_enable.set(params.get("rx_cc_os_enabled", False))
-        state = "normal" if self.rx_cc_os_enable.get() else "disabled"
-        self.rx_cc_os_entry.entry.configure(state=state)
         self.rx_file.delete(0, tk.END)
         self.rx_file.insert(0, params.get("rx_file", ""))
         self.rx_view.set(params.get("rx_view", "Signal"))
