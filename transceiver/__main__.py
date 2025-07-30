@@ -1561,7 +1561,7 @@ class TransceiverUI(tk.Tk):
 
         rx_btn_frame = ttk.Frame(rx_frame)
         rx_btn_frame.grid(row=10, column=0, columnspan=2, pady=5)
-        rx_btn_frame.columnconfigure((0, 1, 2, 3, 4), weight=1)
+        rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
         self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
         self.rx_button.grid(row=0, column=0, padx=2)
@@ -1576,11 +1576,6 @@ class TransceiverUI(tk.Tk):
         ttk.Button(rx_btn_frame, text="Compare", command=self.open_signal).grid(
             row=0, column=3, padx=2
         )
-        ttk.Button(
-            rx_btn_frame,
-            text="XCorr Full",
-            command=self.crosscorr_full,
-        ).grid(row=0, column=4, padx=2)
 
         rx_scroll_container = ttk.Frame(rx_frame)
         rx_scroll_container.grid(row=11, column=0, columnspan=2, sticky="nsew")
@@ -1803,6 +1798,11 @@ class TransceiverUI(tk.Tk):
         self.trim_dirty = False
         if hasattr(self, "raw_rx_data") and self.raw_rx_data is not None:
             self._display_rx_plots(self.raw_rx_data, self.latest_fs)
+        if self.trim_var.get():
+            self.crosscorr_full()
+        else:
+            self.full_xcorr_lags = None
+            self.full_xcorr_mag = None
 
     def save_trimmed(self) -> None:
         """Save the currently trimmed RX data to a file."""
