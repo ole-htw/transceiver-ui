@@ -235,6 +235,7 @@ class SignalViewer(tk.Toplevel):
         self.parent = parent
         self.title(Path(title).name)
         self.raw_data = data
+        self.raw_fs = fs
         self.latest_data = data
         self.latest_fs = fs
 
@@ -284,6 +285,13 @@ class SignalViewer(tk.Toplevel):
 
         ttk.Button(btn_frame, text="Save Trim", command=self.save_trimmed).grid(
             row=0, column=0, padx=2
+        )
+        ttk.Label(btn_frame, text="OS x").grid(row=0, column=1, sticky="e")
+        self.os_factor = tk.IntVar(value=1)
+        self.os_entry = ttk.Entry(btn_frame, width=4, textvariable=self.os_factor)
+        self.os_entry.grid(row=0, column=2, padx=2)
+        ttk.Button(btn_frame, text="Apply OS", command=self.update_oversample).grid(
+            row=0, column=3, padx=2
         )
 
         scroll = ttk.Frame(self)
@@ -335,7 +343,11 @@ class SignalViewer(tk.Toplevel):
         self.apply_trim_btn.configure(state="disabled")
         self.trim_dirty = False
         if self.raw_data is not None:
-            self._display_plots(self.raw_data, self.latest_fs)
+            self._display_plots(self.raw_data, self.raw_fs)
+
+    def update_oversample(self, *_args) -> None:
+        if self.raw_data is not None:
+            self._display_plots(self.raw_data, self.raw_fs)
 
     def save_trimmed(self) -> None:
         if self.latest_data is None:
@@ -358,6 +370,15 @@ class SignalViewer(tk.Toplevel):
         self.range_slider.set_data(data)
         if self.trim_var.get():
             data = self._trim_data(data)
+        factor = 1
+        try:
+            factor = int(self.os_factor.get())
+        except Exception:
+            factor = 1
+        if factor > 1:
+            data = _oversample(data, factor)
+            fs *= factor
+        self.latest_fs = fs
         self.latest_data = data
 
         try:
@@ -454,6 +475,13 @@ class SignalColumn(ttk.Frame):
         ttk.Button(btn_frame, text="Save Trim", command=self.save_trimmed).grid(
             row=0, column=0, padx=2
         )
+        ttk.Label(btn_frame, text="OS x").grid(row=0, column=1, sticky="e")
+        self.os_factor = tk.IntVar(value=1)
+        self.os_entry = ttk.Entry(btn_frame, width=4, textvariable=self.os_factor)
+        self.os_entry.grid(row=0, column=2, padx=2)
+        ttk.Button(btn_frame, text="Apply OS", command=self.update_oversample).grid(
+            row=0, column=3, padx=2
+        )
 
         scroll = ttk.Frame(self)
         scroll.grid(row=3, column=0, sticky="nsew")
@@ -518,11 +546,21 @@ class SignalColumn(ttk.Frame):
 
     def _display(self, data: np.ndarray, fs: float, title: str) -> None:
         self.raw_data = data
+        self.raw_fs = fs
         self.latest_fs = fs
         self.latest_title = title
         self.range_slider.set_data(data)
         if self.trim_var.get():
             data = self._trim_data(data)
+        factor = 1
+        try:
+            factor = int(self.os_factor.get())
+        except Exception:
+            factor = 1
+        if factor > 1:
+            data = _oversample(data, factor)
+            fs *= factor
+        self.latest_fs = fs
         self.latest_data = data
 
         try:
@@ -585,7 +623,11 @@ class SignalColumn(ttk.Frame):
         self.apply_trim_btn.configure(state="disabled")
         self.trim_dirty = False
         if self.raw_data is not None:
-            self._display(self.raw_data, self.latest_fs, self.latest_title)
+            self._display(self.raw_data, self.raw_fs, self.latest_title)
+
+    def update_oversample(self, *_args) -> None:
+        if self.raw_data is not None:
+            self._display(self.raw_data, self.raw_fs, self.latest_title)
 
     def save_trimmed(self) -> None:
         if self.latest_data is None:
@@ -751,6 +793,18 @@ def _reduce_pair(
         a = a[::step]
         b = b[::step]
     return a, b, step
+
+
+def _oversample(data: np.ndarray, factor: int) -> np.ndarray:
+    """Return *data* oversampled by *factor* using linear interpolation."""
+    if factor <= 1:
+        return data
+    n = len(data)
+    x_old = np.arange(n)
+    x_new = np.linspace(0, n - 1, n * factor)
+    real = np.interp(x_new, x_old, np.real(data))
+    imag = np.interp(x_new, x_old, np.imag(data))
+    return (real + 1j * imag).astype(np.complex64)
 
 
 def _xcorr_fft(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -1559,8 +1613,17 @@ class TransceiverUI(tk.Tk):
         self.trim_end_label = ttk.Label(trim_frame, width=5)
         self.trim_end_label.grid(row=1, column=2, sticky="e")
 
+        os_frame = ttk.Frame(rx_frame)
+        os_frame.grid(row=10, column=0, columnspan=2, sticky="ew")
+        os_frame.columnconfigure(1, weight=1)
+        ttk.Label(os_frame, text="Oversample x").grid(row=0, column=0, sticky="w")
+        self.rx_os_factor = tk.IntVar(value=1)
+        self.rx_os_entry = ttk.Entry(os_frame, width=4, textvariable=self.rx_os_factor)
+        self.rx_os_entry.grid(row=0, column=1, sticky="w")
+        ttk.Button(os_frame, text="Apply", command=self.update_oversample).grid(row=0, column=2, padx=2)
+
         rx_btn_frame = ttk.Frame(rx_frame)
-        rx_btn_frame.grid(row=10, column=0, columnspan=2, pady=5)
+        rx_btn_frame.grid(row=11, column=0, columnspan=2, pady=5)
         rx_btn_frame.columnconfigure((0, 1, 2, 3, 4), weight=1)
 
         self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
@@ -1583,7 +1646,7 @@ class TransceiverUI(tk.Tk):
         ).grid(row=0, column=4, padx=2)
 
         rx_scroll_container = ttk.Frame(rx_frame)
-        rx_scroll_container.grid(row=11, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.grid(row=12, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
@@ -1606,13 +1669,14 @@ class TransceiverUI(tk.Tk):
                 scrollregion=self.rx_canvas.bbox("all")
             ),
         )
-        rx_frame.rowconfigure(11, weight=1)
+        rx_frame.rowconfigure(12, weight=1)
         self.rx_canvases = []
         self.update_waveform_fields()
         self.auto_update_tx_filename()
         self.auto_update_rx_filename()
         self.toggle_rate_sync(self.sync_var.get())
         self.update_trim()
+        self.update_oversample()
 
     def update_waveform_fields(self) -> None:
         """Show or hide waveform specific parameters."""
@@ -1727,10 +1791,19 @@ class TransceiverUI(tk.Tk):
     def _display_rx_plots(self, data: np.ndarray, fs: float) -> None:
         """Render preview plots below the receive parameters."""
         self.raw_rx_data = data
-        self.latest_fs = fs
+        self.raw_rx_fs = fs
         self.range_slider.set_data(data)
         if self.trim_var.get():
             data = self._trim_data(data)
+        factor = 1
+        try:
+            factor = int(self.rx_os_factor.get())
+        except Exception:
+            factor = 1
+        if factor > 1:
+            data = _oversample(data, factor)
+            fs *= factor
+        self.latest_fs = fs
         self.latest_data = data
 
         try:
@@ -1802,7 +1875,12 @@ class TransceiverUI(tk.Tk):
         self.apply_trim_btn.configure(state="disabled")
         self.trim_dirty = False
         if hasattr(self, "raw_rx_data") and self.raw_rx_data is not None:
-            self._display_rx_plots(self.raw_rx_data, self.latest_fs)
+            self._display_rx_plots(self.raw_rx_data, self.raw_rx_fs)
+
+    def update_oversample(self, *_args) -> None:
+        """Re-apply oversampling and refresh RX plots."""
+        if hasattr(self, "raw_rx_data") and self.raw_rx_data is not None:
+            self._display_rx_plots(self.raw_rx_data, self.raw_rx_fs)
 
     def save_trimmed(self) -> None:
         """Save the currently trimmed RX data to a file."""
@@ -2151,6 +2229,7 @@ class TransceiverUI(tk.Tk):
             "rx_rrc_span": self.rx_rrc_span_entry.get(),
             "rx_rrc_enabled": self.rx_rrc_enable.get(),
             "rx_file": self.rx_file.get(),
+            "rx_oversampling": self.rx_os_entry.get(),
             "rx_view": self.rx_view.get(),
             "trim": self.trim_var.get(),
             "trim_start": self.trim_start.get(),
@@ -2228,11 +2307,14 @@ class TransceiverUI(tk.Tk):
         self.rx_rrc_span_entry.entry.configure(state=state)
         self.rx_file.delete(0, tk.END)
         self.rx_file.insert(0, params.get("rx_file", ""))
+        self.rx_os_entry.delete(0, tk.END)
+        self.rx_os_entry.insert(0, params.get("rx_oversampling", "1"))
         self.rx_view.set(params.get("rx_view", "Signal"))
         self.trim_var.set(params.get("trim", False))
         self.trim_start.set(params.get("trim_start", 0.0))
         self.trim_end.set(params.get("trim_end", 100.0))
         self.update_trim()
+        self.update_oversample()
         self.sync_var.set(params.get("sync_rates", True))
         self.toggle_rate_sync(self.sync_var.get())
 
