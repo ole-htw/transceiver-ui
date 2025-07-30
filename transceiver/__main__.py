@@ -4,7 +4,6 @@ import subprocess
 import threading
 import queue
 import tkinter as tk
-from tkinter import ttk, messagebox
 from tkinter import ttk, messagebox, simpledialog, filedialog
 import time
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -2090,8 +2089,21 @@ class TransceiverUI(tk.Tk):
         pg.exec()
         self._plot_win = None
 
+    def _show_toast(self, text: str, duration: int = 2000) -> None:
+        """Show a temporary notification on top of the main window."""
+        win = tk.Toplevel(self)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        lbl = ttk.Label(win, text=text, padding=10, relief="solid")
+        lbl.pack()
+        win.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width() - win.winfo_width()) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - win.winfo_height()) // 2
+        win.geometry(f"+{x}+{y}")
+        win.after(duration, win.destroy)
+
     def crosscorr_full(self) -> None:
-        """Show cross-correlation without downsampling."""
+        """Calculate cross-correlation without downsampling."""
         if not hasattr(self, "latest_data") or self.latest_data is None:
             messagebox.showerror("XCorr Full", "No RX data available")
             return
@@ -2102,30 +2114,9 @@ class TransceiverUI(tk.Tk):
         ref = self.tx_data
         n = min(len(data), len(ref))
         cc = _xcorr_fft(data[:n], ref[:n])
-        lags = np.arange(-n + 1, n)
-        mag = np.abs(cc)
-        pg.setConfigOption("background", "w")
-        pg.setConfigOption("foreground", "k")
-        app = pg.mkQApp()
-        win = pg.plot(lags, mag, pen="b", title="Full Crosscorr with TX")
-        win.setLabel("bottom", "Lag")
-        win.setLabel("left", "Magnitude")
-        los_idx, echo_idx = _find_los_echo(cc)
-        if los_idx is not None:
-            win.plot([lags[los_idx]], [mag[los_idx]], pen=None, symbol="o", symbolBrush="r")
-        if echo_idx is not None:
-            win.plot([lags[echo_idx]], [mag[echo_idx]], pen=None, symbol="o", symbolBrush="g")
-        win.showGrid(x=True, y=True)
-        try:
-            win.showMaximized()
-        except Exception:
-            pass
-        try:
-            win.raise_()
-            win.activateWindow()
-        except Exception:
-            pass
-        pg.exec()
+        self.full_xcorr_lags = np.arange(-n + 1, n)
+        self.full_xcorr_mag = np.abs(cc)
+        self._show_toast("Cross-correlation calculated")
 
     # ----- Preset handling --------------------------------------------------
     def _get_current_params(self) -> dict:
