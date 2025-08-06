@@ -794,7 +794,7 @@ def _find_los_echo(cc: np.ndarray) -> tuple[int | None, int | None]:
             break
 
     if echo is None and los + 1 < len(mag):
-        echo = int(np.argmax(mag[los + 1:]) + los + 1)
+        echo = int(np.argmax(mag[los + 1 :]) + los + 1)
 
     return los, echo
 
@@ -887,6 +887,15 @@ def _gen_rx_filename(app) -> str:
     dur = app.rx_dur.get() or "0"
     gain = app.rx_gain.get() or "0"
     parts = [f"f{_pretty(freq)}", f"r{_pretty(rate)}", f"d{dur}s", f"g{gain}"]
+    try:
+        os_factor = int(app.rx_os_entry.get())
+    except Exception:
+        os_factor = 1
+    if (
+        getattr(app, "rx_os_enable", tk.BooleanVar(value=False)).get()
+        and os_factor != 1
+    ):
+        parts.append(f"os{os_factor}")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     name = "_".join(parts) + f"_{stamp}.bin"
     return str(Path("signals/rx") / name)
@@ -1026,9 +1035,13 @@ def visualize(
         win.setLabel("left", "Magnitude")
         los_idx, echo_idx = _find_los_echo(cc)
         if los_idx is not None:
-            win.plot([lags[los_idx]], [mag[los_idx]], pen=None, symbol="o", symbolBrush="r")
+            win.plot(
+                [lags[los_idx]], [mag[los_idx]], pen=None, symbol="o", symbolBrush="r"
+            )
         if echo_idx is not None:
-            win.plot([lags[echo_idx]], [mag[echo_idx]], pen=None, symbol="o", symbolBrush="g")
+            win.plot(
+                [lags[echo_idx]], [mag[echo_idx]], pen=None, symbol="o", symbolBrush="g"
+            )
         win.showGrid(x=True, y=True)
     else:
         messagebox.showerror("Error", f"Unknown mode {mode}")
@@ -1092,9 +1105,13 @@ def _plot_on_pg(
         plot.plot(lags, mag, pen="b")
         los_idx, echo_idx = _find_los_echo(cc)
         if los_idx is not None:
-            plot.plot([lags[los_idx]], [mag[los_idx]], pen=None, symbol="o", symbolBrush="r")
+            plot.plot(
+                [lags[los_idx]], [mag[los_idx]], pen=None, symbol="o", symbolBrush="r"
+            )
         if echo_idx is not None:
-            plot.plot([lags[echo_idx]], [mag[echo_idx]], pen=None, symbol="o", symbolBrush="g")
+            plot.plot(
+                [lags[echo_idx]], [mag[echo_idx]], pen=None, symbol="o", symbolBrush="g"
+            )
         plot.setTitle(f"Crosscorr. with TX: {title}")
         plot.setLabel("bottom", "Lag")
         plot.setLabel("left", "Magnitude")
@@ -1508,18 +1525,33 @@ class TransceiverUI(tk.Tk):
             self.rx_rrc_beta_entry.entry.configure(state="disabled")
             self.rx_rrc_span_entry.entry.configure(state="disabled")
 
-        ttk.Label(rx_frame, text="Output").grid(row=7, column=0, sticky="w")
+        ttk.Label(rx_frame, text="Oversampling").grid(row=7, column=0, sticky="w")
+        self.rx_os_entry = SuggestEntry(rx_frame, "rx_os_entry")
+        self.rx_os_entry.insert(0, "1")
+        self.rx_os_entry.grid(row=7, column=1, sticky="ew")
+        self.rx_os_enable = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            rx_frame,
+            variable=self.rx_os_enable,
+            command=self._on_rx_os_change,
+        ).grid(row=7, column=2, sticky="w")
+        self.rx_os_entry.entry.configure(state="disabled")
+        self.rx_os_entry.entry.bind(
+            "<FocusOut>",
+            lambda _e: (self.auto_update_rx_filename(), self.update_trim()),
+        )
+        ttk.Label(rx_frame, text="Output").grid(row=8, column=0, sticky="w")
         self.rx_file = SuggestEntry(rx_frame, "rx_file")
         self.rx_file.insert(0, "rx_signal.bin")
-        self.rx_file.grid(row=7, column=1, sticky="ew")
+        self.rx_file.grid(row=8, column=1, sticky="ew")
 
-        ttk.Label(rx_frame, text="View").grid(row=8, column=0, sticky="w")
+        ttk.Label(rx_frame, text="View").grid(row=9, column=0, sticky="w")
         ttk.Combobox(
             rx_frame,
             textvariable=self.rx_view,
             values=["Signal", "Freq", "InstantFreq", "Crosscorr"],
             width=12,
-        ).grid(row=8, column=1)
+        ).grid(row=9, column=1)
 
         # --- Trim controls -------------------------------------------------
         self.trim_var = tk.BooleanVar(value=False)
@@ -1528,7 +1560,7 @@ class TransceiverUI(tk.Tk):
         self.trim_dirty = False
 
         trim_frame = ttk.Frame(rx_frame)
-        trim_frame.grid(row=9, column=0, columnspan=2, sticky="ew")
+        trim_frame.grid(row=10, column=0, columnspan=2, sticky="ew")
         trim_frame.columnconfigure(1, weight=1)
 
         ttk.Checkbutton(
@@ -1560,7 +1592,7 @@ class TransceiverUI(tk.Tk):
         self.trim_end_label.grid(row=1, column=2, sticky="e")
 
         rx_btn_frame = ttk.Frame(rx_frame)
-        rx_btn_frame.grid(row=10, column=0, columnspan=2, pady=5)
+        rx_btn_frame.grid(row=11, column=0, columnspan=2, pady=5)
         rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
         self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
@@ -1578,7 +1610,7 @@ class TransceiverUI(tk.Tk):
         )
 
         rx_scroll_container = ttk.Frame(rx_frame)
-        rx_scroll_container.grid(row=11, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.grid(row=12, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
@@ -1601,7 +1633,7 @@ class TransceiverUI(tk.Tk):
                 scrollregion=self.rx_canvas.bbox("all")
             ),
         )
-        rx_frame.rowconfigure(11, weight=1)
+        rx_frame.rowconfigure(12, weight=1)
         self.rx_canvases = []
         self.update_waveform_fields()
         self.auto_update_tx_filename()
@@ -1726,6 +1758,8 @@ class TransceiverUI(tk.Tk):
         self.range_slider.set_data(data)
         if self.trim_var.get():
             data = self._trim_data(data)
+        data, fac = self._oversample_data(data)
+        fs *= fac
         self.latest_data = data
 
         try:
@@ -1780,6 +1814,22 @@ class TransceiverUI(tk.Tk):
         e = max(s + 1, min(len(data), e))
         return data[s:e]
 
+    def _oversample_data(self, data: np.ndarray) -> tuple[np.ndarray, float]:
+        """Return oversampled *data* and new sample rate factor."""
+        if not self.rx_os_enable.get() or data.size == 0:
+            return data, 1.0
+        try:
+            factor = int(self.rx_os_entry.get())
+        except Exception:
+            factor = 1
+        if factor <= 1:
+            return data, 1.0
+        x_old = np.arange(len(data))
+        x_new = np.linspace(0, len(data) - 1, len(data) * factor)
+        real = np.interp(x_new, x_old, data.real)
+        imag = np.interp(x_new, x_old, data.imag)
+        return real + 1j * imag, float(factor)
+
     def _on_trim_change(self, *_args) -> None:
         state = "normal" if self.trim_var.get() else "disabled"
         self.range_slider.configure_state(state)
@@ -1791,6 +1841,12 @@ class TransceiverUI(tk.Tk):
         self.trim_dirty = True
         self.apply_trim_btn.configure(state="normal")
 
+    def _on_rx_os_change(self, *_args) -> None:
+        self.rx_os_entry.entry.configure(
+            state="normal" if self.rx_os_enable.get() else "disabled"
+        )
+        self.update_trim()
+
     def update_trim(self, *_args) -> None:
         """Re-apply trimming and refresh RX plots."""
         self._on_trim_change()
@@ -1798,7 +1854,9 @@ class TransceiverUI(tk.Tk):
         self.trim_dirty = False
         if hasattr(self, "raw_rx_data") and self.raw_rx_data is not None:
             self._display_rx_plots(self.raw_rx_data, self.latest_fs)
-        if self.trim_var.get():
+        if self.trim_var.get() or (
+            self.rx_os_enable.get() and int(self.rx_os_entry.get() or 1) > 1
+        ):
             self.crosscorr_full()
         else:
             self.full_xcorr_lags = None
@@ -2147,6 +2205,8 @@ class TransceiverUI(tk.Tk):
             "rx_freq": self.rx_freq.get(),
             "rx_dur": self.rx_dur.get(),
             "rx_gain": self.rx_gain.get(),
+            "rx_oversampling": self.rx_os_entry.get(),
+            "rx_os_enabled": self.rx_os_enable.get(),
             "rx_rrc_beta": self.rx_rrc_beta_entry.get(),
             "rx_rrc_span": self.rx_rrc_span_entry.get(),
             "rx_rrc_enabled": self.rx_rrc_enable.get(),
@@ -2218,6 +2278,12 @@ class TransceiverUI(tk.Tk):
         self.rx_dur.insert(0, params.get("rx_dur", ""))
         self.rx_gain.delete(0, tk.END)
         self.rx_gain.insert(0, params.get("rx_gain", ""))
+        self.rx_os_entry.delete(0, tk.END)
+        self.rx_os_entry.insert(0, params.get("rx_oversampling", "1"))
+        self.rx_os_enable.set(params.get("rx_os_enabled", False))
+        self.rx_os_entry.entry.configure(
+            state="normal" if self.rx_os_enable.get() else "disabled"
+        )
         self.rx_rrc_beta_entry.delete(0, tk.END)
         self.rx_rrc_beta_entry.insert(0, params.get("rx_rrc_beta", "0.25"))
         self.rx_rrc_span_entry.delete(0, tk.END)
