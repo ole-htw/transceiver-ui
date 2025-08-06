@@ -36,3 +36,7 @@ The GUI shows basic signal statistics (minimum/maximum frequency, maximum
 amplitude and 3\ dB bandwidth) for both the generated and the received
 signals.
 
+The receive view now also offers optional oversampling which can be applied
+after capturing the data.  This improves the accuracy of the channel impulse
+response when using the built‑in cross‑correlation tools.
+
