@@ -45,4 +45,5 @@ xlrd
 zeep
 zipp
 pyqtgraph
+PySide6
 
