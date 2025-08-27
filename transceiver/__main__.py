@@ -1854,8 +1854,16 @@ class TransceiverUI(tk.Tk):
         self.trim_dirty = False
         if hasattr(self, "raw_rx_data") and self.raw_rx_data is not None:
             self._display_rx_plots(self.raw_rx_data, self.latest_fs)
-        if self.trim_var.get() or (
-            self.rx_os_enable.get() and int(self.rx_os_entry.get() or 1) > 1
+        if (
+            hasattr(self, "latest_data")
+            and self.latest_data is not None
+            and (
+                self.trim_var.get()
+                or (
+                    self.rx_os_enable.get()
+                    and int(self.rx_os_entry.get() or 1) > 1
+                )
+            )
         ):
             self.crosscorr_full()
         else:
