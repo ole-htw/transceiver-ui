@@ -384,8 +384,8 @@ class SignalViewer(tk.Toplevel):
             widget.grid(row=idx, column=0, sticky="nsew", pady=2)
             widget.bind(
                 "<Button-1>",
-                lambda _e, m=mode, d=data, s=fs: self.parent._show_fullscreen(
-                    d, s, m, f"RX {m}"
+                lambda _e, m=mode, d=data, s=fs, r=self.tx_data: self.parent._show_fullscreen(
+                    d, s, m, f"RX {m}", r
                 ),
             )
             self.canvases.append(canvas)
@@ -549,8 +549,8 @@ class SignalColumn(ttk.Frame):
             widget.grid(row=idx, column=0, sticky="nsew", pady=2)
             widget.bind(
                 "<Button-1>",
-                lambda _e, m=mode, d=data, s=fs: self.main_parent._show_fullscreen(
-                    d, s, m, f"{title} {m}"
+                lambda _e, m=mode, d=data, s=fs, r=tx_data: self.main_parent._show_fullscreen(
+                    d, s, m, f"{title} {m}", r
                 ),
             )
             self.canvases.append(canvas)
@@ -1095,6 +1095,8 @@ def _plot_on_pg(
         plot.setLabel("left", "Magnitude")
     elif mode == "Crosscorr":
         if ref_data is None or ref_data.size == 0:
+            plot.setTitle("No TX data")
+            plot.showGrid(x=True, y=True)
             return
         data, ref_data, step_r = _reduce_pair(data, ref_data)
         fs /= step_r
@@ -2119,7 +2121,12 @@ class TransceiverUI(tk.Tk):
                 self._out_queue.put(f"Error: {exc}\n")
 
     def _show_fullscreen(
-        self, data: np.ndarray, fs: float, mode: str, title: str
+        self,
+        data: np.ndarray,
+        fs: float,
+        mode: str,
+        title: str,
+        ref_data: np.ndarray | None = None,
     ) -> None:
         if data is None:
             return
@@ -2141,7 +2148,7 @@ class TransceiverUI(tk.Tk):
             fs,
             mode,
             title,
-            getattr(self, "tx_data", None),
+            ref_data if ref_data is not None else getattr(self, "tx_data", None),
         )
         try:
             win.showMaximized()
