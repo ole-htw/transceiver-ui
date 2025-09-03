@@ -424,6 +424,10 @@ class OpenSignalDialog(tk.Toplevel):
         ttk.Button(btn_frame, text="Cancel", command=self.destroy).pack(side="left", padx=5)
 
         self._populate()
+        self._sort("mtime", True)
+        self.update_idletasks()
+        w, h = self.winfo_width(), self.winfo_height()
+        self.geometry(f"{w * 2}x{h * 2}")
         self.tree.bind("<Double-1>", lambda _e: self._on_open())
         self.grab_set()
         self.transient(parent)
