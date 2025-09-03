@@ -396,6 +396,72 @@ class SignalViewer(tk.Toplevel):
         self.stats_label.configure(text=text)
 
 
+class OpenSignalDialog(tk.Toplevel):
+    """Custom file dialog listing signals sortable by modification date."""
+
+    def __init__(self, parent, initialdir: str | Path) -> None:
+        super().__init__(parent)
+        self.title("Open Signal")
+        self.initialdir = Path(initialdir)
+        self.result: str | None = None
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        self.tree = ttk.Treeview(self, columns=("name", "mtime"), show="headings")
+        self.tree.heading("name", text="Name", command=lambda: self._sort("name", False))
+        self.tree.heading("mtime", text="Modified", command=lambda: self._sort("mtime", False))
+        self.tree.column("name", width=200)
+        self.tree.column("mtime", width=150)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+
+        vsb = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
+        vsb.grid(row=0, column=1, sticky="ns")
+        self.tree.configure(yscrollcommand=vsb.set)
+
+        btn_frame = ttk.Frame(self)
+        btn_frame.grid(row=1, column=0, columnspan=2, pady=5)
+        ttk.Button(btn_frame, text="Open", command=self._on_open).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=self.destroy).pack(side="left", padx=5)
+
+        self._populate()
+        self.tree.bind("<Double-1>", lambda _e: self._on_open())
+        self.grab_set()
+        self.transient(parent)
+
+    def _populate(self) -> None:
+        files = sorted(
+            self.initialdir.glob("*.bin"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for p in files:
+            mtime = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+            self.tree.insert("", "end", iid=str(p), values=(p.name, mtime))
+
+    def _sort(self, col: str, reverse: bool) -> None:
+        data = [(self.tree.set(k, col), k) for k in self.tree.get_children("")]
+        if col == "mtime":
+            data.sort(
+                key=lambda t: datetime.strptime(t[0], "%Y-%m-%d %H:%M:%S"),
+                reverse=reverse,
+            )
+        else:
+            data.sort(reverse=reverse)
+        for idx, (_val, k) in enumerate(data):
+            self.tree.move(k, "", idx)
+        self.tree.heading(col, command=lambda: self._sort(col, not reverse))
+
+    def _on_open(self) -> None:
+        sel = self.tree.selection()
+        if sel:
+            self.result = sel[0]
+        self.destroy()
+
+    def show(self) -> str | None:
+        self.wait_window()
+        return self.result
+
+
 class SignalColumn(ttk.Frame):
     """Frame to load and display a single signal."""
 
@@ -482,12 +548,8 @@ class SignalColumn(ttk.Frame):
 
     def open_signal(self) -> None:
         """Open a signal and display it inside this column."""
-        filename = filedialog.askopenfilename(
-            title="Open Signal",
-            filetypes=[("Binary files", "*.bin"), ("All files", "*.*")],
-            initialdir="signals/rx",
-            parent=self,
-        )
+        dialog = OpenSignalDialog(self, "signals/rx")
+        filename = dialog.show()
         if not filename:
             return
         try:
