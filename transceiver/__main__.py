@@ -339,19 +339,20 @@ class SignalViewer(tk.Toplevel):
 
     def save_trimmed(self) -> None:
         if self.latest_data is None:
-            messagebox.showerror("Save Trim", "No data available")
+            messagebox.showerror("Save Trim", "No data available", parent=self)
             return
         filename = filedialog.asksaveasfilename(
             defaultextension=".bin",
             initialfile="rx_trimmed.bin",
             filetypes=[("Binary files", "*.bin"), ("All files", "*.*")],
+            parent=self,
         )
         if not filename:
             return
         try:
             save_interleaved(filename, self.latest_data)
         except Exception as exc:
-            messagebox.showerror("Save Trim", str(exc))
+            messagebox.showerror("Save Trim", str(exc), parent=self)
 
     def _display_plots(self, data: np.ndarray, fs: float) -> None:
         self.latest_fs = fs
@@ -655,19 +656,20 @@ class SignalColumn(ttk.Frame):
 
     def save_trimmed(self) -> None:
         if self.latest_data is None:
-            messagebox.showerror("Save Trim", "No data available")
+            messagebox.showerror("Save Trim", "No data available", parent=self)
             return
         filename = filedialog.asksaveasfilename(
             defaultextension=".bin",
             initialfile="rx_trimmed.bin",
             filetypes=[("Binary files", "*.bin"), ("All files", "*.*")],
+            parent=self,
         )
         if not filename:
             return
         try:
             save_interleaved(filename, self.latest_data)
         except Exception as exc:
-            messagebox.showerror("Save Trim", str(exc))
+            messagebox.showerror("Save Trim", str(exc), parent=self)
 
 
 class CompareWindow(tk.Toplevel):
