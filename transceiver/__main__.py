@@ -21,6 +21,7 @@ import pyqtgraph as pg
 
 import sys
 from .helpers.tx_generator import generate_waveform
+from .helpers import rx_convert
 
 # --- suggestion helper -------------------------------------------------------
 
@@ -356,6 +357,10 @@ class SignalViewer(tk.Toplevel):
 
     def _display_plots(self, data: np.ndarray, fs: float) -> None:
         self.latest_fs = fs
+        if data.ndim != 1:
+            data = np.asarray(data)
+            if data.ndim >= 2:
+                data = data[0]
         self.range_slider.set_data(data)
         if self.trim_var.get():
             data = self._trim_data(data)
@@ -786,6 +791,8 @@ def save_interleaved(
     filename: str, data: np.ndarray, amplitude: float = 10000.0
 ) -> None:
     """Save complex64 data as interleaved int16."""
+    if data.ndim != 1:
+        raise ValueError("Mehrkanal-Daten müssen vor dem Speichern gemischt werden.")
     max_abs = np.max(np.abs(data)) if np.any(data) else 1.0
     scale = amplitude / max_abs if max_abs > 1e-9 else 1.0
     scaled = data * scale
@@ -977,6 +984,10 @@ def _calc_stats(
     If ``ref_data`` is given, the delay between LOS peak and the first
     echo is added as ``echo_delay`` (in samples).
     """
+    if data.ndim != 1:
+        data = np.asarray(data)
+        if data.ndim >= 2:
+            data = data[0]
 
     stats = {
         "f_low": 0.0,
@@ -1197,6 +1208,10 @@ def _plot_on_mpl(
     ref_data: np.ndarray | None = None,
 ) -> None:
     """Helper to draw a small matplotlib preview plot."""
+    if data.ndim != 1:
+        data = np.asarray(data)
+        if data.ndim >= 2:
+            data = data[0]
     data, step = _reduce_data(data)
     fs /= step
     if mode == "Signal":
@@ -1256,6 +1271,7 @@ class TransceiverUI(tk.Tk):
         Path("signals/rx").mkdir(parents=True, exist_ok=True)
         # define view variables early so callbacks won't fail
         self.rx_view = tk.StringVar(value="Signal")
+        self.rx_channel_view = tk.StringVar(value="Kanal 1")
         self.sync_var = tk.BooleanVar(value=True)
         self.rate_var = tk.StringVar(value="200e6")
         # individual variables used when rate sync is disabled
@@ -1574,17 +1590,33 @@ class TransceiverUI(tk.Tk):
             variable=self.rx_channel_2,
         ).grid(row=5, column=0, columnspan=2, sticky="w")
 
+        self.rx_channel_view_label = ttk.Label(rx_frame, text="RX Ansicht")
+        self.rx_channel_view_label.grid(row=6, column=0, sticky="w")
+        self.rx_channel_view_box = ttk.Combobox(
+            rx_frame,
+            textvariable=self.rx_channel_view,
+            values=["Kanal 1", "Kanal 2", "Differenz"],
+            width=12,
+            state="readonly",
+        )
+        self.rx_channel_view_box.grid(row=6, column=1, sticky="w")
+        self.rx_channel_view_box.configure(state="disabled")
+        self.rx_channel_view_box.bind(
+            "<<ComboboxSelected>>",
+            lambda _e: self.update_trim(),
+        )
+
         self.rx_rrc_beta_label = ttk.Label(rx_frame, text="RRC β")
-        self.rx_rrc_beta_label.grid(row=6, column=0, sticky="w")
+        self.rx_rrc_beta_label.grid(row=7, column=0, sticky="w")
         self.rx_rrc_beta_entry = SuggestEntry(rx_frame, "rx_rrc_beta")
         self.rx_rrc_beta_entry.insert(0, "0.25")
-        self.rx_rrc_beta_entry.grid(row=6, column=1, sticky="ew")
+        self.rx_rrc_beta_entry.grid(row=7, column=1, sticky="ew")
 
         self.rx_rrc_span_label = ttk.Label(rx_frame, text="RRC Span")
-        self.rx_rrc_span_label.grid(row=7, column=0, sticky="w")
+        self.rx_rrc_span_label.grid(row=8, column=0, sticky="w")
         self.rx_rrc_span_entry = SuggestEntry(rx_frame, "rx_rrc_span")
         self.rx_rrc_span_entry.insert(0, "6")
-        self.rx_rrc_span_entry.grid(row=7, column=1, sticky="ew")
+        self.rx_rrc_span_entry.grid(row=8, column=1, sticky="ew")
         self.rx_rrc_enable = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             rx_frame,
@@ -1597,38 +1629,38 @@ class TransceiverUI(tk.Tk):
                     state="normal" if self.rx_rrc_enable.get() else "disabled"
                 ),
             ],
-        ).grid(row=6, column=2, sticky="w", rowspan=2)
+        ).grid(row=7, column=2, sticky="w", rowspan=2)
         if not self.rx_rrc_enable.get():
             self.rx_rrc_beta_entry.entry.configure(state="disabled")
             self.rx_rrc_span_entry.entry.configure(state="disabled")
 
-        ttk.Label(rx_frame, text="Oversampling").grid(row=8, column=0, sticky="w")
+        ttk.Label(rx_frame, text="Oversampling").grid(row=9, column=0, sticky="w")
         self.rx_os_entry = SuggestEntry(rx_frame, "rx_os_entry")
         self.rx_os_entry.insert(0, "1")
-        self.rx_os_entry.grid(row=8, column=1, sticky="ew")
+        self.rx_os_entry.grid(row=9, column=1, sticky="ew")
         self.rx_os_enable = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             rx_frame,
             variable=self.rx_os_enable,
             command=self._on_rx_os_change,
-        ).grid(row=8, column=2, sticky="w")
+        ).grid(row=9, column=2, sticky="w")
         self.rx_os_entry.entry.configure(state="disabled")
         self.rx_os_entry.entry.bind(
             "<FocusOut>",
             lambda _e: (self.auto_update_rx_filename(), self.update_trim()),
         )
-        ttk.Label(rx_frame, text="Output").grid(row=9, column=0, sticky="w")
+        ttk.Label(rx_frame, text="Output").grid(row=10, column=0, sticky="w")
         self.rx_file = SuggestEntry(rx_frame, "rx_file")
         self.rx_file.insert(0, "rx_signal.bin")
-        self.rx_file.grid(row=9, column=1, sticky="ew")
+        self.rx_file.grid(row=10, column=1, sticky="ew")
 
-        ttk.Label(rx_frame, text="View").grid(row=10, column=0, sticky="w")
+        ttk.Label(rx_frame, text="View").grid(row=11, column=0, sticky="w")
         ttk.Combobox(
             rx_frame,
             textvariable=self.rx_view,
             values=["Signal", "Freq", "InstantFreq", "Crosscorr"],
             width=12,
-        ).grid(row=10, column=1)
+        ).grid(row=11, column=1)
 
         # --- Trim controls -------------------------------------------------
         self.trim_var = tk.BooleanVar(value=False)
@@ -1637,7 +1669,7 @@ class TransceiverUI(tk.Tk):
         self.trim_dirty = False
 
         trim_frame = ttk.Frame(rx_frame)
-        trim_frame.grid(row=11, column=0, columnspan=2, sticky="ew")
+        trim_frame.grid(row=12, column=0, columnspan=2, sticky="ew")
         trim_frame.columnconfigure(1, weight=1)
 
         ttk.Checkbutton(
@@ -1669,7 +1701,7 @@ class TransceiverUI(tk.Tk):
         self.trim_end_label.grid(row=1, column=2, sticky="e")
 
         rx_btn_frame = ttk.Frame(rx_frame)
-        rx_btn_frame.grid(row=12, column=0, columnspan=2, pady=5)
+        rx_btn_frame.grid(row=13, column=0, columnspan=2, pady=5)
         rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
         self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
@@ -1687,7 +1719,7 @@ class TransceiverUI(tk.Tk):
         )
 
         rx_scroll_container = ttk.Frame(rx_frame)
-        rx_scroll_container.grid(row=13, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.grid(row=14, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
@@ -1828,10 +1860,35 @@ class TransceiverUI(tk.Tk):
         self.gen_stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
         self.gen_stats_label.configure(text=text)
 
+    def _select_rx_display_data(self, data: np.ndarray) -> tuple[np.ndarray, str]:
+        """Return the RX data according to the channel view selection."""
+        if data.ndim == 1:
+            return data, ""
+        if data.ndim != 2 or data.shape[0] == 0:
+            return np.array([], dtype=np.complex64), ""
+        if data.shape[0] < 2:
+            return data[0], ""
+        selection = self.rx_channel_view.get()
+        if selection == "Kanal 2":
+            return data[1], "Kanal 2"
+        if selection == "Differenz":
+            return data[0] - data[1], "Differenz"
+        return data[0], "Kanal 1"
+
     def _display_rx_plots(self, data: np.ndarray, fs: float) -> None:
         """Render preview plots below the receive parameters."""
         self.raw_rx_data = data
         self.latest_fs = fs
+        if data.ndim == 2 and data.shape[0] >= 2:
+            self.rx_channel_view_box.configure(state="readonly")
+            selection_label = self.rx_channel_view.get()
+        else:
+            self.rx_channel_view.set("Kanal 1")
+            self.rx_channel_view_box.configure(state="disabled")
+            selection_label = ""
+        data, channel_label = self._select_rx_display_data(data)
+        if selection_label and not channel_label:
+            channel_label = selection_label
         self.range_slider.set_data(data)
         if self.trim_var.get():
             data = self._trim_data(data)
@@ -1853,10 +1910,11 @@ class TransceiverUI(tk.Tk):
         self.rx_canvases.clear()
 
         modes = ["Signal", "Freq", "InstantFreq", "Crosscorr"]
+        title_suffix = f" ({channel_label})" if channel_label else ""
         for idx, mode in enumerate(modes):
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
-            _plot_on_mpl(ax, data, fs, mode, f"RX {mode}", self.tx_data)
+            _plot_on_mpl(ax, data, fs, mode, f"RX {mode}{title_suffix}", self.tx_data)
             canvas = FigureCanvasTkAgg(fig, master=self.rx_plots_frame)
             canvas.draw()
             widget = canvas.get_tk_widget()
@@ -1864,7 +1922,7 @@ class TransceiverUI(tk.Tk):
             widget.bind(
                 "<Button-1>",
                 lambda _e, m=mode, d=data, s=fs: self._show_fullscreen(
-                    d, s, m, f"RX {m}"
+                    d, s, m, f"RX {m}{title_suffix}"
                 ),
             )
             self.rx_canvases.append(canvas)
@@ -2174,23 +2232,16 @@ class TransceiverUI(tk.Tk):
 
         if proc is not None and proc.returncode == 0:
             try:
-                subprocess.run(
-                    [
-                        sys.executable,
-                        "-m",
-                        "transceiver.helpers.rx_convert",
-                        out_file,
-                        "--to",
-                        "sc16",
-                    ],
-                    check=True,
-                )
-                conv_file = out_file.replace(".bin", "_conv.bin")
-                raw = np.fromfile(conv_file, dtype=np.int16)
-                if raw.size % 2:
-                    raw = raw[:-1]
-                raw = raw.reshape(-1, 2).astype(np.float32)
-                data = raw[:, 0] + 1j * raw[:, 1]
+                channels = 2 if self.rx_channel_2.get() else 1
+                path = Path(out_file)
+                try:
+                    data = rx_convert.load_iq_file(
+                        path, channels=channels, layout="blocked"
+                    )
+                except ValueError:
+                    data = rx_convert.load_iq_file(
+                        path, channels=channels, layout="interleaved"
+                    )
                 self._display_rx_plots(data, float(eval(self.rx_rate.get())))
             except Exception as exc:
                 self._out_queue.put(f"Error: {exc}\n")
@@ -2301,6 +2352,7 @@ class TransceiverUI(tk.Tk):
             "rx_rrc_span": self.rx_rrc_span_entry.get(),
             "rx_rrc_enabled": self.rx_rrc_enable.get(),
             "rx_channel_2": self.rx_channel_2.get(),
+            "rx_channel_view": self.rx_channel_view.get(),
             "rx_file": self.rx_file.get(),
             "rx_view": self.rx_view.get(),
             "trim": self.trim_var.get(),
@@ -2384,6 +2436,7 @@ class TransceiverUI(tk.Tk):
         self.rx_rrc_beta_entry.entry.configure(state=state)
         self.rx_rrc_span_entry.entry.configure(state=state)
         self.rx_channel_2.set(params.get("rx_channel_2", False))
+        self.rx_channel_view.set(params.get("rx_channel_view", "Kanal 1"))
         self.rx_file.delete(0, tk.END)
         self.rx_file.insert(0, params.get("rx_file", ""))
         self.rx_view.set(params.get("rx_view", "Signal"))
