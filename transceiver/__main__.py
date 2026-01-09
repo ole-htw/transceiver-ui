@@ -22,6 +22,7 @@ import pyqtgraph as pg
 import sys
 from .helpers.tx_generator import generate_waveform
 from .helpers import rx_convert
+from .helpers import doa_esprit
 
 # --- suggestion helper -------------------------------------------------------
 
@@ -1658,9 +1659,26 @@ class TransceiverUI(tk.Tk):
         ttk.Combobox(
             rx_frame,
             textvariable=self.rx_view,
-            values=["Signal", "Freq", "InstantFreq", "Crosscorr"],
+            values=["Signal", "Freq", "InstantFreq", "Crosscorr", "AoA (ESPRIT)"],
             width=12,
         ).grid(row=11, column=1)
+
+        ttk.Label(rx_frame, text="Antennenabstand [m]").grid(
+            row=12, column=0, sticky="w"
+        )
+        self.rx_ant_spacing = SuggestEntry(rx_frame, "rx_ant_spacing")
+        self.rx_ant_spacing.insert(0, "0.03")
+        self.rx_ant_spacing.grid(row=12, column=1, sticky="ew")
+
+        ttk.Label(rx_frame, text="Wellenlänge [m]").grid(
+            row=13, column=0, sticky="w"
+        )
+        self.rx_wavelength = SuggestEntry(rx_frame, "rx_wavelength")
+        self.rx_wavelength.insert(0, "3e8/5.18e9")
+        self.rx_wavelength.grid(row=13, column=1, sticky="ew")
+
+        self.rx_aoa_label = ttk.Label(rx_frame, text="AoA (ESPRIT): --")
+        self.rx_aoa_label.grid(row=14, column=0, columnspan=2, sticky="w")
 
         # --- Trim controls -------------------------------------------------
         self.trim_var = tk.BooleanVar(value=False)
@@ -1669,7 +1687,7 @@ class TransceiverUI(tk.Tk):
         self.trim_dirty = False
 
         trim_frame = ttk.Frame(rx_frame)
-        trim_frame.grid(row=12, column=0, columnspan=2, sticky="ew")
+        trim_frame.grid(row=15, column=0, columnspan=2, sticky="ew")
         trim_frame.columnconfigure(1, weight=1)
 
         ttk.Checkbutton(
@@ -1701,7 +1719,7 @@ class TransceiverUI(tk.Tk):
         self.trim_end_label.grid(row=1, column=2, sticky="e")
 
         rx_btn_frame = ttk.Frame(rx_frame)
-        rx_btn_frame.grid(row=13, column=0, columnspan=2, pady=5)
+        rx_btn_frame.grid(row=16, column=0, columnspan=2, pady=5)
         rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
         self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
@@ -1719,7 +1737,7 @@ class TransceiverUI(tk.Tk):
         )
 
         rx_scroll_container = ttk.Frame(rx_frame)
-        rx_scroll_container.grid(row=14, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.grid(row=17, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
@@ -1742,7 +1760,7 @@ class TransceiverUI(tk.Tk):
                 scrollregion=self.rx_canvas.bbox("all")
             ),
         )
-        rx_frame.rowconfigure(13, weight=1)
+        rx_frame.rowconfigure(17, weight=1)
         self.rx_canvases = []
         self.update_waveform_fields()
         self.auto_update_tx_filename()
@@ -1895,6 +1913,39 @@ class TransceiverUI(tk.Tk):
         data, fac = self._oversample_data(data)
         fs *= fac
         self.latest_data = data
+        aoa_text = "AoA (ESPRIT): --"
+        aoa_data = None
+        aoa_time = None
+        aoa_series = None
+        if self.raw_rx_data.ndim == 2 and self.raw_rx_data.shape[0] >= 2:
+            aoa_data = self.raw_rx_data[:2]
+            if self.trim_var.get():
+                aoa_data = self._trim_data_multichannel(aoa_data)
+            if self.rx_os_enable.get():
+                try:
+                    factor = int(self.rx_os_entry.get())
+                except Exception:
+                    factor = 1
+                if factor > 1:
+                    aoa_data = np.vstack(
+                        [self._oversample_data(chan)[0] for chan in aoa_data]
+                    )
+            try:
+                antenna_spacing = float(eval(self.rx_ant_spacing.get()))
+                wavelength = float(eval(self.rx_wavelength.get()))
+                aoa_angle = doa_esprit.estimate_aoa_esprit(
+                    aoa_data, antenna_spacing, wavelength
+                )
+                if not np.isnan(aoa_angle):
+                    aoa_text = f"AoA (ESPRIT): {aoa_angle:.1f}°"
+                    if self.rx_view.get() == "AoA (ESPRIT)":
+                        aoa_time, aoa_series = doa_esprit.estimate_aoa_esprit_series(
+                            aoa_data, antenna_spacing, wavelength
+                        )
+            except Exception:
+                aoa_text = "AoA (ESPRIT): Parameter ungültig"
+        else:
+            aoa_text = "AoA (ESPRIT): 2 Kanäle erforderlich"
 
         try:
             raw = np.fromfile(self.tx_file.get(), dtype=np.int16)
@@ -1935,6 +1986,27 @@ class TransceiverUI(tk.Tk):
             )
         self.rx_stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
         self.rx_stats_label.configure(text=text)
+        if hasattr(self, "rx_aoa_label"):
+            self.rx_aoa_label.configure(text=aoa_text)
+        if self.rx_view.get() == "AoA (ESPRIT)":
+            fig = Figure(figsize=(5, 2), dpi=100)
+            ax = fig.add_subplot(111)
+            if aoa_time is None or aoa_series is None or aoa_series.size == 0:
+                ax.set_title("AoA (ESPRIT)")
+                ax.text(0.5, 0.5, "Keine AoA-Daten", ha="center", va="center")
+                ax.set_axis_off()
+            else:
+                t = aoa_time / fs
+                ax.plot(t, aoa_series, "b")
+                ax.set_title("AoA (ESPRIT)")
+                ax.set_xlabel("Time [s]")
+                ax.set_ylabel("Angle [deg]")
+                ax.grid(True)
+            canvas = FigureCanvasTkAgg(fig, master=self.rx_plots_frame)
+            canvas.draw()
+            widget = canvas.get_tk_widget()
+            widget.grid(row=len(modes) + 1, column=0, sticky="nsew", pady=2)
+            self.rx_canvases.append(canvas)
 
     def _trim_data(self, data: np.ndarray) -> np.ndarray:
         """Return trimmed view of *data* based on slider settings."""
@@ -1948,6 +2020,19 @@ class TransceiverUI(tk.Tk):
         e = int(round(len(data) * end_pct / 100))
         e = max(s + 1, min(len(data), e))
         return data[s:e]
+
+    def _trim_data_multichannel(self, data: np.ndarray) -> np.ndarray:
+        """Return trimmed view of multi-channel *data* based on slider settings."""
+        if data.size == 0:
+            return data
+        start_pct = max(0.0, min(100.0, self.trim_start.get()))
+        end_pct = max(0.0, min(100.0, self.trim_end.get()))
+        if end_pct <= start_pct:
+            end_pct = min(100.0, start_pct + 1.0)
+        s = int(round(data.shape[1] * start_pct / 100))
+        e = int(round(data.shape[1] * end_pct / 100))
+        e = max(s + 1, min(data.shape[1], e))
+        return data[:, s:e]
 
     def _oversample_data(self, data: np.ndarray) -> tuple[np.ndarray, float]:
         """Return oversampled *data* and new sample rate factor."""
@@ -2355,6 +2440,8 @@ class TransceiverUI(tk.Tk):
             "rx_channel_view": self.rx_channel_view.get(),
             "rx_file": self.rx_file.get(),
             "rx_view": self.rx_view.get(),
+            "rx_ant_spacing": self.rx_ant_spacing.get(),
+            "rx_wavelength": self.rx_wavelength.get(),
             "trim": self.trim_var.get(),
             "trim_start": self.trim_start.get(),
             "trim_end": self.trim_end.get(),
@@ -2440,6 +2527,10 @@ class TransceiverUI(tk.Tk):
         self.rx_file.delete(0, tk.END)
         self.rx_file.insert(0, params.get("rx_file", ""))
         self.rx_view.set(params.get("rx_view", "Signal"))
+        self.rx_ant_spacing.delete(0, tk.END)
+        self.rx_ant_spacing.insert(0, params.get("rx_ant_spacing", "0.03"))
+        self.rx_wavelength.delete(0, tk.END)
+        self.rx_wavelength.insert(0, params.get("rx_wavelength", "3e8/5.18e9"))
         self.trim_var.set(params.get("trim", False))
         self.trim_start.set(params.get("trim_start", 0.0))
         self.trim_end.set(params.get("trim_end", 100.0))
