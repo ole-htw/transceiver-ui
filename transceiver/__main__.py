@@ -875,6 +875,112 @@ def _find_los_echo(cc: np.ndarray) -> tuple[int | None, int | None]:
     return los, echo
 
 
+def _find_peaks_simple(
+    mag: np.ndarray, rel_thresh: float = 0.2, min_dist: int = 200
+) -> list[int]:
+    """Find local maxima in *mag* with a relative threshold and spacing."""
+    if mag.size < 3:
+        return []
+    thr = rel_thresh * float(np.max(mag))
+    candidates = []
+    for i in range(1, len(mag) - 1):
+        if mag[i] >= thr and mag[i] >= mag[i - 1] and mag[i] >= mag[i + 1]:
+            candidates.append(i)
+
+    candidates.sort(key=lambda i: mag[i], reverse=True)
+    picked = []
+    for i in candidates:
+        if all(abs(i - j) >= min_dist for j in picked):
+            picked.append(i)
+    picked.sort()
+    return picked
+
+
+def _aoa_from_corr_peak(
+    cc1: np.ndarray,
+    cc2: np.ndarray,
+    peak_index: int,
+    antenna_spacing: float,
+    wavelength: float,
+    win: int = 50,
+) -> tuple[float, float]:
+    """Estimate AoA from correlation outputs around *peak_index*."""
+    if antenna_spacing <= 0 or wavelength <= 0:
+        return float("nan"), 0.0
+    start = max(0, peak_index - win)
+    end = min(len(cc1), peak_index + win + 1)
+    w1 = cc1[start:end]
+    w2 = cc2[start:end]
+    mag = np.abs(w1) + np.abs(w2)
+    if np.all(mag == 0):
+        return float("nan"), 0.0
+
+    weight = mag
+    z = np.sum(weight * (w2 * np.conj(w1)))
+    denom = np.sum(weight * (np.abs(w1) * np.abs(w2))) + 1e-12
+    coherence = float(np.abs(z) / denom)
+    phi = float(np.angle(z))
+    sin_theta = phi * wavelength / (2.0 * np.pi * antenna_spacing)
+    sin_theta = max(-1.0, min(1.0, sin_theta))
+    theta = float(np.degrees(np.arcsin(sin_theta)))
+    return theta, coherence
+
+
+def _correlate_and_estimate_echo_aoa(
+    rx_data: np.ndarray,
+    tx_data: np.ndarray,
+    antenna_spacing: float,
+    wavelength: float,
+    rel_thresh: float = 0.2,
+    min_dist: int = 200,
+    peak_win: int = 50,
+) -> dict:
+    """Cross-correlate per-channel RX with TX and estimate AoA per peak."""
+    rx = np.asarray(rx_data)
+    if rx.ndim != 2 or rx.shape[0] < 2:
+        raise ValueError("Need two RX channels for echo AoA estimation.")
+    ch1 = rx[0]
+    ch2 = rx[1]
+    n = min(len(ch1), len(ch2), len(tx_data))
+    ch1 = ch1[:n]
+    ch2 = ch2[:n]
+    txr = tx_data[:n]
+
+    cc1 = _xcorr_fft(ch1, txr)
+    cc2 = _xcorr_fft(ch2, txr)
+    lags = np.arange(-(len(txr) - 1), len(ch1))
+    mag = np.abs(cc1) + np.abs(cc2)
+    peaks = _find_peaks_simple(mag, rel_thresh=rel_thresh, min_dist=min_dist)
+    results = []
+    for p in peaks:
+        theta, coh = _aoa_from_corr_peak(
+            cc1,
+            cc2,
+            p,
+            antenna_spacing=antenna_spacing,
+            wavelength=wavelength,
+            win=peak_win,
+        )
+        results.append(
+            {
+                "peak_index": int(p),
+                "lag_samp": int(lags[p]),
+                "strength": float(mag[p]),
+                "theta_deg": float(theta),
+                "coherence": float(coh),
+            }
+        )
+
+    return {
+        "lags": lags,
+        "cc1": cc1,
+        "cc2": cc2,
+        "mag": mag,
+        "peaks": peaks,
+        "results": results,
+    }
+
+
 def _pretty(val: float) -> str:
     """Shorten numeric values for filenames."""
     abs_v = abs(val)
@@ -1679,6 +1785,8 @@ class TransceiverUI(tk.Tk):
 
         self.rx_aoa_label = ttk.Label(rx_frame, text="AoA (ESPRIT): --")
         self.rx_aoa_label.grid(row=14, column=0, columnspan=2, sticky="w")
+        self.rx_echo_aoa_label = ttk.Label(rx_frame, text="Echo AoA: --")
+        self.rx_echo_aoa_label.grid(row=15, column=0, columnspan=2, sticky="w")
 
         # --- Trim controls -------------------------------------------------
         self.trim_var = tk.BooleanVar(value=False)
@@ -1687,7 +1795,7 @@ class TransceiverUI(tk.Tk):
         self.trim_dirty = False
 
         trim_frame = ttk.Frame(rx_frame)
-        trim_frame.grid(row=15, column=0, columnspan=2, sticky="ew")
+        trim_frame.grid(row=16, column=0, columnspan=2, sticky="ew")
         trim_frame.columnconfigure(1, weight=1)
 
         ttk.Checkbutton(
@@ -1719,7 +1827,7 @@ class TransceiverUI(tk.Tk):
         self.trim_end_label.grid(row=1, column=2, sticky="e")
 
         rx_btn_frame = ttk.Frame(rx_frame)
-        rx_btn_frame.grid(row=16, column=0, columnspan=2, pady=5)
+        rx_btn_frame.grid(row=17, column=0, columnspan=2, pady=5)
         rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
         self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
@@ -1737,7 +1845,7 @@ class TransceiverUI(tk.Tk):
         )
 
         rx_scroll_container = ttk.Frame(rx_frame)
-        rx_scroll_container.grid(row=17, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.grid(row=18, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
@@ -1760,7 +1868,7 @@ class TransceiverUI(tk.Tk):
                 scrollregion=self.rx_canvas.bbox("all")
             ),
         )
-        rx_frame.rowconfigure(17, weight=1)
+        rx_frame.rowconfigure(18, weight=1)
         self.rx_canvases = []
         self.update_waveform_fields()
         self.auto_update_tx_filename()
@@ -1913,7 +2021,17 @@ class TransceiverUI(tk.Tk):
         data, fac = self._oversample_data(data)
         fs *= fac
         self.latest_data = data
+        try:
+            raw = np.fromfile(self.tx_file.get(), dtype=np.int16)
+            if raw.size % 2:
+                raw = raw[:-1]
+            raw = raw.reshape(-1, 2).astype(np.float32)
+            self.tx_data = raw[:, 0] + 1j * raw[:, 1]
+        except Exception:
+            self.tx_data = np.array([], dtype=np.complex64)
         aoa_text = "AoA (ESPRIT): --"
+        echo_aoa_text = "Echo AoA: --"
+        self.echo_aoa_results = []
         aoa_data = None
         aoa_time = None
         aoa_series = None
@@ -1942,19 +2060,49 @@ class TransceiverUI(tk.Tk):
                         aoa_time, aoa_series = doa_esprit.estimate_aoa_esprit_series(
                             aoa_data, antenna_spacing, wavelength
                         )
+                if self.tx_data.size > 0:
+                    echo_data = aoa_data
+                    echo_out = _correlate_and_estimate_echo_aoa(
+                        echo_data,
+                        self.tx_data,
+                        antenna_spacing=antenna_spacing,
+                        wavelength=wavelength,
+                    )
+                    self.echo_aoa_results = echo_out["results"]
+                    if self.echo_aoa_results:
+                        items = []
+                        for result in self.echo_aoa_results[:3]:
+                            theta = result["theta_deg"]
+                            theta_text = (
+                                "nan" if np.isnan(theta) else f"{theta:.1f}°"
+                            )
+                            items.append(
+                                "Lag {lag}: {theta} (ρ {coh:.2f})".format(
+                                    lag=result["lag_samp"],
+                                    theta=theta_text,
+                                    coh=result["coherence"],
+                                )
+                            )
+                        if len(self.echo_aoa_results) > 3:
+                            items.append(
+                                f"+{len(self.echo_aoa_results) - 3} weitere"
+                            )
+                        echo_aoa_text = "Echo AoA:\n" + "\n".join(items)
+                    else:
+                        echo_aoa_text = "Echo AoA: keine Peaks"
             except Exception:
                 aoa_text = "AoA (ESPRIT): Parameter ungültig"
+                echo_aoa_text = "Echo AoA: Parameter ungültig"
         else:
             aoa_text = "AoA (ESPRIT): 2 Kanäle erforderlich"
+            echo_aoa_text = "Echo AoA: 2 Kanäle erforderlich"
 
-        try:
-            raw = np.fromfile(self.tx_file.get(), dtype=np.int16)
-            if raw.size % 2:
-                raw = raw[:-1]
-            raw = raw.reshape(-1, 2).astype(np.float32)
-            self.tx_data = raw[:, 0] + 1j * raw[:, 1]
-        except Exception:
-            self.tx_data = np.array([], dtype=np.complex64)
+        if (
+            self.raw_rx_data.ndim == 2
+            and self.raw_rx_data.shape[0] >= 2
+            and self.tx_data.size == 0
+        ):
+            echo_aoa_text = "Echo AoA: TX-Daten erforderlich"
 
         for c in self.rx_canvases:
             c.get_tk_widget().destroy()
@@ -1988,6 +2136,8 @@ class TransceiverUI(tk.Tk):
         self.rx_stats_label.configure(text=text)
         if hasattr(self, "rx_aoa_label"):
             self.rx_aoa_label.configure(text=aoa_text)
+        if hasattr(self, "rx_echo_aoa_label"):
+            self.rx_echo_aoa_label.configure(text=echo_aoa_text)
         if self.rx_view.get() == "AoA (ESPRIT)":
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
@@ -2394,12 +2544,41 @@ class TransceiverUI(tk.Tk):
         if not hasattr(self, "tx_data") or self.tx_data.size == 0:
             messagebox.showerror("XCorr Full", "No TX data available")
             return
-        data = self.latest_data
-        ref = self.tx_data
-        n = min(len(data), len(ref))
-        cc = _xcorr_fft(data[:n], ref[:n])
-        self.full_xcorr_lags = np.arange(-n + 1, n)
-        self.full_xcorr_mag = np.abs(cc)
+        if (
+            hasattr(self, "raw_rx_data")
+            and self.raw_rx_data is not None
+            and self.raw_rx_data.ndim == 2
+            and self.raw_rx_data.shape[0] >= 2
+        ):
+            echo_data = self.raw_rx_data[:2]
+            if self.trim_var.get():
+                echo_data = self._trim_data_multichannel(echo_data)
+            if self.rx_os_enable.get():
+                echo_data = np.vstack(
+                    [self._oversample_data(chan)[0] for chan in echo_data]
+                )
+            try:
+                antenna_spacing = float(eval(self.rx_ant_spacing.get()))
+                wavelength = float(eval(self.rx_wavelength.get()))
+            except Exception:
+                antenna_spacing = 0.0
+                wavelength = 0.0
+            echo_out = _correlate_and_estimate_echo_aoa(
+                echo_data,
+                self.tx_data,
+                antenna_spacing=antenna_spacing,
+                wavelength=wavelength,
+            )
+            self.full_xcorr_lags = echo_out["lags"]
+            self.full_xcorr_mag = echo_out["mag"]
+            self.echo_aoa_results = echo_out["results"]
+        else:
+            data = self.latest_data
+            ref = self.tx_data
+            n = min(len(data), len(ref))
+            cc = _xcorr_fft(data[:n], ref[:n])
+            self.full_xcorr_lags = np.arange(-n + 1, n)
+            self.full_xcorr_mag = np.abs(cc)
         self._show_toast("Cross-correlation calculated")
 
     # ----- Preset handling --------------------------------------------------
