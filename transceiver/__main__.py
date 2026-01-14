@@ -1248,27 +1248,14 @@ def _calc_stats(
 
     if ref_data is not None and ref_data.size and data.size:
         n = min(len(data), len(ref_data))
-        manual_delay = None
-        if manual_lags is not None:
-            los_lag = manual_lags.get("los")
-            echo_lag = manual_lags.get("echo")
-            min_lag = -(n - 1)
-            max_lag = n - 1
-            if (
-                los_lag is not None
-                and echo_lag is not None
-                and min_lag <= los_lag <= max_lag
-                and min_lag <= echo_lag <= max_lag
-            ):
-                manual_delay = int(echo_lag - los_lag)
-        if manual_delay is not None:
-            stats["echo_delay"] = manual_delay
-        else:
-            cc = _xcorr_fft(data[:n], ref_data[:n])
-            lags = np.arange(-n + 1, n)
-            los_idx, echo_idx = _find_los_echo(cc)
-            if los_idx is not None and echo_idx is not None:
-                stats["echo_delay"] = int(lags[echo_idx] - lags[los_idx])
+        cc = _xcorr_fft(data[:n], ref_data[:n])
+        lags = np.arange(-n + 1, n)
+        los_idx, echo_idx = _find_los_echo(cc)
+        los_idx, echo_idx = _apply_manual_lags(
+            lags, los_idx, echo_idx, manual_lags
+        )
+        if los_idx is not None and echo_idx is not None:
+            stats["echo_delay"] = int(lags[echo_idx] - lags[los_idx])
 
     return stats
 
