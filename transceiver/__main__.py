@@ -1452,7 +1452,7 @@ def _plot_on_pg(
 
             return _handler
 
-        plot.addItem(echo_text)
+        plot.addItem(echo_text, ignoreBounds=True)
         plot.getViewBox().sigRangeChanged.connect(
             lambda *_args: _position_echo_text()
         )
