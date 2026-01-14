@@ -947,6 +947,15 @@ def _apply_manual_lags(
     return los_idx, echo_idx
 
 
+def _echo_delay_samples(
+    lags: np.ndarray, los_idx: int | None, echo_idx: int | None
+) -> int | None:
+    """Return the absolute LOS/echo lag distance in samples."""
+    if los_idx is None or echo_idx is None:
+        return None
+    return int(abs(lags[echo_idx] - lags[los_idx]))
+
+
 def _xcorr_fft(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """Return the full cross-correlation of *a* and *b* using FFT."""
     n = len(a) + len(b) - 1
@@ -1254,8 +1263,7 @@ def _calc_stats(
         los_idx, echo_idx = _apply_manual_lags(
             lags, los_idx, echo_idx, manual_lags
         )
-        if los_idx is not None and echo_idx is not None:
-            stats["echo_delay"] = int(lags[echo_idx] - lags[los_idx])
+        stats["echo_delay"] = _echo_delay_samples(lags, los_idx, echo_idx)
 
     return stats
 
@@ -1411,18 +1419,51 @@ def _plot_on_pg(
         lags = np.arange(-n + 1, n) * step_r
         mag = np.abs(cc)
         plot.plot(lags, mag, pen="b")
-        los_idx, echo_idx = _find_los_echo(cc)
+        base_los_idx, base_echo_idx = _find_los_echo(cc)
         los_idx, echo_idx = _apply_manual_lags(
-            lags, los_idx, echo_idx, manual_lags
+            lags, base_los_idx, base_echo_idx, manual_lags
         )
+
+        echo_text = pg.TextItem(color="k", anchor=(0, 1))
+
+        def _position_echo_text() -> None:
+            view_box = plot.getViewBox()
+            x_range, y_range = view_box.viewRange()
+            echo_text.setPos(x_range[0], y_range[0])
+
+        def _update_echo_text() -> None:
+            adj_los_idx, adj_echo_idx = _apply_manual_lags(
+                lags, base_los_idx, base_echo_idx, manual_lags
+            )
+            delay = _echo_delay_samples(lags, adj_los_idx, adj_echo_idx)
+            if delay is None:
+                echo_text.setText("LOS-Echo: --")
+            else:
+                echo_text.setText(f"LOS-Echo: {delay} samp")
+            _position_echo_text()
+
+        def _wrap_drag(callback):
+            def _handler(idx, lag):
+                if callback is not None:
+                    callback(idx, lag)
+                _update_echo_text()
+
+            return _handler
+
+        plot.addItem(echo_text)
+        plot.getViewBox().sigRangeChanged.connect(
+            lambda *_args: _position_echo_text()
+        )
+        _update_echo_text()
+
         _add_draggable_markers(
             plot,
             lags,
             mag,
             los_idx,
             echo_idx,
-            on_los_drag_end=on_los_drag_end,
-            on_echo_drag_end=on_echo_drag_end,
+            on_los_drag_end=_wrap_drag(on_los_drag_end),
+            on_echo_drag_end=_wrap_drag(on_echo_drag_end),
         )
         plot.setTitle(f"Crosscorr. with TX: {title}")
         plot.setLabel("bottom", "Lag")
@@ -1492,6 +1533,21 @@ def _plot_on_mpl(
             ax.plot(lags[los_idx], mag[los_idx], "ro")
         if echo_idx is not None:
             ax.plot(lags[echo_idx], mag[echo_idx], "go")
+        delay = _echo_delay_samples(lags, los_idx, echo_idx)
+        if delay is None:
+            delay_text = "LOS-Echo: --"
+        else:
+            delay_text = f"LOS-Echo: {delay} samp"
+        ax.text(
+            0.01,
+            0.01,
+            delay_text,
+            transform=ax.transAxes,
+            va="bottom",
+            ha="left",
+            fontsize=9,
+            color="black",
+        )
         ax.set_xlabel("Lag")
         ax.set_ylabel("Magnitude")
     ax.set_title(title)
