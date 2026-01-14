@@ -1277,7 +1277,8 @@ def _format_stats_text(stats: dict) -> str:
         f"BW (3dB): {_format_hz(stats['bw'])}",
     ]
     if stats.get("echo_delay") is not None:
-        lines.append(f"LOS-Echo: {stats['echo_delay']} samp")
+        meters = stats["echo_delay"] * 1.5
+        lines.append(f"LOS-Echo: {stats['echo_delay']} samp ({meters:.1f} m)")
     return "\n".join(lines)
 
 
@@ -1439,7 +1440,8 @@ def _plot_on_pg(
             if delay is None:
                 echo_text.setText("LOS-Echo: --")
             else:
-                echo_text.setText(f"LOS-Echo: {delay} samp")
+                meters = delay * 1.5
+                echo_text.setText(f"LOS-Echo: {delay} samp ({meters:.1f} m)")
             _position_echo_text()
 
         def _wrap_drag(callback):
@@ -1537,7 +1539,8 @@ def _plot_on_mpl(
         if delay is None:
             delay_text = "LOS-Echo: --"
         else:
-            delay_text = f"LOS-Echo: {delay} samp"
+            meters = delay * 1.5
+            delay_text = f"LOS-Echo: {delay} samp ({meters:.1f} m)"
         ax.text(
             0.01,
             0.01,
