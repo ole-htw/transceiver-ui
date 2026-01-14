@@ -384,7 +384,15 @@ class SignalViewer(tk.Toplevel):
         for idx, mode in enumerate(modes):
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
-            _plot_on_mpl(ax, data, fs, mode, f"RX {mode}", self.tx_data)
+            _plot_on_mpl(
+                ax,
+                data,
+                fs,
+                mode,
+                f"RX {mode}",
+                self.tx_data,
+                manual_lags=getattr(self.parent, "manual_xcorr_lags", None),
+            )
             canvas = FigureCanvasTkAgg(fig, master=self.plots_frame)
             canvas.draw()
             widget = canvas.get_tk_widget()
@@ -397,7 +405,12 @@ class SignalViewer(tk.Toplevel):
             )
             self.canvases.append(canvas)
 
-        stats = _calc_stats(data, fs, self.tx_data)
+        stats = _calc_stats(
+            data,
+            fs,
+            self.tx_data,
+            manual_lags=getattr(self.parent, "manual_xcorr_lags", None),
+        )
         text = _format_stats_text(stats)
         self.stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
         self.stats_label.configure(text=text)
@@ -840,11 +853,13 @@ class DraggableLagMarker(pg.ScatterPlotItem):
         index: int,
         color: str,
         size: int = 10,
+        on_drag_end=None,
     ) -> None:
         self._view_box = view_box
         self._lags = np.asarray(lags)
         self._magnitudes = np.asarray(magnitudes)
         self._index = int(index)
+        self._on_drag_end = on_drag_end
         self._dragging = False
         pen = pg.mkPen(color)
         brush = pg.mkBrush(color)
@@ -872,6 +887,8 @@ class DraggableLagMarker(pg.ScatterPlotItem):
         self._update_position(idx)
         if ev.isFinish():
             self._dragging = False
+            if self._on_drag_end is not None:
+                self._on_drag_end(self._index, float(self._lags[self._index]))
         ev.accept()
 
 
@@ -881,13 +898,53 @@ def _add_draggable_markers(
     magnitudes: np.ndarray,
     los_idx: int | None,
     echo_idx: int | None,
+    on_los_drag_end=None,
+    on_echo_drag_end=None,
 ) -> None:
     """Attach draggable LOS/echo markers to a plot."""
     view_box = plot.getViewBox()
     if los_idx is not None:
-        plot.addItem(DraggableLagMarker(view_box, lags, magnitudes, los_idx, "r"))
+        plot.addItem(
+            DraggableLagMarker(
+                view_box,
+                lags,
+                magnitudes,
+                los_idx,
+                "r",
+                on_drag_end=on_los_drag_end,
+            )
+        )
     if echo_idx is not None:
-        plot.addItem(DraggableLagMarker(view_box, lags, magnitudes, echo_idx, "g"))
+        plot.addItem(
+            DraggableLagMarker(
+                view_box,
+                lags,
+                magnitudes,
+                echo_idx,
+                "g",
+                on_drag_end=on_echo_drag_end,
+            )
+        )
+
+
+def _apply_manual_lags(
+    lags: np.ndarray,
+    los_idx: int | None,
+    echo_idx: int | None,
+    manual_lags: dict[str, int | None] | None,
+) -> tuple[int | None, int | None]:
+    """Return marker indices adjusted by manual lag selections."""
+    if manual_lags is None or lags.size == 0:
+        return los_idx, echo_idx
+    manual_los = manual_lags.get("los")
+    manual_echo = manual_lags.get("echo")
+    min_lag = float(lags.min())
+    max_lag = float(lags.max())
+    if manual_los is not None and min_lag <= manual_los <= max_lag:
+        los_idx = int(np.abs(lags - manual_los).argmin())
+    if manual_echo is not None and min_lag <= manual_echo <= max_lag:
+        echo_idx = int(np.abs(lags - manual_echo).argmin())
+    return los_idx, echo_idx
 
 
 def _xcorr_fft(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -1145,7 +1202,10 @@ def _gen_rx_filename(app) -> str:
 
 
 def _calc_stats(
-    data: np.ndarray, fs: float, ref_data: np.ndarray | None = None
+    data: np.ndarray,
+    fs: float,
+    ref_data: np.ndarray | None = None,
+    manual_lags: dict[str, int | None] | None = None,
 ) -> dict:
     """Return basic signal statistics for display.
 
@@ -1188,11 +1248,27 @@ def _calc_stats(
 
     if ref_data is not None and ref_data.size and data.size:
         n = min(len(data), len(ref_data))
-        cc = _xcorr_fft(data[:n], ref_data[:n])
-        lags = np.arange(-n + 1, n)
-        los_idx, echo_idx = _find_los_echo(cc)
-        if los_idx is not None and echo_idx is not None:
-            stats["echo_delay"] = int(lags[echo_idx] - lags[los_idx])
+        manual_delay = None
+        if manual_lags is not None:
+            los_lag = manual_lags.get("los")
+            echo_lag = manual_lags.get("echo")
+            min_lag = -(n - 1)
+            max_lag = n - 1
+            if (
+                los_lag is not None
+                and echo_lag is not None
+                and min_lag <= los_lag <= max_lag
+                and min_lag <= echo_lag <= max_lag
+            ):
+                manual_delay = int(echo_lag - los_lag)
+        if manual_delay is not None:
+            stats["echo_delay"] = manual_delay
+        else:
+            cc = _xcorr_fft(data[:n], ref_data[:n])
+            lags = np.arange(-n + 1, n)
+            los_idx, echo_idx = _find_los_echo(cc)
+            if los_idx is not None and echo_idx is not None:
+                stats["echo_delay"] = int(lags[echo_idx] - lags[los_idx])
 
     return stats
 
@@ -1275,7 +1351,7 @@ def visualize(
         fs /= step_r
         n = min(len(data), len(ref_data))
         cc = _xcorr_fft(data[:n], ref_data[:n])
-        lags = np.arange(-n + 1, n)
+        lags = np.arange(-n + 1, n) * step_r
         mag = np.abs(cc)
         win = pg.plot(lags, mag, pen="b", title=f"Crosscorr. with TX: {title}")
         win.setLabel("bottom", "Lag")
@@ -1297,6 +1373,9 @@ def _plot_on_pg(
     mode: str,
     title: str,
     ref_data: np.ndarray | None = None,
+    manual_lags: dict[str, int | None] | None = None,
+    on_los_drag_end=None,
+    on_echo_drag_end=None,
 ) -> None:
     """Helper to draw the selected visualization on a PyQtGraph PlotItem."""
     data, step = _reduce_data(data)
@@ -1342,11 +1421,22 @@ def _plot_on_pg(
         fs /= step_r
         n = min(len(data), len(ref_data))
         cc = _xcorr_fft(data[:n], ref_data[:n])
-        lags = np.arange(-n + 1, n)
+        lags = np.arange(-n + 1, n) * step_r
         mag = np.abs(cc)
         plot.plot(lags, mag, pen="b")
         los_idx, echo_idx = _find_los_echo(cc)
-        _add_draggable_markers(plot, lags, mag, los_idx, echo_idx)
+        los_idx, echo_idx = _apply_manual_lags(
+            lags, los_idx, echo_idx, manual_lags
+        )
+        _add_draggable_markers(
+            plot,
+            lags,
+            mag,
+            los_idx,
+            echo_idx,
+            on_los_drag_end=on_los_drag_end,
+            on_echo_drag_end=on_echo_drag_end,
+        )
         plot.setTitle(f"Crosscorr. with TX: {title}")
         plot.setLabel("bottom", "Lag")
         plot.setLabel("left", "Magnitude")
@@ -1360,6 +1450,7 @@ def _plot_on_mpl(
     mode: str,
     title: str,
     ref_data: np.ndarray | None = None,
+    manual_lags: dict[str, int | None] | None = None,
 ) -> None:
     """Helper to draw a small matplotlib preview plot."""
     if data.ndim != 1:
@@ -1403,10 +1494,13 @@ def _plot_on_mpl(
         fs /= step_r
         n = min(len(data), len(ref_data))
         cc = _xcorr_fft(data[:n], ref_data[:n])
-        lags = np.arange(-n + 1, n)
+        lags = np.arange(-n + 1, n) * step_r
         mag = np.abs(cc)
         ax.plot(lags, mag, "b")
         los_idx, echo_idx = _find_los_echo(cc)
+        los_idx, echo_idx = _apply_manual_lags(
+            lags, los_idx, echo_idx, manual_lags
+        )
         if los_idx is not None:
             ax.plot(lags[los_idx], mag[los_idx], "ro")
         if echo_idx is not None:
@@ -1438,6 +1532,7 @@ class TransceiverUI(tk.Tk):
         self._proc = None
         self._stop_requested = False
         self._plot_win = None
+        self.manual_xcorr_lags = {"los": None, "echo": None}
         self._tx_running = False
         self._last_tx_end = 0.0
         self.create_widgets()
@@ -2160,7 +2255,15 @@ class TransceiverUI(tk.Tk):
         for idx, mode in enumerate(modes):
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
-            _plot_on_mpl(ax, data, fs, mode, f"RX {mode}{title_suffix}", self.tx_data)
+            _plot_on_mpl(
+                ax,
+                data,
+                fs,
+                mode,
+                f"RX {mode}{title_suffix}",
+                self.tx_data,
+                manual_lags=self.manual_xcorr_lags,
+            )
             canvas = FigureCanvasTkAgg(fig, master=self.rx_plots_frame)
             canvas.draw()
             widget = canvas.get_tk_widget()
@@ -2173,7 +2276,12 @@ class TransceiverUI(tk.Tk):
             )
             self.rx_canvases.append(canvas)
 
-        stats = _calc_stats(data, fs, self.tx_data)
+        stats = _calc_stats(
+            data,
+            fs,
+            self.tx_data,
+            manual_lags=self.manual_xcorr_lags,
+        )
         text = _format_stats_text(stats)
         if not hasattr(self, "rx_stats_label"):
             self.rx_stats_label = ttk.Label(
@@ -2528,6 +2636,26 @@ class TransceiverUI(tk.Tk):
             except Exception as exc:
                 self._out_queue.put(f"Error: {exc}\n")
 
+    def _set_manual_xcorr_lag(self, kind: str, lag_value: float) -> None:
+        """Store manual lag selection and refresh LOS/echo stats."""
+        if kind not in ("los", "echo"):
+            return
+        self.manual_xcorr_lags[kind] = int(round(lag_value))
+        self._refresh_rx_stats()
+
+    def _refresh_rx_stats(self) -> None:
+        if not hasattr(self, "rx_stats_label"):
+            return
+        if not hasattr(self, "latest_data") or self.latest_data is None:
+            return
+        stats = _calc_stats(
+            self.latest_data,
+            self.latest_fs,
+            getattr(self, "tx_data", None),
+            manual_lags=self.manual_xcorr_lags,
+        )
+        self.rx_stats_label.configure(text=_format_stats_text(stats))
+
     def _show_fullscreen(
         self,
         data: np.ndarray,
@@ -2557,6 +2685,9 @@ class TransceiverUI(tk.Tk):
             mode,
             title,
             ref_data if ref_data is not None else getattr(self, "tx_data", None),
+            manual_lags=self.manual_xcorr_lags,
+            on_los_drag_end=lambda _idx, lag: self._set_manual_xcorr_lag("los", lag),
+            on_echo_drag_end=lambda _idx, lag: self._set_manual_xcorr_lag("echo", lag),
         )
         try:
             win.showMaximized()
