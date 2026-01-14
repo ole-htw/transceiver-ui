@@ -829,6 +829,67 @@ def _reduce_pair(
     return a, b, step
 
 
+class DraggableLagMarker(pg.ScatterPlotItem):
+    """Draggable marker for cross-correlation lag points."""
+
+    def __init__(
+        self,
+        view_box: pg.ViewBox,
+        lags: np.ndarray,
+        magnitudes: np.ndarray,
+        index: int,
+        color: str,
+        size: int = 10,
+    ) -> None:
+        self._view_box = view_box
+        self._lags = np.asarray(lags)
+        self._magnitudes = np.asarray(magnitudes)
+        self._index = int(index)
+        self._dragging = False
+        pen = pg.mkPen(color)
+        brush = pg.mkBrush(color)
+        super().__init__(symbol="o", size=size, pen=pen, brush=brush)
+        self.setZValue(10)
+        self.setAcceptedMouseButtons(QtCore.Qt.LeftButton)
+        self._update_position(self._index)
+
+    def _update_position(self, index: int) -> None:
+        index = int(np.clip(index, 0, len(self._lags) - 1))
+        self._index = index
+        self.setData([self._lags[index]], [self._magnitudes[index]])
+
+    def mouseDragEvent(self, ev) -> None:
+        if ev.button() != QtCore.Qt.LeftButton:
+            ev.ignore()
+            return
+        if ev.isStart():
+            self._dragging = True
+        if not self._dragging:
+            ev.ignore()
+            return
+        pos = self._view_box.mapSceneToView(ev.scenePos())
+        idx = int(np.abs(self._lags - pos.x()).argmin())
+        self._update_position(idx)
+        if ev.isFinish():
+            self._dragging = False
+        ev.accept()
+
+
+def _add_draggable_markers(
+    plot: pg.PlotItem,
+    lags: np.ndarray,
+    magnitudes: np.ndarray,
+    los_idx: int | None,
+    echo_idx: int | None,
+) -> None:
+    """Attach draggable LOS/echo markers to a plot."""
+    view_box = plot.getViewBox()
+    if los_idx is not None:
+        plot.addItem(DraggableLagMarker(view_box, lags, magnitudes, los_idx, "r"))
+    if echo_idx is not None:
+        plot.addItem(DraggableLagMarker(view_box, lags, magnitudes, echo_idx, "g"))
+
+
 def _xcorr_fft(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """Return the full cross-correlation of *a* and *b* using FFT."""
     n = len(a) + len(b) - 1
@@ -1220,14 +1281,7 @@ def visualize(
         win.setLabel("bottom", "Lag")
         win.setLabel("left", "Magnitude")
         los_idx, echo_idx = _find_los_echo(cc)
-        if los_idx is not None:
-            win.plot(
-                [lags[los_idx]], [mag[los_idx]], pen=None, symbol="o", symbolBrush="r"
-            )
-        if echo_idx is not None:
-            win.plot(
-                [lags[echo_idx]], [mag[echo_idx]], pen=None, symbol="o", symbolBrush="g"
-            )
+        _add_draggable_markers(win.getPlotItem(), lags, mag, los_idx, echo_idx)
         win.showGrid(x=True, y=True)
     else:
         messagebox.showerror("Error", f"Unknown mode {mode}")
@@ -1292,14 +1346,7 @@ def _plot_on_pg(
         mag = np.abs(cc)
         plot.plot(lags, mag, pen="b")
         los_idx, echo_idx = _find_los_echo(cc)
-        if los_idx is not None:
-            plot.plot(
-                [lags[los_idx]], [mag[los_idx]], pen=None, symbol="o", symbolBrush="r"
-            )
-        if echo_idx is not None:
-            plot.plot(
-                [lags[echo_idx]], [mag[echo_idx]], pen=None, symbol="o", symbolBrush="g"
-            )
+        _add_draggable_markers(plot, lags, mag, los_idx, echo_idx)
         plot.setTitle(f"Crosscorr. with TX: {title}")
         plot.setLabel("bottom", "Lag")
         plot.setLabel("left", "Magnitude")
