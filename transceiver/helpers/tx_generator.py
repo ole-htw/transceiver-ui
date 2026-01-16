@@ -179,6 +179,7 @@ def generate_waveform(
     rrc_beta: float = 0.25,
     rrc_span: int = 6,
     oversampling: int = 1,
+    zero_syms: int = 0,
 ) -> np.ndarray:
     """Erzeugt komplexe Samples einer der unterstützten Wellenformen.
 
@@ -187,13 +188,15 @@ def generate_waveform(
     - Für Zadoff-Chu ist Oversampling korrekt als upfirdn(RRC, symbols, up=OS)
       implementiert (Upsampling + FIR in einem Schritt).
     - Kein doppeltes Filtern mehr.
-    - Für den oversampleten ZC-Fall wird Delay kompensiert und auf exakt
-      N*oversampling Samples getrimmt.
+    - Für den oversampleten ZC-Fall wird Delay kompensiert, Pre/Post-Padding
+      verwendet und auf exakt (N + zero_syms)*oversampling Samples getrimmt.
     """
     if N <= 0:
         raise ValueError("N muss > 0 sein.")
     if oversampling <= 0:
         raise ValueError("oversampling muss >= 1 sein")
+    if zero_syms < 0:
+        raise ValueError("zero_syms muss >= 0 sein")
 
     w = waveform.lower()
 
@@ -249,14 +252,22 @@ def generate_waveform(
             h = np.array([1.0], dtype=np.float32)
 
         if sps > 1:
+            pad_syms = rrc_span // 2 if rrc_span > 0 else 0
+            if pad_syms > 0 or zero_syms > 0:
+                prefix = np.zeros(pad_syms, dtype=np.complex64)
+                suffix = np.zeros(pad_syms + zero_syms, dtype=np.complex64)
+                x = np.concatenate([prefix, symbols, suffix])
+            else:
+                x = symbols
+
             # Upsampling + FIR in einem Schritt
-            y = upfirdn(h, symbols, up=sps).astype(np.complex64)
+            y_full = upfirdn(h, x, up=sps).astype(np.complex64)
 
             delay = (len(h) - 1) // 2
-            start = delay
-            stop = start + N * sps
-            y = y[start:stop]                      # schneidet direkt auf Zielbereich
-            y = _trim_to_length(y, N * sps).astype(np.complex64)
+            start = delay + pad_syms * sps
+            out_len = (N + zero_syms) * sps
+            y = y_full[start : start + out_len]
+            y = _trim_to_length(y, out_len).astype(np.complex64)
             return y
             
         else:
@@ -390,6 +401,7 @@ def main() -> None:
 
     N_waveform = args.samples
     N_output = N_waveform
+    zero_syms = 0
 
     if args.waveform == "zadoffchu":
         # Dein altes Verhalten beibehalten: nur bei OS<=1 auf Primzahl anpassen
@@ -398,10 +410,14 @@ def main() -> None:
             if prime != N_waveform:
                 print(f"Info: samples={N_waveform} angepasst auf Primzahl {prime} für ZC.")
                 N_waveform = prime
-
         N_output = N_waveform * max(1, int(args.oversampling))
 
     append_zeros = not args.no_zeros
+    if args.waveform == "zadoffchu" and args.oversampling > 1:
+        if append_zeros:
+            zero_syms = N_waveform
+            N_output = (N_waveform + zero_syms) * int(args.oversampling)
+        append_zeros = False
 
     if append_zeros:
         print(f"Erzeuge {N_output} Samples {args.waveform} + {N_output} Null-Samples")
@@ -426,6 +442,7 @@ def main() -> None:
         rrc_beta=args.rrc_beta,
         rrc_span=args.rrc_span,
         oversampling=args.oversampling,
+        zero_syms=zero_syms,
     ).astype(np.complex64)
 
     # (Sicherstellen, dass die Länge genau den Erwartungen entspricht)
