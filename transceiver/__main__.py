@@ -3310,6 +3310,24 @@ class TransceiverUI(tk.Tk):
             if waveform == "zadoffchu" and oversampling > 1 and rrc_active:
                 self._last_tx_os = oversampling
 
+            zeros = 0
+            if zeros_mode == "same":
+                zeros = 1
+            elif zeros_mode == "half":
+                zeros = 0.5
+            elif zeros_mode == "quarter":
+                zeros = 0.25
+            elif zeros_mode == "double":
+                zeros = 2
+            elif zeros_mode == "quadruple":
+                zeros = 4
+            elif zeros_mode == "octuple":
+                zeros = 8
+
+            zero_syms = 0
+            if waveform == "zadoffchu" and oversampling > 1 and zeros > 0:
+                zero_syms = int(round(samples * zeros))
+
             unfiltered_data = None
             filtered_data = None
 
@@ -3343,6 +3361,7 @@ class TransceiverUI(tk.Tk):
                         rrc_beta=beta,
                         rrc_span=0,
                         oversampling=1,
+                        zero_syms=zero_syms,
                     )
                     filtered_data = generate_waveform(
                         waveform,
@@ -3353,6 +3372,7 @@ class TransceiverUI(tk.Tk):
                         rrc_beta=beta,
                         rrc_span=span,
                         oversampling=oversampling,
+                        zero_syms=zero_syms,
                     )
                     data = filtered_data
                 else:
@@ -3365,6 +3385,7 @@ class TransceiverUI(tk.Tk):
                         rrc_beta=beta,
                         rrc_span=span,
                         oversampling=oversampling,
+                        zero_syms=zero_syms,
                     )
             else:  # chirp
                 f0 = _parse_number_expr_or_error(
@@ -3392,22 +3413,10 @@ class TransceiverUI(tk.Tk):
                 if filtered_data is not None:
                     filtered_data = np.tile(filtered_data, repeats)
 
-            zeros = 0
-            if zeros_mode == "same":
-                zeros = 1
-            elif zeros_mode == "half":
-                zeros = 0.5
-            elif zeros_mode == "quarter":
-                zeros = 0.25
-            elif zeros_mode == "double":
-                zeros = 2
-            elif zeros_mode == "quadruple":
-                zeros = 4
-            elif zeros_mode == "octuple":
-                zeros = 8
-
             def _append_zeros(signal: np.ndarray | None) -> np.ndarray | None:
                 if signal is None or zeros == 0:
+                    return signal
+                if waveform == "zadoffchu" and oversampling > 1:
                     return signal
                 zeros_len = int(round(len(signal) * zeros))
                 if zeros_len <= 0:
