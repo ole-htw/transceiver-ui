@@ -12,6 +12,7 @@ import json
 import math
 import signal
 import contextlib
+import tempfile
 from pathlib import Path
 from datetime import datetime
 
@@ -1281,73 +1282,64 @@ def visualize(
     if data.size == 0:
         messagebox.showerror("Error", "No data to visualize")
         return
-
-    data, step = _reduce_data(data)
-    fs /= step
-
-    pg.setConfigOption("background", "w")
-    pg.setConfigOption("foreground", "k")
-    app = pg.mkQApp()
-
-    if mode == "Signal":
-        win = pg.plot(title=title)
-        win.addLegend()
-        win.plot(np.real(data), pen=pg.mkPen("b"), name="Real")
-        win.plot(
-            np.imag(data), pen=pg.mkPen("r", style=QtCore.Qt.DashLine), name="Imag"
-        )
-        win.setLabel("bottom", "Sample Index")
-        win.setLabel("left", "Amplitude")
-        win.showGrid(x=True, y=True)
-    elif mode in ("Freq", "Freq Analysis"):
-        spec = np.fft.fftshift(np.fft.fft(data))
-        freqs = np.fft.fftshift(np.fft.fftfreq(len(data), d=1 / fs))
-        win = pg.plot(
-            freqs,
-            20 * np.log10(np.abs(spec) + 1e-9),
-            pen="b",
-            title=f"Spectrum: {title}",
-        )
-        win.setLabel("bottom", "Frequency [Hz]")
-        win.setLabel("left", "Magnitude [dB]")
-        win.showGrid(x=True, y=True)
-    elif mode == "InstantFreq":
-        phase = np.unwrap(np.angle(data))
-        inst = np.diff(phase)
-        fi = fs * inst / (2 * np.pi)
-        t = np.arange(len(fi)) / fs
-        win = pg.plot(t, fi, pen="b", title=f"Instantaneous Frequency: {title}")
-        win.setLabel("bottom", "Time [s]")
-        win.setLabel("left", "Frequency [Hz]")
-        win.showGrid(x=True, y=True)
-    elif mode == "Autocorr":
-        ac = _autocorr_fft(data)
-        lags = np.arange(-len(data) + 1, len(data))
-        win = pg.plot(lags, np.abs(ac), pen="b", title=f"Autocorrelation: {title}")
-        win.setLabel("bottom", "Lag")
-        win.setLabel("left", "Magnitude")
-        win.showGrid(x=True, y=True)
-    elif mode == "Crosscorr":
-        if ref_data is None or ref_data.size == 0:
-            messagebox.showinfo("Info", "Crosscorrelation requires TX data.")
-            return
-        data, ref_data, step_r = _reduce_pair(data, ref_data)
-        fs /= step_r
-        n = min(len(data), len(ref_data))
-        cc = _xcorr_fft(data[:n], ref_data[:n])
-        lags = np.arange(-n + 1, n) * step_r
-        mag = np.abs(cc)
-        win = pg.plot(lags, mag, pen="b", title=f"Crosscorr. with TX: {title}")
-        win.setLabel("bottom", "Lag")
-        win.setLabel("left", "Magnitude")
-        los_idx, echo_idx = _find_los_echo(cc)
-        _add_draggable_markers(win.getPlotItem(), lags, mag, los_idx, echo_idx)
-        win.showGrid(x=True, y=True)
-    else:
-        messagebox.showerror("Error", f"Unknown mode {mode}")
+    if mode == "Crosscorr" and (ref_data is None or ref_data.size == 0):
+        messagebox.showinfo("Info", "Crosscorrelation requires TX data.")
         return
 
-    pg.exec()
+    _spawn_plot_worker(
+        data,
+        fs,
+        mode,
+        title,
+        ref_data=ref_data,
+        fullscreen=False,
+    )
+
+    return
+
+
+def _spawn_plot_worker(
+    data: np.ndarray,
+    fs: float,
+    mode: str,
+    title: str,
+    ref_data: np.ndarray | None = None,
+    manual_lags: dict[str, int | None] | None = None,
+    fullscreen: bool = False,
+) -> None:
+    """Launch the PyQtGraph plot worker in a separate process."""
+    temp_dir = Path(tempfile.mkdtemp(prefix="transceiver_plot_"))
+    data_path = temp_dir / "data.npy"
+    np.save(data_path, data)
+    payload: dict[str, object] = {
+        "mode": mode,
+        "title": title,
+        "fs": float(fs),
+        "data_file": str(data_path),
+        "fullscreen": fullscreen,
+    }
+    if ref_data is not None and np.size(ref_data) != 0:
+        ref_path = temp_dir / "ref.npy"
+        np.save(ref_path, ref_data)
+        payload["ref_file"] = str(ref_path)
+    if manual_lags is not None:
+        payload["manual_lags"] = {
+            key: (int(val) if val is not None else None)
+            for key, val in manual_lags.items()
+        }
+        payload["output_path"] = str(temp_dir / "manual_lags.json")
+    payload_path = temp_dir / "payload.json"
+    with payload_path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+    subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "transceiver.helpers.plot_worker",
+            "--payload",
+            str(payload_path),
+        ]
+    )
 
 
 def _plot_on_pg(
@@ -2885,40 +2877,15 @@ class TransceiverUI(tk.Tk):
     ) -> None:
         if data is None:
             return
-        pg.setConfigOption("background", "w")
-        pg.setConfigOption("foreground", "k")
-        if self._plot_win is not None and self._plot_win.isVisible():
-            try:
-                self._plot_win.close()
-            except Exception:
-                pass
-            self._plot_win = None
-
-        app = pg.mkQApp()
-        win = pg.plot()
-        self._plot_win = win
-        _plot_on_pg(
-            win.getPlotItem(),
+        _spawn_plot_worker(
             data,
             fs,
             mode,
             title,
-            ref_data if ref_data is not None else getattr(self, "tx_data", None),
+            ref_data=ref_data if ref_data is not None else getattr(self, "tx_data", None),
             manual_lags=self.manual_xcorr_lags,
-            on_los_drag_end=lambda _idx, lag: self._set_manual_xcorr_lag("los", lag),
-            on_echo_drag_end=lambda _idx, lag: self._set_manual_xcorr_lag("echo", lag),
+            fullscreen=True,
         )
-        try:
-            win.showMaximized()
-        except Exception:
-            pass
-        try:
-            win.raise_()
-            win.activateWindow()
-        except Exception:
-            pass
-        pg.exec()
-        self._plot_win = None
 
     def _show_toast(self, text: str, duration: int = 2000) -> None:
         """Show a temporary notification on top of the main window."""
