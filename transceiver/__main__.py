@@ -1148,7 +1148,7 @@ def _gen_tx_filename(app) -> str:
         oversampling = int(app.os_entry.get())
     except Exception:
         oversampling = 1
-    if not getattr(app, "os_enable", tk.BooleanVar(value=False)).get():
+    if not getattr(app, "rrc_enable", tk.BooleanVar(value=False)).get():
         oversampling = 1
 
     if w == "sinus":
@@ -1201,7 +1201,7 @@ def _gen_rx_filename(app) -> str:
     except Exception:
         os_factor = 1
     if (
-        getattr(app, "rx_os_enable", tk.BooleanVar(value=False)).get()
+        getattr(app, "rx_rrc_enable", tk.BooleanVar(value=False)).get()
         and os_factor != 1
     ):
         parts.append(f"os{os_factor}")
@@ -1660,36 +1660,22 @@ class TransceiverUI(tk.Tk):
             "<FocusOut>", lambda _e: self.auto_update_tx_filename()
         )
 
-        ttk.Label(gen_frame, text="Oversampling").grid(row=5, column=0, sticky="w")
-        self.os_entry = SuggestEntry(gen_frame, "os_entry")
-        self.os_entry.insert(0, "1")
-        self.os_entry.grid(row=5, column=1, sticky="ew")
-        self.os_enable = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            gen_frame,
-            variable=self.os_enable,
-            command=lambda: self.os_entry.entry.configure(
-                state="normal" if self.os_enable.get() else "disabled"
-            ),
-        ).grid(row=5, column=2, sticky="w")
-        self.os_entry.entry.configure(state="disabled")
-
-        ttk.Label(gen_frame, text="Repeats").grid(row=6, column=0, sticky="w")
+        ttk.Label(gen_frame, text="Repeats").grid(row=5, column=0, sticky="w")
         self.repeat_entry = SuggestEntry(gen_frame, "repeat_entry")
         self.repeat_entry.insert(0, "1")
-        self.repeat_entry.grid(row=6, column=1, sticky="ew")
+        self.repeat_entry.grid(row=5, column=1, sticky="ew")
 
         self.rrc_beta_label = ttk.Label(gen_frame, text="RRC β")
-        self.rrc_beta_label.grid(row=7, column=0, sticky="w")
+        self.rrc_beta_label.grid(row=6, column=0, sticky="w")
         self.rrc_beta_entry = SuggestEntry(gen_frame, "rrc_beta_entry")
         self.rrc_beta_entry.insert(0, "0.25")
-        self.rrc_beta_entry.grid(row=7, column=1, sticky="ew")
+        self.rrc_beta_entry.grid(row=6, column=1, sticky="ew")
 
         self.rrc_span_label = ttk.Label(gen_frame, text="RRC Span")
-        self.rrc_span_label.grid(row=8, column=0, sticky="w")
+        self.rrc_span_label.grid(row=7, column=0, sticky="w")
         self.rrc_span_entry = SuggestEntry(gen_frame, "rrc_span_entry")
         self.rrc_span_entry.insert(0, "6")
-        self.rrc_span_entry.grid(row=8, column=1, sticky="ew")
+        self.rrc_span_entry.grid(row=7, column=1, sticky="ew")
         self.rrc_enable = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             gen_frame,
@@ -1701,11 +1687,22 @@ class TransceiverUI(tk.Tk):
                 self.rrc_span_entry.entry.configure(
                     state="normal" if self.rrc_enable.get() else "disabled"
                 ),
+                self.os_entry.entry.configure(
+                    state="normal" if self.rrc_enable.get() else "disabled"
+                ),
             ],
-        ).grid(row=7, column=2, sticky="w", rowspan=2)
+        ).grid(row=6, column=2, sticky="w", rowspan=2)
         if not self.rrc_enable.get():
             self.rrc_beta_entry.entry.configure(state="disabled")
             self.rrc_span_entry.entry.configure(state="disabled")
+
+        ttk.Label(gen_frame, text="Oversampling").grid(row=8, column=0, sticky="w")
+        self.os_entry = SuggestEntry(gen_frame, "os_entry")
+        self.os_entry.insert(0, "1")
+        self.os_entry.grid(row=8, column=1, sticky="ew")
+        self.os_entry.entry.configure(
+            state="normal" if self.rrc_enable.get() else "disabled"
+        )
 
         ttk.Label(gen_frame, text="Zeros").grid(row=9, column=0, sticky="w")
         self.zeros_var = tk.StringVar(value="none")
@@ -1923,23 +1920,24 @@ class TransceiverUI(tk.Tk):
                 self.rx_rrc_span_entry.entry.configure(
                     state="normal" if self.rx_rrc_enable.get() else "disabled"
                 ),
+                self.rx_os_entry.entry.configure(
+                    state="normal" if self.rx_rrc_enable.get() else "disabled"
+                ),
+                self.update_trim(),
             ],
         ).grid(row=7, column=2, sticky="w", rowspan=2)
         if not self.rx_rrc_enable.get():
             self.rx_rrc_beta_entry.entry.configure(state="disabled")
             self.rx_rrc_span_entry.entry.configure(state="disabled")
+            self.rx_os_entry.entry.configure(state="disabled")
 
         ttk.Label(rx_frame, text="Oversampling").grid(row=9, column=0, sticky="w")
         self.rx_os_entry = SuggestEntry(rx_frame, "rx_os_entry")
         self.rx_os_entry.insert(0, "1")
         self.rx_os_entry.grid(row=9, column=1, sticky="ew")
-        self.rx_os_enable = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            rx_frame,
-            variable=self.rx_os_enable,
-            command=self._on_rx_os_change,
-        ).grid(row=9, column=2, sticky="w")
-        self.rx_os_entry.entry.configure(state="disabled")
+        self.rx_os_entry.entry.configure(
+            state="normal" if self.rx_rrc_enable.get() else "disabled"
+        )
         self.rx_os_entry.entry.bind(
             "<FocusOut>",
             lambda _e: (self.auto_update_rx_filename(), self.update_trim()),
@@ -2227,7 +2225,7 @@ class TransceiverUI(tk.Tk):
             aoa_data = self.raw_rx_data[:2]
             if self.trim_var.get():
                 aoa_data = self._trim_data_multichannel(aoa_data)
-            if self.rx_os_enable.get():
+            if self.rx_rrc_enable.get():
                 try:
                     factor = int(self.rx_os_entry.get())
                 except Exception:
@@ -2387,7 +2385,7 @@ class TransceiverUI(tk.Tk):
 
     def _oversample_data(self, data: np.ndarray) -> tuple[np.ndarray, float]:
         """Return oversampled *data* and new sample rate factor."""
-        if not self.rx_os_enable.get() or data.size == 0:
+        if not self.rx_rrc_enable.get() or data.size == 0:
             return data, 1.0
         try:
             factor = int(self.rx_os_entry.get())
@@ -2412,12 +2410,6 @@ class TransceiverUI(tk.Tk):
         self.trim_dirty = True
         self.apply_trim_btn.configure(state="normal")
 
-    def _on_rx_os_change(self, *_args) -> None:
-        self.rx_os_entry.entry.configure(
-            state="normal" if self.rx_os_enable.get() else "disabled"
-        )
-        self.update_trim()
-
     def update_trim(self, *_args) -> None:
         """Re-apply trimming and refresh RX plots."""
         self._on_trim_change()
@@ -2431,7 +2423,7 @@ class TransceiverUI(tk.Tk):
             and (
                 self.trim_var.get()
                 or (
-                    self.rx_os_enable.get()
+                    self.rx_rrc_enable.get()
                     and int(self.rx_os_entry.get() or 1) > 1
                 )
             )
@@ -2777,7 +2769,7 @@ class TransceiverUI(tk.Tk):
             echo_data = self.raw_rx_data[:2]
             if self.trim_var.get():
                 echo_data = self._trim_data_multichannel(echo_data)
-            if self.rx_os_enable.get():
+            if self.rx_rrc_enable.get():
                 echo_data = np.vstack(
                     [self._oversample_data(chan)[0] for chan in echo_data]
                 )
@@ -2814,8 +2806,7 @@ class TransceiverUI(tk.Tk):
             "f1": self.f1_entry.get(),
             "q": self.q_entry.get(),
             "samples": self.samples_entry.get(),
-            "oversampling": self.os_entry.get(),
-            "os_enabled": self.os_enable.get(),
+            "rrc_oversampling": self.os_entry.get(),
             "repeats": self.repeat_entry.get(),
             "rrc_beta": self.rrc_beta_entry.get(),
             "rrc_span": self.rrc_span_entry.get(),
@@ -2834,8 +2825,7 @@ class TransceiverUI(tk.Tk):
             "rx_freq": self.rx_freq.get(),
             "rx_dur": self.rx_dur.get(),
             "rx_gain": self.rx_gain.get(),
-            "rx_oversampling": self.rx_os_entry.get(),
-            "rx_os_enabled": self.rx_os_enable.get(),
+            "rx_rrc_oversampling": self.rx_os_entry.get(),
             "rx_rrc_beta": self.rx_rrc_beta_entry.get(),
             "rx_rrc_span": self.rx_rrc_span_entry.get(),
             "rx_rrc_enabled": self.rx_rrc_enable.get(),
@@ -2871,10 +2861,8 @@ class TransceiverUI(tk.Tk):
         self.samples_entry.delete(0, tk.END)
         self.samples_entry.insert(0, params.get("samples", ""))
         self.os_entry.delete(0, tk.END)
-        self.os_entry.insert(0, params.get("oversampling", "1"))
-        self.os_enable.set(params.get("os_enabled", False))
-        self.os_entry.entry.configure(
-            state="normal" if self.os_enable.get() else "disabled"
+        self.os_entry.insert(
+            0, params.get("rrc_oversampling", params.get("oversampling", "1"))
         )
         self.repeat_entry.delete(0, tk.END)
         self.repeat_entry.insert(0, params.get("repeats", "1"))
@@ -2886,6 +2874,7 @@ class TransceiverUI(tk.Tk):
         state = "normal" if self.rrc_enable.get() else "disabled"
         self.rrc_beta_entry.entry.configure(state=state)
         self.rrc_span_entry.entry.configure(state=state)
+        self.os_entry.entry.configure(state=state)
         self.zeros_var.set(params.get("zeros", "none"))
         self.amp_entry.delete(0, tk.END)
         self.amp_entry.insert(0, params.get("amplitude", ""))
@@ -2912,10 +2901,9 @@ class TransceiverUI(tk.Tk):
         self.rx_gain.delete(0, tk.END)
         self.rx_gain.insert(0, params.get("rx_gain", ""))
         self.rx_os_entry.delete(0, tk.END)
-        self.rx_os_entry.insert(0, params.get("rx_oversampling", "1"))
-        self.rx_os_enable.set(params.get("rx_os_enabled", False))
-        self.rx_os_entry.entry.configure(
-            state="normal" if self.rx_os_enable.get() else "disabled"
+        self.rx_os_entry.insert(
+            0,
+            params.get("rx_rrc_oversampling", params.get("rx_oversampling", "1")),
         )
         self.rx_rrc_beta_entry.delete(0, tk.END)
         self.rx_rrc_beta_entry.insert(0, params.get("rx_rrc_beta", "0.25"))
@@ -2925,6 +2913,7 @@ class TransceiverUI(tk.Tk):
         state = "normal" if self.rx_rrc_enable.get() else "disabled"
         self.rx_rrc_beta_entry.entry.configure(state=state)
         self.rx_rrc_span_entry.entry.configure(state=state)
+        self.rx_os_entry.entry.configure(state=state)
         self.rx_channel_2.set(params.get("rx_channel_2", False))
         self.rx_channel_view.set(params.get("rx_channel_view", "Kanal 1"))
         self.rx_file.delete(0, tk.END)
@@ -3021,7 +3010,7 @@ class TransceiverUI(tk.Tk):
             fs = float(eval(self.fs_entry.get()))
             samples = int(self.samples_entry.get())
             oversampling = int(self.os_entry.get()) if self.os_entry.get() else 1
-            if not self.os_enable.get():
+            if not self.rrc_enable.get():
                 oversampling = 1
             repeats = int(self.repeat_entry.get()) if self.repeat_entry.get() else 1
             zeros_mode = self.zeros_var.get()
