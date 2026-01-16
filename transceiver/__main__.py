@@ -1318,6 +1318,16 @@ def _spawn_plot_worker(
     shm_shape = None
     shm_dtype = None
     data_contiguous = np.ascontiguousarray(data)
+    reduction_step = 1
+    ref_contiguous = None
+    if ref_data is not None and np.size(ref_data) != 0:
+        ref_contiguous = np.ascontiguousarray(ref_data)
+        data_contiguous, ref_contiguous, reduction_step = _reduce_pair(
+            data_contiguous, ref_contiguous
+        )
+    else:
+        data_contiguous, reduction_step = _reduce_data(data_contiguous)
+    fs = float(fs) / reduction_step
     if data_contiguous.nbytes >= SHM_SIZE_THRESHOLD_BYTES:
         data_path = temp_dir / "data.npy"
         np.save(data_path, data_contiguous)
@@ -1355,8 +1365,9 @@ def _spawn_plot_worker(
     payload: dict[str, object] = {
         "mode": mode,
         "title": title,
-        "fs": float(fs),
+        "fs": fs,
         "fullscreen": fullscreen,
+        "reduction_step": reduction_step,
     }
     if shm_name:
         payload["shm_name"] = shm_name
@@ -1364,12 +1375,11 @@ def _spawn_plot_worker(
         payload["dtype"] = shm_dtype
     if data_path is not None:
         payload["data_file"] = str(data_path)
-    if ref_data is not None and np.size(ref_data) != 0:
+    if ref_contiguous is not None:
         ref_path = None
         ref_shm_name = None
         ref_shm_shape = None
         ref_shm_dtype = None
-        ref_contiguous = np.ascontiguousarray(ref_data)
         if ref_contiguous.nbytes >= SHM_SIZE_THRESHOLD_BYTES:
             ref_path = temp_dir / "ref.npy"
             np.save(ref_path, ref_contiguous)
@@ -1442,10 +1452,15 @@ def _plot_on_pg(
     manual_lags: dict[str, int | None] | None = None,
     on_los_drag_end=None,
     on_echo_drag_end=None,
+    *,
+    reduce_data: bool = True,
+    reduction_step: int = 1,
 ) -> None:
     """Helper to draw the selected visualization on a PyQtGraph PlotItem."""
-    data, step = _reduce_data(data)
-    fs /= step
+    step = max(1, int(reduction_step))
+    if reduce_data and mode != "Crosscorr":
+        data, step = _reduce_data(data)
+        fs /= step
     if mode == "Signal":
         plot.addLegend()
         plot.plot(np.real(data), pen=pg.mkPen("b"), name="Real")
@@ -1483,8 +1498,10 @@ def _plot_on_pg(
             plot.setTitle("No TX data")
             plot.showGrid(x=True, y=True)
             return
-        data, ref_data, step_r = _reduce_pair(data, ref_data)
-        fs /= step_r
+        step_r = step
+        if reduce_data:
+            data, ref_data, step_r = _reduce_pair(data, ref_data)
+            fs /= step_r
         n = min(len(data), len(ref_data))
         cc = _xcorr_fft(data[:n], ref_data[:n])
         lags = np.arange(-n + 1, n) * step_r

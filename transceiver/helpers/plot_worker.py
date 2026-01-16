@@ -56,6 +56,7 @@ def main() -> None:
     mode = payload.get("mode", "")
     title = payload.get("title", "")
     fs = float(payload.get("fs", 0.0))
+    reduction_step = int(payload.get("reduction_step", 1))
     data_meta = {
         "name": payload.get("shm_name"),
         "shape": payload.get("shape"),
@@ -109,6 +110,8 @@ def main() -> None:
         manual_lags=manual_state if manual_lags is not None else None,
         on_los_drag_end=lambda _idx, lag: _update_manual("los", lag),
         on_echo_drag_end=lambda _idx, lag: _update_manual("echo", lag),
+        reduce_data=False,
+        reduction_step=reduction_step,
     )
 
     if fullscreen:
