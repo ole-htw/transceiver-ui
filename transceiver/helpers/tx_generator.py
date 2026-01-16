@@ -123,7 +123,8 @@ def rrc_coeffs(beta: float, span: int, sps: int = 1) -> np.ndarray:
     num_taps = span * sps + 1              # span = Gesamtlänge in Symbolen
     t = (np.arange(num_taps) - (num_taps - 1) / 2) / sps
     h = np.zeros_like(t, dtype=np.float64)
-
+    
+    eps = 1e-8
     for i, ti in enumerate(t):
         if np.isclose(ti, 0.0, atol=eps):
             h[i] = 1.0 - beta + 4 * beta / np.pi
