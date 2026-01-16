@@ -3117,7 +3117,7 @@ class TransceiverUI(tk.Tk):
                         q=q,
                         rrc_beta=beta,
                         rrc_span=0,
-                        oversampling=oversampling,
+                        oversampling=1,
                     )
                     filtered_data = generate_waveform(
                         waveform,
@@ -3163,28 +3163,34 @@ class TransceiverUI(tk.Tk):
 
             zeros = 0
             if zeros_mode == "same":
-                zeros = len(data)
+                zeros = 1
             elif zeros_mode == "half":
-                zeros = len(data) // 2
+                zeros = 0.5
             elif zeros_mode == "quarter":
-                zeros = len(data) // 4
+                zeros = 0.25
             elif zeros_mode == "double":
-                zeros = len(data) * 2
+                zeros = 2
             elif zeros_mode == "quadruple":
-                zeros = len(data) * 4
+                zeros = 4
             elif zeros_mode == "octuple":
-                zeros = len(data) * 8
+                zeros = 8
 
-            if zeros:
-                data = np.concatenate([data, np.zeros(zeros, dtype=np.complex64)])
-                if unfiltered_data is not None:
-                    unfiltered_data = np.concatenate(
-                        [unfiltered_data, np.zeros(zeros, dtype=np.complex64)]
-                    )
-                if filtered_data is not None:
-                    filtered_data = np.concatenate(
-                        [filtered_data, np.zeros(zeros, dtype=np.complex64)]
-                    )
+            def _append_zeros(signal: np.ndarray | None) -> np.ndarray | None:
+                if signal is None or zeros == 0:
+                    return signal
+                zeros_len = int(round(len(signal) * zeros))
+                if zeros_len <= 0:
+                    return signal
+                return np.concatenate(
+                    [signal, np.zeros(zeros_len, dtype=np.complex64)]
+                )
+
+            unfiltered_data = _append_zeros(unfiltered_data)
+            filtered_data = _append_zeros(filtered_data)
+            if filtered_data is not None:
+                data = filtered_data
+            else:
+                data = _append_zeros(data)
 
             save_interleaved(
                 self.file_entry.get(),
@@ -3222,7 +3228,7 @@ class TransceiverUI(tk.Tk):
             if scaled_unfiltered is not None and scaled_filtered is not None:
                 self._display_gen_plots(
                     scaled_unfiltered,
-                    fs_eff,
+                    fs,
                     scaled_filtered,
                     fs_eff,
                 )
