@@ -33,7 +33,9 @@ def _load_iq(
                 pass
     if path is None:
         return None, None
-    return rx_convert.load_iq_file(Path(path)), None
+    data_path = Path(path)
+    mmap_mode = "r" if data_path.suffix.lower() in {".npy", ".npz"} else None
+    return rx_convert.load_iq_file(data_path, mmap_mode=mmap_mode), None
 
 
 def _parse_payload(path: Path) -> dict:

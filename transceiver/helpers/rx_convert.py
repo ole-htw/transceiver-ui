@@ -73,14 +73,19 @@ def load_sc16(path: Path, channels: int = 1, layout: str = "blocked") -> np.ndar
     return _reshape_channels(data, channels, layout)
 
 
-def load_numpy(path: Path, channels: int = 1, layout: str = "blocked") -> np.ndarray:
+def load_numpy(
+    path: Path,
+    channels: int = 1,
+    layout: str = "blocked",
+    mmap_mode: str | None = None,
+) -> np.ndarray:
     if path.suffix.lower() == ".npz":
-        with np.load(path, allow_pickle=False) as npz:
+        with np.load(path, allow_pickle=False, mmap_mode=mmap_mode) as npz:
             if not npz.files:
                 raise ValueError("NPZ-Datei enthält keine Arrays.")
             data = npz[npz.files[0]]
     else:
-        data = np.load(path, allow_pickle=False)
+        data = np.load(path, allow_pickle=False, mmap_mode=mmap_mode)
 
     if not np.iscomplexobj(data):
         if data.ndim >= 1 and data.shape[-1] == 2:
@@ -102,10 +107,17 @@ def load_numpy(path: Path, channels: int = 1, layout: str = "blocked") -> np.nda
     raise ValueError("NumPy-Datei hat ein unerwartetes Datenformat.")
 
 
-def load_iq_file(path: Path, channels: int = 1, layout: str = "blocked") -> np.ndarray:
+def load_iq_file(
+    path: Path,
+    channels: int = 1,
+    layout: str = "blocked",
+    mmap_mode: str | None = None,
+) -> np.ndarray:
     src_fmt = detect_format(path)
     if src_fmt == "numpy":
-        return load_numpy(path, channels=channels, layout=layout)
+        return load_numpy(
+            path, channels=channels, layout=layout, mmap_mode=mmap_mode
+        )
     if src_fmt == "fc32":
         return load_fc32(path, channels=channels, layout=layout)
     return load_sc16(path, channels=channels, layout=layout)
