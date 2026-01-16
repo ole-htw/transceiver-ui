@@ -20,7 +20,7 @@ from pyqtgraph.Qt import QtCore
 import pyqtgraph as pg
 
 import sys
-from .helpers.tx_generator import generate_waveform
+from .helpers.tx_generator import generate_waveform, rrc_coeffs
 from .helpers import rx_convert
 from .helpers import doa_esprit
 
@@ -1205,15 +1205,6 @@ def _gen_rx_filename(app) -> str:
     dur = app.rx_dur.get() or "0"
     gain = app.rx_gain.get() or "0"
     parts = [f"f{_pretty(freq)}", f"r{_pretty(rate)}", f"d{dur}s", f"g{gain}"]
-    try:
-        os_factor = int(app.rx_os_entry.get())
-    except Exception:
-        os_factor = 1
-    if (
-        getattr(app, "rx_rrc_enable", tk.BooleanVar(value=False)).get()
-        and os_factor != 1
-    ):
-        parts.append(f"os{os_factor}")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     name = "_".join(parts) + f"_{stamp}.bin"
     return str(Path("signals/rx") / name)
@@ -1898,50 +1889,52 @@ class TransceiverUI(tk.Tk):
             lambda _e: self.update_trim(),
         )
 
-        self.rx_rrc_beta_label = ttk.Label(rx_frame, text="RRC β")
-        self.rx_rrc_beta_label.grid(row=7, column=0, sticky="w")
-        self.rx_rrc_beta_entry = SuggestEntry(rx_frame, "rx_rrc_beta")
-        self.rx_rrc_beta_entry.insert(0, "0.25")
-        self.rx_rrc_beta_entry.grid(row=7, column=1, sticky="ew")
+        self.rx_inv_rrc_beta_label = ttk.Label(rx_frame, text="Inv. RRC β")
+        self.rx_inv_rrc_beta_label.grid(row=7, column=0, sticky="w")
+        self.rx_inv_rrc_beta_entry = SuggestEntry(rx_frame, "rx_inv_rrc_beta")
+        self.rx_inv_rrc_beta_entry.insert(0, "0.25")
+        self.rx_inv_rrc_beta_entry.grid(row=7, column=1, sticky="ew")
 
-        self.rx_rrc_span_label = ttk.Label(rx_frame, text="RRC Span")
-        self.rx_rrc_span_label.grid(row=8, column=0, sticky="w")
-        self.rx_rrc_span_entry = SuggestEntry(rx_frame, "rx_rrc_span")
-        self.rx_rrc_span_entry.insert(0, "6")
-        self.rx_rrc_span_entry.grid(row=8, column=1, sticky="ew")
-        self.rx_rrc_enable = tk.BooleanVar(value=True)
+        self.rx_inv_rrc_span_label = ttk.Label(rx_frame, text="Inv. RRC Span")
+        self.rx_inv_rrc_span_label.grid(row=8, column=0, sticky="w")
+        self.rx_inv_rrc_span_entry = SuggestEntry(rx_frame, "rx_inv_rrc_span")
+        self.rx_inv_rrc_span_entry.insert(0, "6")
+        self.rx_inv_rrc_span_entry.grid(row=8, column=1, sticky="ew")
+
+        ttk.Label(rx_frame, text="Inv. Oversampling").grid(
+            row=9, column=0, sticky="w"
+        )
+        self.rx_inv_os_entry = SuggestEntry(rx_frame, "rx_inv_os_entry")
+        self.rx_inv_os_entry.insert(0, "1")
+        self.rx_inv_os_entry.grid(row=9, column=1, sticky="ew")
+        self.rx_inv_os_entry.entry.bind(
+            "<FocusOut>",
+            lambda _e: (self.auto_update_rx_filename(), self.update_trim()),
+        )
+        self.rx_inv_rrc_enable = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             rx_frame,
-            variable=self.rx_rrc_enable,
+            text="Inv. RRC",
+            variable=self.rx_inv_rrc_enable,
             command=lambda: [
-                self.rx_rrc_beta_entry.entry.configure(
-                    state="normal" if self.rx_rrc_enable.get() else "disabled"
+                self.rx_inv_rrc_beta_entry.entry.configure(
+                    state="normal" if self.rx_inv_rrc_enable.get() else "disabled"
                 ),
-                self.rx_rrc_span_entry.entry.configure(
-                    state="normal" if self.rx_rrc_enable.get() else "disabled"
+                self.rx_inv_rrc_span_entry.entry.configure(
+                    state="normal" if self.rx_inv_rrc_enable.get() else "disabled"
                 ),
-                self.rx_os_entry.entry.configure(
-                    state="normal" if self.rx_rrc_enable.get() else "disabled"
+                self.rx_inv_os_entry.entry.configure(
+                    state="normal" if self.rx_inv_rrc_enable.get() else "disabled"
                 ),
                 self.update_trim(),
             ],
         ).grid(row=7, column=2, sticky="w", rowspan=2)
-        if not self.rx_rrc_enable.get():
-            self.rx_rrc_beta_entry.entry.configure(state="disabled")
-            self.rx_rrc_span_entry.entry.configure(state="disabled")
-            self.rx_os_entry.entry.configure(state="disabled")
-
-        ttk.Label(rx_frame, text="Oversampling").grid(row=9, column=0, sticky="w")
-        self.rx_os_entry = SuggestEntry(rx_frame, "rx_os_entry")
-        self.rx_os_entry.insert(0, "1")
-        self.rx_os_entry.grid(row=9, column=1, sticky="ew")
-        self.rx_os_entry.entry.configure(
-            state="normal" if self.rx_rrc_enable.get() else "disabled"
-        )
-        self.rx_os_entry.entry.bind(
-            "<FocusOut>",
-            lambda _e: (self.auto_update_rx_filename(), self.update_trim()),
-        )
+        if not self.rx_inv_rrc_enable.get():
+            self.rx_inv_rrc_beta_entry.entry.configure(state="disabled")
+            self.rx_inv_rrc_span_entry.entry.configure(state="disabled")
+            self.rx_inv_os_entry.entry.configure(state="disabled")
+        else:
+            self.rx_inv_os_entry.entry.configure(state="normal")
         ttk.Label(rx_frame, text="Output").grid(row=10, column=0, sticky="w")
         self.rx_file = SuggestEntry(rx_frame, "rx_file")
         self.rx_file.insert(0, "rx_signal.bin")
@@ -2246,7 +2239,7 @@ class TransceiverUI(tk.Tk):
     def _display_rx_plots(self, data: np.ndarray, fs: float) -> None:
         """Render preview plots below the receive parameters."""
         self.raw_rx_data = data
-        self.latest_fs = fs
+        self.latest_fs_raw = fs
         if data.ndim == 2 and data.shape[0] >= 2:
             self.rx_channel_view_box.configure(state="readonly")
             selection_label = self.rx_channel_view.get()
@@ -2260,27 +2253,33 @@ class TransceiverUI(tk.Tk):
         self.range_slider.set_data(data)
         if self.trim_var.get():
             data = self._trim_data(data)
-        
-        # RX Oversampling an TX anpassen, falls TX oversampled gespeichert wurde
-        tx_os = getattr(self, "_last_tx_os", 1)
-        if tx_os > 1:
-            try:
-                # UI-Feld aktualisieren, damit alles konsistent bleibt
-                self.rx_os_entry.delete(0, tk.END)
-                self.rx_os_entry.insert(0, str(tx_os))
-            except Exception:
-                pass
-        data, fac = self._oversample_data(data)
+
+        data, fac = self._apply_inverse_rrc(data)
         fs *= fac
+        self.latest_fs = fs
         self.latest_data = data
-        try:
-            raw = np.fromfile(self.tx_file.get(), dtype=np.int16)
+
+        def _load_tx_samples(path: str) -> np.ndarray:
+            raw = np.fromfile(path, dtype=np.int16)
             if raw.size % 2:
                 raw = raw[:-1]
             raw = raw.reshape(-1, 2).astype(np.float32)
-            self.tx_data = raw[:, 0] + 1j * raw[:, 1]
+            return raw[:, 0] + 1j * raw[:, 1]
+
+        try:
+            self.tx_data = _load_tx_samples(self.tx_file.get())
         except Exception:
             self.tx_data = np.array([], dtype=np.complex64)
+        self.tx_data_unfiltered = np.array([], dtype=np.complex64)
+        if self.rx_inv_rrc_enable.get():
+            unfiltered_path = self.file_entry.get() or self.tx_file.get()
+            if unfiltered_path == self.tx_file.get():
+                self.tx_data_unfiltered = self.tx_data
+            else:
+                try:
+                    self.tx_data_unfiltered = _load_tx_samples(unfiltered_path)
+                except Exception:
+                    self.tx_data_unfiltered = np.array([], dtype=np.complex64)
         aoa_text = "AoA (ESPRIT): --"
         echo_aoa_text = "Echo AoA: --"
         self.echo_aoa_results = []
@@ -2291,15 +2290,10 @@ class TransceiverUI(tk.Tk):
             aoa_data = self.raw_rx_data[:2]
             if self.trim_var.get():
                 aoa_data = self._trim_data_multichannel(aoa_data)
-            if self.rx_rrc_enable.get():
-                try:
-                    factor = int(self.rx_os_entry.get())
-                except Exception:
-                    factor = 1
-                if factor > 1:
-                    aoa_data = np.vstack(
-                        [self._oversample_data(chan)[0] for chan in aoa_data]
-                    )
+            if self.rx_inv_rrc_enable.get():
+                aoa_data = np.vstack(
+                    [self._apply_inverse_rrc(chan)[0] for chan in aoa_data]
+                )
             try:
                 antenna_spacing = float(eval(self.rx_ant_spacing.get()))
                 wavelength = float(eval(self.rx_wavelength.get()))
@@ -2357,12 +2351,75 @@ class TransceiverUI(tk.Tk):
             echo_aoa_text = "Echo AoA: TX-Daten erforderlich"
 
         for c in self.rx_canvases:
-            c.get_tk_widget().destroy()
+            if hasattr(c, "get_tk_widget"):
+                c.get_tk_widget().destroy()
+            else:
+                c.destroy()
         self.rx_canvases.clear()
 
         modes = ["Signal", "Freq", "InstantFreq", "Crosscorr"]
         title_suffix = f" ({channel_label})" if channel_label else ""
         for idx, mode in enumerate(modes):
+            if mode == "Crosscorr" and self.rx_inv_rrc_enable.get():
+                notebook = ttk.Notebook(self.rx_plots_frame)
+                notebook.grid(row=idx, column=0, sticky="nsew", pady=2)
+                tab_tx = ttk.Frame(notebook)
+                tab_tx.columnconfigure(0, weight=1)
+                tab_unf = ttk.Frame(notebook)
+                tab_unf.columnconfigure(0, weight=1)
+                notebook.add(tab_tx, text="TX")
+                notebook.add(tab_unf, text="TX ungefiltert")
+
+                fig_tx = Figure(figsize=(5, 2), dpi=100)
+                ax_tx = fig_tx.add_subplot(111)
+                _plot_on_mpl(
+                    ax_tx,
+                    data,
+                    fs,
+                    mode,
+                    f"RX {mode}{title_suffix}",
+                    self.tx_data,
+                    manual_lags=self.manual_xcorr_lags,
+                )
+                canvas_tx = FigureCanvasTkAgg(fig_tx, master=tab_tx)
+                canvas_tx.draw()
+                widget_tx = canvas_tx.get_tk_widget()
+                widget_tx.grid(row=0, column=0, sticky="nsew")
+                widget_tx.bind(
+                    "<Button-1>",
+                    lambda _e, m=mode, d=data, s=fs: self._show_fullscreen(
+                        d, s, m, f"RX {m}{title_suffix}"
+                    ),
+                )
+
+                fig_unf = Figure(figsize=(5, 2), dpi=100)
+                ax_unf = fig_unf.add_subplot(111)
+                _plot_on_mpl(
+                    ax_unf,
+                    data,
+                    fs,
+                    mode,
+                    f"RX {mode} (TX ungefiltert){title_suffix}",
+                    self.tx_data_unfiltered,
+                    manual_lags=self.manual_xcorr_lags,
+                )
+                canvas_unf = FigureCanvasTkAgg(fig_unf, master=tab_unf)
+                canvas_unf.draw()
+                widget_unf = canvas_unf.get_tk_widget()
+                widget_unf.grid(row=0, column=0, sticky="nsew")
+                widget_unf.bind(
+                    "<Button-1>",
+                    lambda _e, m=mode, d=data, s=fs: self._show_fullscreen(
+                        d,
+                        s,
+                        m,
+                        f"RX {m} (TX ungefiltert){title_suffix}",
+                        ref_data=self.tx_data_unfiltered,
+                    ),
+                )
+                self.rx_canvases.append(notebook)
+                continue
+
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
             _plot_on_mpl(
@@ -2449,21 +2506,35 @@ class TransceiverUI(tk.Tk):
         e = max(s + 1, min(data.shape[1], e))
         return data[:, s:e]
 
-    def _oversample_data(self, data: np.ndarray) -> tuple[np.ndarray, float]:
-        """Return oversampled *data* and new sample rate factor."""
-        if not self.rx_rrc_enable.get() or data.size == 0:
+    def _apply_inverse_rrc(self, data: np.ndarray) -> tuple[np.ndarray, float]:
+        """Return *data* after inverse RRC filtering and downsampling."""
+        if not self.rx_inv_rrc_enable.get() or data.size == 0:
             return data, 1.0
         try:
-            factor = int(self.rx_os_entry.get())
+            factor = int(self.rx_inv_os_entry.get())
         except Exception:
             factor = 1
-        if factor <= 1:
-            return data, 1.0
-        x_old = np.arange(len(data))
-        x_new = np.linspace(0, len(data) - 1, len(data) * factor)
-        real = np.interp(x_new, x_old, data.real)
-        imag = np.interp(x_new, x_old, data.imag)
-        return real + 1j * imag, float(factor)
+        if factor < 1:
+            factor = 1
+        try:
+            beta = float(self.rx_inv_rrc_beta_entry.get())
+        except Exception:
+            beta = 0.25
+        try:
+            span = int(self.rx_inv_rrc_span_entry.get())
+        except Exception:
+            span = 6
+        filtered = data
+        if span > 0:
+            h = rrc_coeffs(beta, span, sps=factor).astype(np.complex64)
+            n = len(filtered)
+            H = np.fft.fft(h, n)
+            eps = 1e-6
+            filtered = np.fft.ifft(np.fft.fft(filtered, n) / (H + eps))
+        if factor > 1:
+            filtered = filtered[::factor]
+            return filtered, 1.0 / float(factor)
+        return filtered, 1.0
 
     def _on_trim_change(self, *_args) -> None:
         state = "normal" if self.trim_var.get() else "disabled"
@@ -2482,15 +2553,16 @@ class TransceiverUI(tk.Tk):
         self.apply_trim_btn.configure(state="disabled")
         self.trim_dirty = False
         if hasattr(self, "raw_rx_data") and self.raw_rx_data is not None:
-            self._display_rx_plots(self.raw_rx_data, self.latest_fs)
+            fs = getattr(self, "latest_fs_raw", self.latest_fs)
+            self._display_rx_plots(self.raw_rx_data, fs)
         if (
             hasattr(self, "latest_data")
             and self.latest_data is not None
             and (
                 self.trim_var.get()
                 or (
-                    self.rx_rrc_enable.get()
-                    and int(self.rx_os_entry.get() or 1) > 1
+                    self.rx_inv_rrc_enable.get()
+                    and int(self.rx_inv_os_entry.get() or 1) > 1
                 )
             )
         ):
@@ -2835,9 +2907,9 @@ class TransceiverUI(tk.Tk):
             echo_data = self.raw_rx_data[:2]
             if self.trim_var.get():
                 echo_data = self._trim_data_multichannel(echo_data)
-            if self.rx_rrc_enable.get():
+            if self.rx_inv_rrc_enable.get():
                 echo_data = np.vstack(
-                    [self._oversample_data(chan)[0] for chan in echo_data]
+                    [self._apply_inverse_rrc(chan)[0] for chan in echo_data]
                 )
             try:
                 antenna_spacing = float(eval(self.rx_ant_spacing.get()))
@@ -2891,10 +2963,10 @@ class TransceiverUI(tk.Tk):
             "rx_freq": self.rx_freq.get(),
             "rx_dur": self.rx_dur.get(),
             "rx_gain": self.rx_gain.get(),
-            "rx_rrc_oversampling": self.rx_os_entry.get(),
-            "rx_rrc_beta": self.rx_rrc_beta_entry.get(),
-            "rx_rrc_span": self.rx_rrc_span_entry.get(),
-            "rx_rrc_enabled": self.rx_rrc_enable.get(),
+            "rx_inv_rrc_oversampling": self.rx_inv_os_entry.get(),
+            "rx_inv_rrc_beta": self.rx_inv_rrc_beta_entry.get(),
+            "rx_inv_rrc_span": self.rx_inv_rrc_span_entry.get(),
+            "rx_inv_rrc_enabled": self.rx_inv_rrc_enable.get(),
             "rx_channel_2": self.rx_channel_2.get(),
             "rx_channel_view": self.rx_channel_view.get(),
             "rx_file": self.rx_file.get(),
@@ -2966,20 +3038,29 @@ class TransceiverUI(tk.Tk):
         self.rx_dur.insert(0, params.get("rx_dur", ""))
         self.rx_gain.delete(0, tk.END)
         self.rx_gain.insert(0, params.get("rx_gain", ""))
-        self.rx_os_entry.delete(0, tk.END)
-        self.rx_os_entry.insert(
+        self.rx_inv_os_entry.delete(0, tk.END)
+        self.rx_inv_os_entry.insert(
             0,
-            params.get("rx_rrc_oversampling", params.get("rx_oversampling", "1")),
+            params.get(
+                "rx_inv_rrc_oversampling",
+                params.get("rx_rrc_oversampling", params.get("rx_oversampling", "1")),
+            ),
         )
-        self.rx_rrc_beta_entry.delete(0, tk.END)
-        self.rx_rrc_beta_entry.insert(0, params.get("rx_rrc_beta", "0.25"))
-        self.rx_rrc_span_entry.delete(0, tk.END)
-        self.rx_rrc_span_entry.insert(0, params.get("rx_rrc_span", "6"))
-        self.rx_rrc_enable.set(params.get("rx_rrc_enabled", True))
-        state = "normal" if self.rx_rrc_enable.get() else "disabled"
-        self.rx_rrc_beta_entry.entry.configure(state=state)
-        self.rx_rrc_span_entry.entry.configure(state=state)
-        self.rx_os_entry.entry.configure(state=state)
+        self.rx_inv_rrc_beta_entry.delete(0, tk.END)
+        self.rx_inv_rrc_beta_entry.insert(
+            0, params.get("rx_inv_rrc_beta", params.get("rx_rrc_beta", "0.25"))
+        )
+        self.rx_inv_rrc_span_entry.delete(0, tk.END)
+        self.rx_inv_rrc_span_entry.insert(
+            0, params.get("rx_inv_rrc_span", params.get("rx_rrc_span", "6"))
+        )
+        self.rx_inv_rrc_enable.set(
+            params.get("rx_inv_rrc_enabled", params.get("rx_rrc_enabled", False))
+        )
+        state = "normal" if self.rx_inv_rrc_enable.get() else "disabled"
+        self.rx_inv_rrc_beta_entry.entry.configure(state=state)
+        self.rx_inv_rrc_span_entry.entry.configure(state=state)
+        self.rx_inv_os_entry.entry.configure(state=state)
         self.rx_channel_2.set(params.get("rx_channel_2", False))
         self.rx_channel_view.set(params.get("rx_channel_view", "Kanal 1"))
         self.rx_file.delete(0, tk.END)
@@ -3349,14 +3430,6 @@ class TransceiverUI(tk.Tk):
             "--output-file",
             out_file,
         ]
-        if self.rx_rrc_enable.get():
-            cmd += [
-                "--rrc",
-                "--rrc-beta",
-                self.rx_rrc_beta_entry.get(),
-                "--rrc-span",
-                self.rx_rrc_span_entry.get(),
-            ]
         if self.rx_channel_2.get():
             cmd += ["--channels", "0", "1"]
         self._cmd_running = True
