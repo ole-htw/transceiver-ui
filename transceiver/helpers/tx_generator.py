@@ -90,9 +90,12 @@ def generate_filename(args) -> Path:
             parts.append(f"os{args.oversampling}")
     elif args.waveform == "chirp":
         parts.append(f"{_pretty(args.f0)}_{_pretty(args.f1)}")
-    # The filename should reflect the actual output length which equals
-    # ``args.samples`` even when oversampling is enabled.
-    parts.append(f"N{args.samples}")
+    if args.waveform == "zadoffchu":
+        parts.append(f"Nsym{args.samples}")
+        if args.oversampling != 1:
+            parts.append(f"Nsamp{args.samples * args.oversampling}")
+    else:
+        parts.append(f"N{args.samples}")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     name = "_".join(parts) + f"_{stamp}.bin"
     return Path(args.output_dir) / name
@@ -152,11 +155,10 @@ def generate_waveform(
     if oversampling <= 0:
         raise ValueError("oversampling muss >= 1 sein")
 
-    n = np.arange(N * oversampling) / oversampling
-
     w = waveform.lower()
 
     if w == "sinus":  # ---------- Sinus -----------------------------------
+        n = np.arange(N)
         signal = np.exp(2j * np.pi * f * n / fs)
 
     elif w == "zadoffchu":  # -------- Zadoff–Chu --------------------------
@@ -164,15 +166,23 @@ def generate_waveform(
             raise ValueError("Zadoff‑Chu‑Parameter q darf nicht 0 sein.")
         if gcd(q, N) != 1:
             print(f"WARNUNG: q={q} nicht teilerfremd zu N={N}.")
+        n = np.arange(N)
         if N % 2:
-            signal = np.exp(-1j * np.pi * q * n**2 / N)
+            symbols = np.exp(-1j * np.pi * q * n**2 / N)
         else:
-            signal = np.exp(-1j * np.pi * q * n * (n + 1) / N)
+            symbols = np.exp(-1j * np.pi * q * n * (n + 1) / N)
+        if oversampling > 1:
+            upsampled = np.zeros(N * oversampling, dtype=np.complex64)
+            upsampled[::oversampling] = symbols
+            signal = upsampled
+        else:
+            signal = symbols
 
     elif w == "chirp":  # -------------- Linear Up‑Chirp -------------------
         if f0 is None or f1 is None:
             raise ValueError("Für Chirp müssen f0 und f1 gesetzt sein.")
         # Zeitbasis in Sekunden
+        n = np.arange(N)
         t = n / fs
         T = N / fs  # Gesamtdauer
         k = (f1 - f0) / T  # Steigung (Hz pro s)
@@ -185,7 +195,8 @@ def generate_waveform(
 
     signal = signal.astype(np.complex64)
     if rrc_span > 0:
-        h = rrc_coeffs(rrc_beta, rrc_span, sps=oversampling)
+        sps = oversampling if w == "zadoffchu" else 1
+        h = rrc_coeffs(rrc_beta, rrc_span, sps=sps)
         signal = np.convolve(signal, h, mode="same")
     return signal.astype(np.complex64)
 
@@ -277,7 +288,7 @@ def main() -> None:
         "--samples",
         type=int,
         default=40000,
-        help="Anzahl Samples der Wellenform (Standard: 40000)",
+        help="Anzahl Samples der Wellenform (Zadoff-Chu: Symbolanzahl, Standard: 40000)",
     )
     parser.add_argument(
         "--oversampling",
@@ -310,21 +321,15 @@ def main() -> None:
     N_waveform = args.samples
     N_output = N_waveform
 
-
     if args.waveform == "zadoffchu":
-        if args.oversampling > 1:
-            # Anzahl Grundsymbole unverändert …
-            N_waveform = args.samples
-            # … und Gesamtlänge vergrößern
-            N_output   = N_waveform * args.oversampling
-        else:
+        if args.oversampling <= 1:
             prime = find_prime_near(N_waveform, search_up=True)
             if prime != N_waveform:
                 print(
                     f"Info: samples={N_waveform} angepasst auf Primzahl {prime} für ZC."
                 )
                 N_waveform = prime
-            N_output = N_waveform
+        N_output = N_waveform * args.oversampling
 
     append_zeros = not args.no_zeros
 
