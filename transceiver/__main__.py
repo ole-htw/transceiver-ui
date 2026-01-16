@@ -1570,6 +1570,7 @@ class TransceiverUI(tk.Tk):
         self._tx_running = False
         self._last_tx_end = 0.0
         self._filtered_tx_file = None
+        self._closing = False
         self.create_widgets()
         try:
             self.state("zoomed")
@@ -2677,6 +2678,14 @@ class TransceiverUI(tk.Tk):
         if self._cmd_running:
             self.after(100, self._process_queue)
 
+    def _ui(self, callback) -> None:
+        if self._closing:
+            return
+        try:
+            self.after(0, callback)
+        except tk.TclError:
+            pass
+
     def _kill_stale_tx(self) -> None:
         """Terminate orphaned transmit processes from previous runs."""
         try:
@@ -2739,6 +2748,7 @@ class TransceiverUI(tk.Tk):
         cmd: list[str],
         max_attempts: int = 1,
         delay: float = 5.0,
+        tx_args: str | None = None,
     ) -> None:
         attempt = 1
         # Ensure the replay block is stopped before retrying
@@ -2769,8 +2779,12 @@ class TransceiverUI(tk.Tk):
                     self._proc = None
 
                 # If the device was not found, try pinging the target once
-                if output_lines and any("No devices found" in l for l in output_lines):
-                    self._ping_device(self.tx_args.get())
+                if (
+                    output_lines
+                    and any("No devices found" in l for l in output_lines)
+                    and tx_args
+                ):
+                    self._ping_device(tx_args)
 
                 if self._stop_requested or (proc is not None and proc.returncode == 0):
                     break
@@ -2786,14 +2800,19 @@ class TransceiverUI(tk.Tk):
             self._proc = None
             self._tx_running = False
             self._last_tx_end = time.monotonic()
-            if hasattr(self, "tx_stop"):
-                self.tx_stop.config(state="disabled")
-            if hasattr(self, "tx_button"):
-                self.tx_button.config(state="normal")
-            if hasattr(self, "tx_retrans"):
-                self.tx_retrans.config(state="disabled")
+            self._ui(self._reset_tx_buttons)
 
-    def _run_rx_cmd(self, cmd: list[str], out_file: str) -> None:
+    def _reset_tx_buttons(self) -> None:
+        if hasattr(self, "tx_stop"):
+            self.tx_stop.config(state="disabled")
+        if hasattr(self, "tx_button"):
+            self.tx_button.config(state="normal")
+        if hasattr(self, "tx_retrans"):
+            self.tx_retrans.config(state="disabled")
+
+    def _run_rx_cmd(
+        self, cmd: list[str], out_file: str, channels: int, rate: float
+    ) -> None:
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -2813,14 +2832,10 @@ class TransceiverUI(tk.Tk):
         finally:
             self._cmd_running = False
             self._proc = None
-            if hasattr(self, "rx_stop"):
-                self.rx_stop.config(state="disabled")
-            if hasattr(self, "rx_button"):
-                self.rx_button.config(state="normal")
+            self._ui(self._reset_rx_buttons)
 
         if proc is not None and proc.returncode == 0:
             try:
-                channels = 2 if self.rx_channel_2.get() else 1
                 path = Path(out_file)
                 try:
                     data = rx_convert.load_iq_file(
@@ -2830,9 +2845,15 @@ class TransceiverUI(tk.Tk):
                     data = rx_convert.load_iq_file(
                         path, channels=channels, layout="interleaved"
                     )
-                self._display_rx_plots(data, float(eval(self.rx_rate.get())))
+                self._ui(lambda: self._display_rx_plots(data, rate))
             except Exception as exc:
                 self._out_queue.put(f"Error: {exc}\n")
+
+    def _reset_rx_buttons(self) -> None:
+        if hasattr(self, "rx_stop"):
+            self.rx_stop.config(state="disabled")
+        if hasattr(self, "rx_button"):
+            self.rx_button.config(state="normal")
 
     def _set_manual_xcorr_lag(self, kind: str, lag_value: float) -> None:
         """Store manual lag selection and refresh LOS/echo stats."""
@@ -3352,10 +3373,11 @@ class TransceiverUI(tk.Tk):
             return
         self._kill_stale_tx()
         self._stop_requested = False
+        tx_args = self.tx_args.get()
         cmd = [
             REPLAY_BIN,
             "--args",
-            self.tx_args.get(),
+            tx_args,
             "--rate",
             self.tx_rate.get(),
             "--freq",
@@ -3380,7 +3402,7 @@ class TransceiverUI(tk.Tk):
         threading.Thread(
             target=self._run_cmd,
             args=(cmd,),
-            kwargs={"max_attempts": 10, "delay": 2.0},
+            kwargs={"max_attempts": 10, "delay": 2.0, "tx_args": tx_args},
             daemon=True,
         ).start()
         self._process_queue()
@@ -3435,6 +3457,8 @@ class TransceiverUI(tk.Tk):
 
     def receive(self):
         out_file = self.rx_file.get()
+        channels = 2 if self.rx_channel_2.get() else 1
+        rate = float(eval(self.rx_rate.get()))
         cmd = [
             sys.executable,
             "-m",
@@ -3461,11 +3485,14 @@ class TransceiverUI(tk.Tk):
         if hasattr(self, "rx_button"):
             self.rx_button.config(state="disabled")
         threading.Thread(
-            target=self._run_rx_cmd, args=(cmd, out_file), daemon=True
+            target=self._run_rx_cmd,
+            args=(cmd, out_file, channels, rate),
+            daemon=True,
         ).start()
         self._process_queue()
 
     def on_close(self) -> None:
+        self._closing = True
         self.stop_transmit()
         self.stop_receive()
         _save_state(self._get_current_params())
