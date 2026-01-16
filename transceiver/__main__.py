@@ -1016,6 +1016,18 @@ def _find_peaks_simple(
     return picked
 
 
+def _strip_trailing_zeros(
+    data: np.ndarray, eps: float = 1e-12
+) -> np.ndarray:
+    """Return *data* without trailing zero padding."""
+    if data.size == 0:
+        return data
+    nz = np.flatnonzero(np.abs(data) > eps)
+    if nz.size == 0:
+        return data
+    return data[: nz[-1] + 1]
+
+
 def _aoa_from_corr_peak(
     cc1: np.ndarray,
     cc2: np.ndarray,
@@ -2372,6 +2384,21 @@ class TransceiverUI(tk.Tk):
             return data[0] - data[1], "Differenz"
         return data[0], "Kanal 1"
 
+    def _get_crosscorr_reference(self) -> tuple[np.ndarray, str]:
+        """Return TX reference data and a label for cross-correlation."""
+        ref = getattr(self, "tx_data", np.array([], dtype=np.complex64))
+        label = "TX"
+        if self.rx_inv_rrc_enable.get():
+            unfiltered = getattr(
+                self, "tx_data_unfiltered", np.array([], dtype=np.complex64)
+            )
+            if unfiltered.size:
+                ref = _strip_trailing_zeros(unfiltered)
+                label = "TX ungefiltert"
+            elif ref.size:
+                label = "TX (gefiltert)"
+        return ref, label
+
     def _display_rx_plots(
         self, data: np.ndarray, fs: float, reset_manual: bool = True
     ) -> None:
@@ -2420,6 +2447,7 @@ class TransceiverUI(tk.Tk):
                     self.tx_data_unfiltered = _load_tx_samples(unfiltered_path)
                 except Exception:
                     self.tx_data_unfiltered = np.array([], dtype=np.complex64)
+        ref_data, ref_label = self._get_crosscorr_reference()
         aoa_text = "AoA (ESPRIT): --"
         echo_aoa_text = "Echo AoA: --"
         self.echo_aoa_results = []
@@ -2448,11 +2476,11 @@ class TransceiverUI(tk.Tk):
                         aoa_time, aoa_series = doa_esprit.estimate_aoa_esprit_series(
                             aoa_data, antenna_spacing, wavelength
                         )
-                if self.tx_data.size > 0:
+                if ref_data.size > 0:
                     echo_data = aoa_data
                     echo_out = _correlate_and_estimate_echo_aoa(
                         echo_data,
-                        self.tx_data,
+                        ref_data,
                         antenna_spacing=antenna_spacing,
                         wavelength=wavelength,
                     )
@@ -2489,7 +2517,7 @@ class TransceiverUI(tk.Tk):
         if (
             self.raw_rx_data.ndim == 2
             and self.raw_rx_data.shape[0] >= 2
-            and self.tx_data.size == 0
+            and ref_data.size == 0
         ):
             echo_aoa_text = "Echo AoA: TX-Daten erforderlich"
 
@@ -2503,93 +2531,42 @@ class TransceiverUI(tk.Tk):
         modes = ["Signal", "Freq", "InstantFreq", "Crosscorr"]
         title_suffix = f" ({channel_label})" if channel_label else ""
         for idx, mode in enumerate(modes):
-            if mode == "Crosscorr" and self.rx_inv_rrc_enable.get():
-                notebook = ttk.Notebook(self.rx_plots_frame)
-                notebook.grid(row=idx, column=0, sticky="nsew", pady=2)
-                tab_tx = ttk.Frame(notebook)
-                tab_tx.columnconfigure(0, weight=1)
-                tab_unf = ttk.Frame(notebook)
-                tab_unf.columnconfigure(0, weight=1)
-                notebook.add(tab_tx, text="TX")
-                notebook.add(tab_unf, text="TX ungefiltert")
-
-                fig_tx = Figure(figsize=(5, 2), dpi=100)
-                ax_tx = fig_tx.add_subplot(111)
-                _plot_on_mpl(
-                    ax_tx,
-                    data,
-                    fs,
-                    mode,
-                    f"RX {mode}{title_suffix}",
-                    self.tx_data,
-                    manual_lags=self.manual_xcorr_lags,
-                )
-                canvas_tx = FigureCanvasTkAgg(fig_tx, master=tab_tx)
-                canvas_tx.draw()
-                widget_tx = canvas_tx.get_tk_widget()
-                widget_tx.grid(row=0, column=0, sticky="nsew")
-                widget_tx.bind(
-                    "<Button-1>",
-                    lambda _e, m=mode, d=data, s=fs: self._show_fullscreen(
-                        d, s, m, f"RX {m}{title_suffix}"
-                    ),
-                )
-
-                fig_unf = Figure(figsize=(5, 2), dpi=100)
-                ax_unf = fig_unf.add_subplot(111)
-                _plot_on_mpl(
-                    ax_unf,
-                    data,
-                    fs,
-                    mode,
-                    f"RX {mode} (TX ungefiltert){title_suffix}",
-                    self.tx_data_unfiltered,
-                    manual_lags=self.manual_xcorr_lags,
-                )
-                canvas_unf = FigureCanvasTkAgg(fig_unf, master=tab_unf)
-                canvas_unf.draw()
-                widget_unf = canvas_unf.get_tk_widget()
-                widget_unf.grid(row=0, column=0, sticky="nsew")
-                widget_unf.bind(
-                    "<Button-1>",
-                    lambda _e, m=mode, d=data, s=fs: self._show_fullscreen(
-                        d,
-                        s,
-                        m,
-                        f"RX {m} (TX ungefiltert){title_suffix}",
-                        ref_data=self.tx_data_unfiltered,
-                    ),
-                )
-                self.rx_canvases.append(notebook)
-                continue
-
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
+            ref = ref_data if mode == "Crosscorr" else None
+            crosscorr_title = (
+                f"RX {mode}{title_suffix} ({ref_label})"
+                if mode == "Crosscorr" and ref_label
+                else f"RX {mode}{title_suffix}"
+            )
             _plot_on_mpl(
                 ax,
                 data,
                 fs,
                 mode,
-                f"RX {mode}{title_suffix}",
-                self.tx_data,
+                crosscorr_title,
+                ref,
                 manual_lags=self.manual_xcorr_lags,
             )
             canvas = FigureCanvasTkAgg(fig, master=self.rx_plots_frame)
             canvas.draw()
             widget = canvas.get_tk_widget()
             widget.grid(row=idx, column=0, sticky="nsew", pady=2)
-            widget.bind(
-                "<Button-1>",
-                lambda _e, m=mode, d=data, s=fs: self._show_fullscreen(
+            if mode == "Crosscorr":
+                handler = lambda _e, m=mode, d=data, s=fs, r=ref, t=crosscorr_title: (
+                    self._show_fullscreen(d, s, m, t, ref_data=r)
+                )
+            else:
+                handler = lambda _e, m=mode, d=data, s=fs: self._show_fullscreen(
                     d, s, m, f"RX {m}{title_suffix}"
-                ),
-            )
+                )
+            widget.bind("<Button-1>", handler)
             self.rx_canvases.append(canvas)
 
         stats = _calc_stats(
             data,
             fs,
-            self.tx_data,
+            ref_data,
             manual_lags=self.manual_xcorr_lags,
         )
         text = _format_stats_text(stats)
@@ -2989,10 +2966,11 @@ class TransceiverUI(tk.Tk):
             return
         if not hasattr(self, "latest_data") or self.latest_data is None:
             return
+        ref_data, _ref_label = self._get_crosscorr_reference()
         stats = _calc_stats(
             self.latest_data,
             self.latest_fs,
-            getattr(self, "tx_data", None),
+            ref_data,
             manual_lags=self.manual_xcorr_lags,
         )
         self.rx_stats_label.configure(text=_format_stats_text(stats))
@@ -3007,6 +2985,8 @@ class TransceiverUI(tk.Tk):
     ) -> None:
         if data is None:
             return
+        if mode == "Crosscorr" and ref_data is None:
+            ref_data, _ref_label = self._get_crosscorr_reference()
         _spawn_plot_worker(
             data,
             fs,
@@ -3035,7 +3015,8 @@ class TransceiverUI(tk.Tk):
         if not hasattr(self, "latest_data") or self.latest_data is None:
             messagebox.showerror("XCorr Full", "No RX data available")
             return
-        if not hasattr(self, "tx_data") or self.tx_data.size == 0:
+        ref_data, _ref_label = self._get_crosscorr_reference()
+        if ref_data.size == 0:
             messagebox.showerror("XCorr Full", "No TX data available")
             return
         if (
@@ -3061,7 +3042,7 @@ class TransceiverUI(tk.Tk):
                 return
             echo_out = _correlate_and_estimate_echo_aoa(
                 echo_data,
-                self.tx_data,
+                ref_data,
                 antenna_spacing=antenna_spacing,
                 wavelength=wavelength,
             )
@@ -3070,7 +3051,7 @@ class TransceiverUI(tk.Tk):
             self.echo_aoa_results = echo_out["results"]
         else:
             data = self.latest_data
-            ref = self.tx_data
+            ref = ref_data
             n = min(len(data), len(ref))
             cc = _xcorr_fft(data[:n], ref[:n])
             self.full_xcorr_lags = np.arange(-n + 1, n)
