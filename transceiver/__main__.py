@@ -23,6 +23,7 @@ import sys
 from .helpers.tx_generator import generate_waveform, rrc_coeffs
 from .helpers import rx_convert
 from .helpers import doa_esprit
+from .helpers.number_parser import parse_number_expr
 
 # --- suggestion helper -------------------------------------------------------
 
@@ -1136,14 +1137,37 @@ def _format_hz(val: float) -> str:
     return f"{val*1e3:.2f} mHz"
 
 
+def _parse_number_expr_or_default(text: str, default: float = 0.0) -> float:
+    try:
+        return parse_number_expr(text)
+    except ValueError:
+        return default
+
+
+def _parse_number_expr_action(
+    text: str,
+    label: str,
+    *,
+    allow_empty: bool = False,
+    default: float | None = None,
+) -> float | None:
+    if text is None or not str(text).strip():
+        if allow_empty:
+            return default
+        messagebox.showerror("Ungültige Eingabe", f"{label}: Eingabe fehlt.")
+        return None
+    try:
+        return parse_number_expr(text)
+    except ValueError as exc:
+        messagebox.showerror("Ungültige Eingabe", f"{label}: {exc}")
+        return None
+
+
 def _gen_tx_filename(app) -> str:
     """Generate TX filename based on current UI settings."""
     w = app.wave_var.get().lower()
     parts = [w]
-    try:
-        fs = float(eval(app.fs_entry.get()))
-    except Exception:
-        fs = 0.0
+    fs = _parse_number_expr_or_default(app.fs_entry.get(), 0.0)
     try:
         samples = int(app.samples_entry.get())
     except Exception:
@@ -1156,10 +1180,7 @@ def _gen_tx_filename(app) -> str:
         oversampling = 1
 
     if w == "sinus":
-        try:
-            f = float(eval(app.f_entry.get()))
-        except Exception:
-            f = 0.0
+        f = _parse_number_expr_or_default(app.f_entry.get(), 0.0)
         parts.append(f"f{_pretty(f)}")
     elif w == "zadoffchu":
         q = app.q_entry.get() or "1"
@@ -1167,14 +1188,8 @@ def _gen_tx_filename(app) -> str:
         if oversampling != 1:
             parts.append(f"os{oversampling}")
     elif w == "chirp":
-        try:
-            f0 = float(eval(app.f_entry.get()))
-        except Exception:
-            f0 = 0.0
-        try:
-            f1 = float(eval(app.f1_entry.get()))
-        except Exception:
-            f1 = f0
+        f0 = _parse_number_expr_or_default(app.f_entry.get(), 0.0)
+        f1 = _parse_number_expr_or_default(app.f1_entry.get(), f0)
         parts.append(f"{_pretty(f0)}_{_pretty(f1)}")
 
     parts.append(f"fs{_pretty(fs)}")
@@ -1198,14 +1213,8 @@ def _gen_rrc_tx_filename(filename: str) -> str:
 
 def _gen_rx_filename(app) -> str:
     """Generate RX filename based on current UI settings."""
-    try:
-        freq = float(eval(app.rx_freq.get()))
-    except Exception:
-        freq = 0.0
-    try:
-        rate = float(eval(app.rx_rate.get()))
-    except Exception:
-        rate = 0.0
+    freq = _parse_number_expr_or_default(app.rx_freq.get(), 0.0)
+    rate = _parse_number_expr_or_default(app.rx_rate.get(), 0.0)
     dur = app.rx_dur.get() or "0"
     gain = app.rx_gain.get() or "0"
     parts = [f"f{_pretty(freq)}", f"r{_pretty(rate)}", f"d{dur}s", f"g{gain}"]
@@ -2269,7 +2278,11 @@ class TransceiverUI(tk.Tk):
         return data[0], "Kanal 1"
 
     def _display_rx_plots(
-        self, data: np.ndarray, fs: float, reset_manual: bool = True
+        self,
+        data: np.ndarray,
+        fs: float,
+        reset_manual: bool = True,
+        show_errors: bool = False,
     ) -> None:
         """Render preview plots below the receive parameters."""
         if reset_manual:
@@ -2331,8 +2344,16 @@ class TransceiverUI(tk.Tk):
                     [self._apply_inverse_rrc(chan)[0] for chan in aoa_data]
                 )
             try:
-                antenna_spacing = float(eval(self.rx_ant_spacing.get()))
-                wavelength = float(eval(self.rx_wavelength.get()))
+                antenna_spacing = parse_number_expr(self.rx_ant_spacing.get())
+                wavelength = parse_number_expr(self.rx_wavelength.get())
+            except ValueError as exc:
+                if show_errors:
+                    messagebox.showerror(
+                        "AoA Parameter", f"Antennenparameter: {exc}"
+                    )
+                aoa_text = "AoA (ESPRIT): Parameter ungültig"
+                echo_aoa_text = "Echo AoA: Parameter ungültig"
+            else:
                 aoa_angle = doa_esprit.estimate_aoa_esprit(
                     aoa_data, antenna_spacing, wavelength
                 )
@@ -2372,9 +2393,6 @@ class TransceiverUI(tk.Tk):
                         echo_aoa_text = "Echo AoA:\n" + "\n".join(items)
                     else:
                         echo_aoa_text = "Echo AoA: keine Peaks"
-            except Exception:
-                aoa_text = "AoA (ESPRIT): Parameter ungültig"
-                echo_aoa_text = "Echo AoA: Parameter ungültig"
         else:
             aoa_text = "AoA (ESPRIT): 2 Kanäle erforderlich"
             echo_aoa_text = "Echo AoA: 2 Kanäle erforderlich"
@@ -2846,7 +2864,10 @@ class TransceiverUI(tk.Tk):
                     data = rx_convert.load_iq_file(
                         path, channels=channels, layout="interleaved"
                     )
-                self._display_rx_plots(data, float(eval(self.rx_rate.get())))
+                rx_rate = getattr(self, "_rx_rate_value", None)
+                if rx_rate is None:
+                    rx_rate = _parse_number_expr_or_default(self.rx_rate.get(), 0.0)
+                self._display_rx_plots(data, rx_rate, show_errors=True)
             except Exception as exc:
                 self._out_queue.put(f"Error: {exc}\n")
 
@@ -2949,12 +2970,18 @@ class TransceiverUI(tk.Tk):
                 echo_data = np.vstack(
                     [self._apply_inverse_rrc(chan)[0] for chan in echo_data]
                 )
-            try:
-                antenna_spacing = float(eval(self.rx_ant_spacing.get()))
-                wavelength = float(eval(self.rx_wavelength.get()))
-            except Exception:
-                antenna_spacing = 0.0
-                wavelength = 0.0
+            antenna_spacing = _parse_number_expr_action(
+                self.rx_ant_spacing.get(),
+                "Antennenabstand",
+            )
+            if antenna_spacing is None:
+                return
+            wavelength = _parse_number_expr_action(
+                self.rx_wavelength.get(),
+                "Wellenlänge",
+            )
+            if wavelength is None:
+                return
             echo_out = _correlate_and_estimate_echo_aoa(
                 echo_data,
                 self.tx_data,
@@ -3191,26 +3218,53 @@ class TransceiverUI(tk.Tk):
 
     # ----- Actions -----
     def generate(self):
+        fs = _parse_number_expr_action(self.fs_entry.get(), "Abtastrate (fs)")
+        if fs is None:
+            return
         try:
-            fs = float(eval(self.fs_entry.get()))
             samples = int(self.samples_entry.get())
+        except ValueError:
+            messagebox.showerror("Generate error", "Samples müssen eine ganze Zahl sein.")
+            return
+        try:
             oversampling = int(self.os_entry.get()) if self.os_entry.get() else 1
-            if not self.rrc_enable.get():
-                oversampling = 1
+        except ValueError:
+            messagebox.showerror(
+                "Generate error", "Oversampling muss eine ganze Zahl sein."
+            )
+            return
+        if not self.rrc_enable.get():
+            oversampling = 1
+        try:
             repeats = int(self.repeat_entry.get()) if self.repeat_entry.get() else 1
-            zeros_mode = self.zeros_var.get()
+        except ValueError:
+            messagebox.showerror("Generate error", "Repeats muss eine ganze Zahl sein.")
+            return
+        zeros_mode = self.zeros_var.get()
+        try:
             amp = float(self.amp_entry.get())
-            waveform = self.wave_var.get()
-            rrc_active = self._rrc_active()
-            self._last_tx_os = 1
-            if waveform == "zadoffchu" and oversampling > 1 and rrc_active:
-                self._last_tx_os = oversampling
+        except ValueError:
+            messagebox.showerror("Generate error", "Amplitude muss eine Zahl sein.")
+            return
+        waveform = self.wave_var.get()
+        rrc_active = self._rrc_active()
+        self._last_tx_os = 1
+        if waveform == "zadoffchu" and oversampling > 1 and rrc_active:
+            self._last_tx_os = oversampling
 
-            unfiltered_data = None
-            filtered_data = None
+        unfiltered_data = None
+        filtered_data = None
 
+        try:
             if waveform == "sinus":
-                freq = float(eval(self.f_entry.get())) if self.f_entry.get() else 0.0
+                freq = _parse_number_expr_action(
+                    self.f_entry.get(),
+                    "Frequenz",
+                    allow_empty=True,
+                    default=0.0,
+                )
+                if freq is None:
+                    return
                 data = generate_waveform(
                     waveform, fs, freq, samples, oversampling=1
                 )
@@ -3261,8 +3315,22 @@ class TransceiverUI(tk.Tk):
                         oversampling=oversampling,
                     )
             else:  # chirp
-                f0 = float(eval(self.f_entry.get())) if self.f_entry.get() else 0.0
-                f1 = float(eval(self.f1_entry.get())) if self.f1_entry.get() else None
+                f0 = _parse_number_expr_action(
+                    self.f_entry.get(),
+                    "Startfrequenz",
+                    allow_empty=True,
+                    default=0.0,
+                )
+                if f0 is None:
+                    return
+                f1 = _parse_number_expr_action(
+                    self.f1_entry.get(),
+                    "Endfrequenz",
+                    allow_empty=True,
+                    default=None,
+                )
+                if self.f1_entry.get() and f1 is None:
+                    return
                 data = generate_waveform(
                     waveform,
                     fs,
@@ -3354,7 +3422,6 @@ class TransceiverUI(tk.Tk):
                 )
             else:
                 self._display_gen_plots(scaled_data, fs_eff)
-
         except Exception as exc:
             messagebox.showerror("Generate error", str(exc))
 
@@ -3450,6 +3517,13 @@ class TransceiverUI(tk.Tk):
             self.rx_button.config(state="normal")
 
     def receive(self):
+        freq = _parse_number_expr_action(self.rx_freq.get(), "RX-Frequenz")
+        if freq is None:
+            return
+        rate = _parse_number_expr_action(self.rx_rate.get(), "RX-Rate")
+        if rate is None:
+            return
+        self._rx_rate_value = rate
         out_file = self.rx_file.get()
         cmd = [
             sys.executable,
@@ -3458,9 +3532,9 @@ class TransceiverUI(tk.Tk):
             "-a",
             self.rx_args.get(),
             "-f",
-            self.rx_freq.get(),
+            str(freq),
             "-r",
-            self.rx_rate.get(),
+            str(rate),
             "-d",
             self.rx_dur.get(),
             "-g",
