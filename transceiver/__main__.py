@@ -2087,10 +2087,10 @@ class TransceiverUI(tk.Tk):
         elif w == "zadoffchu":
             self.q_label.grid(row=2, column=0, sticky="w")
             self.q_entry.grid(row=2, column=1, sticky="ew")
-            self.rrc_beta_label.grid(row=7, column=0, sticky="w")
-            self.rrc_beta_entry.grid(row=7, column=1, sticky="ew")
-            self.rrc_span_label.grid(row=8, column=0, sticky="w")
-            self.rrc_span_entry.grid(row=8, column=1, sticky="ew")
+            self.rrc_beta_label.grid(row=6, column=0, sticky="w")
+            self.rrc_beta_entry.grid(row=6, column=1, sticky="ew")
+            self.rrc_span_label.grid(row=7, column=0, sticky="w")
+            self.rrc_span_entry.grid(row=7, column=1, sticky="ew")
             state = "normal" if self.rrc_enable.get() else "disabled"
             self.rrc_beta_entry.entry.configure(state=state)
             self.rrc_span_entry.entry.configure(state=state)
