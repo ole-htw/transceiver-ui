@@ -1208,6 +1208,7 @@ def _calc_stats(
     fs: float,
     ref_data: np.ndarray | None = None,
     manual_lags: dict[str, int | None] | None = None,
+    symbol_rate: float | None = None,
 ) -> dict:
     """Return basic signal statistics for display.
 
@@ -1223,6 +1224,8 @@ def _calc_stats(
         "f_low": 0.0,
         "f_high": 0.0,
         "bw": 0.0,
+        "bw_norm_nyq": None,
+        "bw_rs": None,
         "amp": 0.0,
         "echo_delay": None,
     }
@@ -1247,6 +1250,10 @@ def _calc_stats(
         stats["f_low"] = float(freqs[mask].min())
         stats["f_high"] = float(freqs[mask].max())
         stats["bw"] = stats["f_high"] - stats["f_low"]
+        if fs > 0:
+            stats["bw_norm_nyq"] = stats["bw"] / (fs / 2)
+        if symbol_rate is not None and symbol_rate > 0:
+            stats["bw_rs"] = stats["bw"] / symbol_rate
 
     if ref_data is not None and ref_data.size and data.size:
         n = min(len(data), len(ref_data))
@@ -1269,6 +1276,10 @@ def _format_stats_text(stats: dict) -> str:
         f"max Amp: {stats['amp']:.1f}",
         f"BW (3dB): {_format_hz(stats['bw'])}",
     ]
+    if stats.get("bw_norm_nyq") is not None:
+        lines.append(f"BW (Nyq): {stats['bw_norm_nyq']:.3f}")
+    if stats.get("bw_rs") is not None:
+        lines.append(f"BW (Rs): {stats['bw_rs']:.3f}×Rs")
     if stats.get("echo_delay") is not None:
         meters = stats["echo_delay"] * 1.5
         lines.append(f"LOS-Echo: {stats['echo_delay']} samp ({meters:.1f} m)")
@@ -2267,7 +2278,13 @@ class TransceiverUI(tk.Tk):
         self.rx_rate.entry.configure(textvariable=self.rx_rate_var)
         self.rx_rate.var = self.rx_rate_var
 
-    def _render_gen_tab(self, frame: ttk.Frame, data: np.ndarray, fs: float) -> None:
+    def _render_gen_tab(
+        self,
+        frame: ttk.Frame,
+        data: np.ndarray,
+        fs: float,
+        symbol_rate: float | None = None,
+    ) -> None:
         modes = ["Signal", "Freq", "InstantFreq", "Autocorr"]
         for idx, mode in enumerate(modes):
             fig = Figure(figsize=(5, 2), dpi=100)
@@ -2285,7 +2302,7 @@ class TransceiverUI(tk.Tk):
             )
             self.gen_canvases.append(canvas)
 
-        stats = _calc_stats(data, fs)
+        stats = _calc_stats(data, fs, symbol_rate=symbol_rate)
         text = _format_stats_text(stats)
         stats_label = ttk.Label(frame, justify="left", anchor="w")
         stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
@@ -2297,6 +2314,8 @@ class TransceiverUI(tk.Tk):
         fs: float,
         filtered_data: np.ndarray | None = None,
         filtered_fs: float | None = None,
+        symbol_rate: float | None = None,
+        filtered_symbol_rate: float | None = None,
     ) -> None:
         """Render preview plots below the generation parameters."""
         if filtered_data is not None:
@@ -2314,7 +2333,7 @@ class TransceiverUI(tk.Tk):
             tab_frame = ttk.Frame(self.gen_plots_frame)
             tab_frame.grid(row=0, column=0, sticky="nsew")
             tab_frame.columnconfigure(0, weight=1)
-            self._render_gen_tab(tab_frame, data, fs)
+            self._render_gen_tab(tab_frame, data, fs, symbol_rate=symbol_rate)
             return
 
         notebook = ttk.Notebook(self.gen_plots_frame)
@@ -2330,11 +2349,12 @@ class TransceiverUI(tk.Tk):
         notebook.add(filtered_tab, text="Gefiltert")
         notebook.select(filtered_tab)
 
-        self._render_gen_tab(unfiltered_tab, data, fs)
+        self._render_gen_tab(unfiltered_tab, data, fs, symbol_rate=symbol_rate)
         self._render_gen_tab(
             filtered_tab,
             filtered_data,
             filtered_fs if filtered_fs is not None else fs,
+            symbol_rate=filtered_symbol_rate,
         )
 
     def _select_rx_display_data(self, data: np.ndarray) -> tuple[np.ndarray, str]:
@@ -3434,18 +3454,25 @@ class TransceiverUI(tk.Tk):
                 if filtered_data is not None
                 else None
             )
-            fs_eff = fs
-            if waveform == "zadoffchu" and oversampling > 1 and self.rrc_enable.get():
-                fs_eff = fs * oversampling
+            symbol_rate = None
+            filtered_symbol_rate = None
+            if waveform == "zadoffchu":
+                symbol_rate = fs
+                if oversampling > 1 and self.rrc_enable.get():
+                    # Oversampling adds samples but does not change the DAC
+                    # playback rate; keep the spectrum in Hz referenced to fs.
+                    filtered_symbol_rate = fs / oversampling
             if scaled_unfiltered is not None and scaled_filtered is not None:
                 self._display_gen_plots(
                     scaled_unfiltered,
                     fs,
                     scaled_filtered,
-                    fs_eff,
+                    fs,
+                    symbol_rate=symbol_rate,
+                    filtered_symbol_rate=filtered_symbol_rate,
                 )
             else:
-                self._display_gen_plots(scaled_data, fs_eff)
+                self._display_gen_plots(scaled_data, fs, symbol_rate=symbol_rate)
 
         except ValueError as exc:
             messagebox.showerror("Generate", str(exc))
