@@ -126,11 +126,11 @@ def rrc_coeffs(beta: float, span: int, sps: int = 1) -> np.ndarray:
     t = (np.arange(num_taps) - (num_taps - 1) / 2) / sps
     h = np.zeros_like(t, dtype=np.float64)
     
-    eps = 1e-8
+
     for i, ti in enumerate(t):
-        if np.isclose(ti, 0.0, atol=eps):
+        if abs(ti) < 1e-12:
             h[i] = 1.0 - beta + 4 * beta / np.pi
-        elif beta > 0 and np.isclose(abs(ti), 1.0 / (4.0 * beta), atol=eps):
+        elif beta > 0 and abs(abs(ti) - 1.0 / (4.0 * beta)) < 1e-12:
             h[i] = (
                 beta
                 / np.sqrt(2.0)
