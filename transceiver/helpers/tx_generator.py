@@ -258,7 +258,10 @@ def generate_waveform(
         else:
             # Kein Oversampling -> einfach filtern (same-Länge)
             if len(h) > 1:
-                y = np.convolve(symbols, h, mode="same").astype(np.complex64)
+                y_full = np.convolve(symbols, h, mode="full").astype(np.complex64)
+                delay = (len(h) - 1) // 2
+                y = y_full[delay:delay + N]
+                y = _trim_to_length(y, N).astype(np.complex64)
             else:
                 y = symbols
             return y
