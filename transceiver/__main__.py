@@ -331,6 +331,8 @@ class SignalViewer(tk.Toplevel):
         self.trim_end_label.configure(text=f"{self.trim_end.get():.0f}%")
         self.trim_dirty = True
         self.apply_trim_btn.configure(state="normal")
+        if hasattr(self.parent, "_reset_manual_xcorr_lags"):
+            self.parent._reset_manual_xcorr_lags("Trim geändert")
 
     def update_trim(self, *_args) -> None:
         self._on_trim_change()
@@ -358,6 +360,8 @@ class SignalViewer(tk.Toplevel):
 
     def _display_plots(self, data: np.ndarray, fs: float) -> None:
         self.latest_fs = fs
+        if hasattr(self.parent, "_reset_manual_xcorr_lags"):
+            self.parent._reset_manual_xcorr_lags("Neue RX-Daten")
         if data.ndim != 1:
             data = np.asarray(data)
             if data.ndim >= 2:
@@ -1694,6 +1698,13 @@ class TransceiverUI(tk.Tk):
         self.os_entry.entry.configure(
             state="normal" if self.rrc_enable.get() else "disabled"
         )
+        self.os_entry.entry.bind(
+            "<FocusOut>",
+            lambda _e: (
+                self.auto_update_tx_filename(),
+                self._reset_manual_xcorr_lags("Oversampling geändert"),
+            ),
+        )
 
         ttk.Label(gen_frame, text="Zeros").grid(row=9, column=0, sticky="w")
         self.zeros_var = tk.StringVar(value="none")
@@ -1802,6 +1813,10 @@ class TransceiverUI(tk.Tk):
         self.tx_file = SuggestEntry(tx_frame, "tx_file")
         self.tx_file.insert(0, "tx_signal.bin")
         self.tx_file.grid(row=4, column=1, sticky="ew")
+        self.tx_file.entry.bind(
+            "<FocusOut>",
+            lambda _e: self._reset_manual_xcorr_lags("TX-Datei geändert"),
+        )
 
         btn_frame = ttk.Frame(tx_frame)
         btn_frame.grid(row=5, column=0, columnspan=2, pady=5)
@@ -1909,25 +1924,18 @@ class TransceiverUI(tk.Tk):
         self.rx_inv_os_entry.grid(row=9, column=1, sticky="ew")
         self.rx_inv_os_entry.entry.bind(
             "<FocusOut>",
-            lambda _e: (self.auto_update_rx_filename(), self.update_trim()),
+            lambda _e: (
+                self.auto_update_rx_filename(),
+                self._reset_manual_xcorr_lags("Oversampling geändert"),
+                self.update_trim(),
+            ),
         )
         self.rx_inv_rrc_enable = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             rx_frame,
             text="Inv. RRC",
             variable=self.rx_inv_rrc_enable,
-            command=lambda: [
-                self.rx_inv_rrc_beta_entry.entry.configure(
-                    state="normal" if self.rx_inv_rrc_enable.get() else "disabled"
-                ),
-                self.rx_inv_rrc_span_entry.entry.configure(
-                    state="normal" if self.rx_inv_rrc_enable.get() else "disabled"
-                ),
-                self.rx_inv_os_entry.entry.configure(
-                    state="normal" if self.rx_inv_rrc_enable.get() else "disabled"
-                ),
-                self.update_trim(),
-            ],
+            command=self._on_rx_inv_rrc_toggle,
         ).grid(row=7, column=2, sticky="w", rowspan=2)
         if not self.rx_inv_rrc_enable.get():
             self.rx_inv_rrc_beta_entry.entry.configure(state="disabled")
@@ -2110,9 +2118,31 @@ class TransceiverUI(tk.Tk):
         self.rrc_span_entry.entry.configure(state=state)
         self.os_entry.entry.configure(state=state)
         self.auto_update_tx_filename()
+        self._reset_manual_xcorr_lags("RRC/Oversampling geändert")
+
+    def _on_rx_inv_rrc_toggle(self) -> None:
+        state = "normal" if self.rx_inv_rrc_enable.get() else "disabled"
+        self.rx_inv_rrc_beta_entry.entry.configure(state=state)
+        self.rx_inv_rrc_span_entry.entry.configure(state=state)
+        self.rx_inv_os_entry.entry.configure(state=state)
+        self._reset_manual_xcorr_lags("Oversampling geändert")
+        self.update_trim()
+
+    def _reset_manual_xcorr_lags(self, reason: str | None = None) -> None:
+        if self.manual_xcorr_lags.get("los") is None and self.manual_xcorr_lags.get(
+            "echo"
+        ) is None:
+            return
+        self.manual_xcorr_lags = {"los": None, "echo": None}
+        if reason:
+            text = f"Manuelle Marker zurückgesetzt ({reason})"
+        else:
+            text = "Manuelle Marker zurückgesetzt"
+        self._show_toast(text)
 
     def auto_update_tx_filename(self) -> None:
         """Update TX filename entry based on current parameters."""
+        previous = self.tx_file.get()
         name = _gen_tx_filename(self)
         self.file_entry.delete(0, tk.END)
         self.file_entry.insert(0, name)
@@ -2124,6 +2154,8 @@ class TransceiverUI(tk.Tk):
         else:
             self.tx_file.insert(0, name)
             self._filtered_tx_file = None
+        if previous != self.tx_file.get():
+            self._reset_manual_xcorr_lags("TX-Datei geändert")
 
     def auto_update_rx_filename(self) -> None:
         """Update RX filename entry based on current parameters."""
@@ -2236,8 +2268,12 @@ class TransceiverUI(tk.Tk):
             return data[0] - data[1], "Differenz"
         return data[0], "Kanal 1"
 
-    def _display_rx_plots(self, data: np.ndarray, fs: float) -> None:
+    def _display_rx_plots(
+        self, data: np.ndarray, fs: float, reset_manual: bool = True
+    ) -> None:
         """Render preview plots below the receive parameters."""
+        if reset_manual:
+            self._reset_manual_xcorr_lags("Neue RX-Daten")
         self.raw_rx_data = data
         self.latest_fs_raw = fs
         if data.ndim == 2 and data.shape[0] >= 2:
@@ -2536,7 +2572,7 @@ class TransceiverUI(tk.Tk):
             return filtered, 1.0 / float(factor)
         return filtered, 1.0
 
-    def _on_trim_change(self, *_args) -> None:
+    def _on_trim_change(self, *_args, reset_manual: bool = True) -> None:
         state = "normal" if self.trim_var.get() else "disabled"
         self.range_slider.configure_state(state)
         try:
@@ -2546,15 +2582,17 @@ class TransceiverUI(tk.Tk):
             pass
         self.trim_dirty = True
         self.apply_trim_btn.configure(state="normal")
+        if reset_manual:
+            self._reset_manual_xcorr_lags("Trim geändert")
 
     def update_trim(self, *_args) -> None:
         """Re-apply trimming and refresh RX plots."""
-        self._on_trim_change()
+        self._on_trim_change(reset_manual=False)
         self.apply_trim_btn.configure(state="disabled")
         self.trim_dirty = False
         if hasattr(self, "raw_rx_data") and self.raw_rx_data is not None:
             fs = getattr(self, "latest_fs_raw", self.latest_fs)
-            self._display_rx_plots(self.raw_rx_data, fs)
+            self._display_rx_plots(self.raw_rx_data, fs, reset_manual=False)
         if (
             hasattr(self, "latest_data")
             and self.latest_data is not None
@@ -3286,6 +3324,7 @@ class TransceiverUI(tk.Tk):
                 self.tx_file.delete(0, tk.END)
                 self.tx_file.insert(0, filtered_filename)
                 save_interleaved(filtered_filename, filtered_data, amplitude=amp)
+                self._reset_manual_xcorr_lags("TX-Datei geändert")
 
             def _scale_for_display(signal: np.ndarray) -> np.ndarray:
                 max_abs = np.max(np.abs(signal)) if np.any(signal) else 1.0
