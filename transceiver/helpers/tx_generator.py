@@ -125,9 +125,9 @@ def rrc_coeffs(beta: float, span: int, sps: int = 1) -> np.ndarray:
     h = np.zeros_like(t, dtype=np.float64)
 
     for i, ti in enumerate(t):
-        if abs(ti) < 1e-12:
+        if np.isclose(ti, 0.0, atol=eps):
             h[i] = 1.0 - beta + 4 * beta / np.pi
-        elif beta > 0 and abs(abs(ti) - 1.0 / (4.0 * beta)) < 1e-12:
+        elif beta > 0 and np.isclose(abs(ti), 1.0 / (4.0 * beta), atol=eps):
             h[i] = (
                 beta
                 / np.sqrt(2.0)
@@ -136,6 +136,7 @@ def rrc_coeffs(beta: float, span: int, sps: int = 1) -> np.ndarray:
                     + (1.0 - 2.0 / np.pi) * np.cos(np.pi / (4.0 * beta))
                 )
             )
+
         else:
             num = np.sin(np.pi * ti * (1.0 - beta)) + 4.0 * beta * ti * np.cos(
                 np.pi * ti * (1.0 + beta)
