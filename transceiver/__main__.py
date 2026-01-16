@@ -21,6 +21,7 @@ import pyqtgraph as pg
 
 import sys
 from .helpers.tx_generator import generate_waveform, rrc_coeffs
+from .helpers.iq_utils import save_interleaved
 from .helpers import rx_convert
 from .helpers import doa_esprit
 
@@ -803,23 +804,6 @@ class SuggestEntry(tk.Frame):
             frame.pack(side="left", padx=2, pady=1)
             frame.bind("<Button-1>", lambda _e, v=val: self._fill_entry(v))
             lbl.bind("<Button-1>", lambda _e, v=val: self._fill_entry(v))
-
-
-def save_interleaved(
-    filename: str, data: np.ndarray, amplitude: float = 10000.0
-) -> None:
-    """Save complex64 data as interleaved int16."""
-    if data.ndim != 1:
-        raise ValueError("Mehrkanal-Daten müssen vor dem Speichern gemischt werden.")
-    max_abs = np.max(np.abs(data)) if np.any(data) else 1.0
-    scale = amplitude / max_abs if max_abs > 1e-9 else 1.0
-    scaled = data * scale
-    real_i16 = np.int16(np.round(np.real(scaled)))
-    imag_i16 = np.int16(np.round(np.imag(scaled)))
-    interleaved = np.empty(real_i16.size + imag_i16.size, dtype=np.int16)
-    interleaved[0::2] = np.clip(real_i16, -32768, 32767)
-    interleaved[1::2] = np.clip(imag_i16, -32768, 32767)
-    interleaved.tofile(filename)
 
 
 def _reduce_data(

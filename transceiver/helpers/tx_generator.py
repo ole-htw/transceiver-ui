@@ -29,6 +29,8 @@ from datetime import datetime
 import numpy as np
 from scipy.signal import upfirdn
 
+from .iq_utils import complex_to_interleaved_int16
+
 
 # ---------- Hilfsfunktionen --------------------------------------------------
 
@@ -444,11 +446,7 @@ def main() -> None:
     scaled = final_signal * scale
 
     # Interleaved int16 schreiben
-    real_i16 = np.int16(np.round(np.real(scaled)))
-    imag_i16 = np.int16(np.round(np.imag(scaled)))
-    interleaved = np.empty(real_i16.size + imag_i16.size, dtype=np.int16)
-    interleaved[0::2] = np.clip(real_i16, -32768, 32767)
-    interleaved[1::2] = np.clip(imag_i16, -32768, 32767)
+    interleaved = complex_to_interleaved_int16(scaled)
     interleaved.tofile(args.filename)
 
     print("-" * 40)
@@ -460,4 +458,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
