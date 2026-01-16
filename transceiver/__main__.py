@@ -1185,6 +1185,13 @@ def _gen_tx_filename(app) -> str:
     return str(Path("signals/tx") / name)
 
 
+def _gen_rrc_tx_filename(filename: str) -> str:
+    """Return a filtered filename derived from *filename*."""
+    path = Path(filename)
+    stem = path.stem if path.suffix else path.name
+    return str(path.with_name(f"{stem}_rrc{path.suffix}"))
+
+
 def _gen_rx_filename(app) -> str:
     """Generate RX filename based on current UI settings."""
     try:
@@ -1583,6 +1590,7 @@ class TransceiverUI(tk.Tk):
         self.manual_xcorr_lags = {"los": None, "echo": None}
         self._tx_running = False
         self._last_tx_end = 0.0
+        self._filtered_tx_file = None
         self.create_widgets()
         try:
             self.state("zoomed")
@@ -1682,17 +1690,7 @@ class TransceiverUI(tk.Tk):
         ttk.Checkbutton(
             gen_frame,
             variable=self.rrc_enable,
-            command=lambda: [
-                self.rrc_beta_entry.entry.configure(
-                    state="normal" if self.rrc_enable.get() else "disabled"
-                ),
-                self.rrc_span_entry.entry.configure(
-                    state="normal" if self.rrc_enable.get() else "disabled"
-                ),
-                self.os_entry.entry.configure(
-                    state="normal" if self.rrc_enable.get() else "disabled"
-                ),
-            ],
+            command=self._on_rrc_toggle,
         ).grid(row=6, column=2, sticky="w", rowspan=2)
         if not self.rrc_enable.get():
             self.rrc_beta_entry.entry.configure(state="disabled")
@@ -2105,13 +2103,34 @@ class TransceiverUI(tk.Tk):
 
         self.auto_update_tx_filename()
 
+    def _rrc_active(self) -> bool:
+        return self.rrc_enable.get() and self.wave_var.get().lower() == "zadoffchu"
+
+    def _tx_transmit_file(self) -> str:
+        if self._rrc_active():
+            return self._filtered_tx_file or self.tx_file.get()
+        return self.tx_file.get()
+
+    def _on_rrc_toggle(self) -> None:
+        state = "normal" if self.rrc_enable.get() else "disabled"
+        self.rrc_beta_entry.entry.configure(state=state)
+        self.rrc_span_entry.entry.configure(state=state)
+        self.os_entry.entry.configure(state=state)
+        self.auto_update_tx_filename()
+
     def auto_update_tx_filename(self) -> None:
         """Update TX filename entry based on current parameters."""
         name = _gen_tx_filename(self)
         self.file_entry.delete(0, tk.END)
         self.file_entry.insert(0, name)
         self.tx_file.delete(0, tk.END)
-        self.tx_file.insert(0, name)
+        if self._rrc_active():
+            filtered_name = _gen_rrc_tx_filename(name)
+            self.tx_file.insert(0, filtered_name)
+            self._filtered_tx_file = filtered_name
+        else:
+            self.tx_file.insert(0, name)
+            self._filtered_tx_file = None
 
     def auto_update_rx_filename(self) -> None:
         """Update RX filename entry based on current parameters."""
@@ -2139,21 +2158,13 @@ class TransceiverUI(tk.Tk):
         self.rx_rate.entry.configure(textvariable=self.rx_rate_var)
         self.rx_rate.var = self.rx_rate_var
 
-    def _display_gen_plots(self, data: np.ndarray, fs: float) -> None:
-        """Render preview plots below the generation parameters."""
-        self.latest_data = data
-        self.latest_fs = fs
-
-        for c in self.gen_canvases:
-            c.get_tk_widget().destroy()
-        self.gen_canvases.clear()
-
+    def _render_gen_tab(self, frame: ttk.Frame, data: np.ndarray, fs: float) -> None:
         modes = ["Signal", "Freq", "InstantFreq", "Autocorr"]
         for idx, mode in enumerate(modes):
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
             _plot_on_mpl(ax, data, fs, mode, f"TX {mode}")
-            canvas = FigureCanvasTkAgg(fig, master=self.gen_plots_frame)
+            canvas = FigureCanvasTkAgg(fig, master=frame)
             canvas.draw()
             widget = canvas.get_tk_widget()
             widget.grid(row=idx, column=0, sticky="nsew", pady=2)
@@ -2167,12 +2178,55 @@ class TransceiverUI(tk.Tk):
 
         stats = _calc_stats(data, fs)
         text = _format_stats_text(stats)
-        if not hasattr(self, "gen_stats_label"):
-            self.gen_stats_label = ttk.Label(
-                self.gen_plots_frame, justify="left", anchor="w"
-            )
-        self.gen_stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
-        self.gen_stats_label.configure(text=text)
+        stats_label = ttk.Label(frame, justify="left", anchor="w")
+        stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
+        stats_label.configure(text=text)
+
+    def _display_gen_plots(
+        self,
+        data: np.ndarray,
+        fs: float,
+        filtered_data: np.ndarray | None = None,
+        filtered_fs: float | None = None,
+    ) -> None:
+        """Render preview plots below the generation parameters."""
+        if filtered_data is not None:
+            self.latest_data = filtered_data
+            self.latest_fs = filtered_fs if filtered_fs is not None else fs
+        else:
+            self.latest_data = data
+            self.latest_fs = fs
+
+        for child in self.gen_plots_frame.winfo_children():
+            child.destroy()
+        self.gen_canvases.clear()
+
+        if filtered_data is None:
+            tab_frame = ttk.Frame(self.gen_plots_frame)
+            tab_frame.grid(row=0, column=0, sticky="nsew")
+            tab_frame.columnconfigure(0, weight=1)
+            self._render_gen_tab(tab_frame, data, fs)
+            return
+
+        notebook = ttk.Notebook(self.gen_plots_frame)
+        notebook.grid(row=0, column=0, sticky="nsew")
+        self.gen_plots_frame.columnconfigure(0, weight=1)
+
+        unfiltered_tab = ttk.Frame(notebook)
+        unfiltered_tab.columnconfigure(0, weight=1)
+        filtered_tab = ttk.Frame(notebook)
+        filtered_tab.columnconfigure(0, weight=1)
+
+        notebook.add(unfiltered_tab, text="Ungefiltert")
+        notebook.add(filtered_tab, text="Gefiltert")
+        notebook.select(filtered_tab)
+
+        self._render_gen_tab(unfiltered_tab, data, fs)
+        self._render_gen_tab(
+            filtered_tab,
+            filtered_data,
+            filtered_fs if filtered_fs is not None else fs,
+        )
 
     def _select_rx_display_data(self, data: np.ndarray) -> tuple[np.ndarray, str]:
         """Return the RX data according to the channel view selection."""
@@ -3028,9 +3082,13 @@ class TransceiverUI(tk.Tk):
             zeros_mode = self.zeros_var.get()
             amp = float(self.amp_entry.get())
             waveform = self.wave_var.get()
+            rrc_active = self._rrc_active()
             self._last_tx_os = 1
-            if waveform == "zadoffchu" and oversampling > 1 and self.rrc_enable.get():
+            if waveform == "zadoffchu" and oversampling > 1 and rrc_active:
                 self._last_tx_os = oversampling
+
+            unfiltered_data = None
+            filtered_data = None
 
             if waveform == "sinus":
                 freq = float(eval(self.f_entry.get())) if self.f_entry.get() else 0.0
@@ -3050,16 +3108,39 @@ class TransceiverUI(tk.Tk):
                 if not self.rrc_enable.get():
                     span = 0
 
-                data = generate_waveform(
-                    waveform,
-                    fs,
-                    0.0,
-                    samples,
-                    q=q,
-                    rrc_beta=beta,
-                    rrc_span=span,
-                    oversampling=oversampling,
-                )
+                if rrc_active:
+                    unfiltered_data = generate_waveform(
+                        waveform,
+                        fs,
+                        0.0,
+                        samples,
+                        q=q,
+                        rrc_beta=beta,
+                        rrc_span=0,
+                        oversampling=oversampling,
+                    )
+                    filtered_data = generate_waveform(
+                        waveform,
+                        fs,
+                        0.0,
+                        samples,
+                        q=q,
+                        rrc_beta=beta,
+                        rrc_span=span,
+                        oversampling=oversampling,
+                    )
+                    data = filtered_data
+                else:
+                    data = generate_waveform(
+                        waveform,
+                        fs,
+                        0.0,
+                        samples,
+                        q=q,
+                        rrc_beta=beta,
+                        rrc_span=span,
+                        oversampling=oversampling,
+                    )
             else:  # chirp
                 f0 = float(eval(self.f_entry.get())) if self.f_entry.get() else 0.0
                 f1 = float(eval(self.f1_entry.get())) if self.f1_entry.get() else None
@@ -3075,6 +3156,10 @@ class TransceiverUI(tk.Tk):
 
             if repeats > 1:
                 data = np.tile(data, repeats)
+                if unfiltered_data is not None:
+                    unfiltered_data = np.tile(unfiltered_data, repeats)
+                if filtered_data is not None:
+                    filtered_data = np.tile(filtered_data, repeats)
 
             zeros = 0
             if zeros_mode == "same":
@@ -3092,16 +3177,57 @@ class TransceiverUI(tk.Tk):
 
             if zeros:
                 data = np.concatenate([data, np.zeros(zeros, dtype=np.complex64)])
+                if unfiltered_data is not None:
+                    unfiltered_data = np.concatenate(
+                        [unfiltered_data, np.zeros(zeros, dtype=np.complex64)]
+                    )
+                if filtered_data is not None:
+                    filtered_data = np.concatenate(
+                        [filtered_data, np.zeros(zeros, dtype=np.complex64)]
+                    )
 
-            save_interleaved(self.file_entry.get(), data, amplitude=amp)
+            save_interleaved(
+                self.file_entry.get(),
+                unfiltered_data if unfiltered_data is not None else data,
+                amplitude=amp,
+            )
+            if filtered_data is not None:
+                filtered_filename = self._filtered_tx_file or _gen_rrc_tx_filename(
+                    self.file_entry.get()
+                )
+                self._filtered_tx_file = filtered_filename
+                self.tx_file.delete(0, tk.END)
+                self.tx_file.insert(0, filtered_filename)
+                save_interleaved(filtered_filename, filtered_data, amplitude=amp)
 
-            max_abs = np.max(np.abs(data)) if np.any(data) else 1.0
-            scale = amp / max_abs if max_abs > 1e-9 else 1.0
-            scaled_data = data * scale
+            def _scale_for_display(signal: np.ndarray) -> np.ndarray:
+                max_abs = np.max(np.abs(signal)) if np.any(signal) else 1.0
+                scale = amp / max_abs if max_abs > 1e-9 else 1.0
+                return signal * scale
+
+            scaled_data = _scale_for_display(data)
+            scaled_unfiltered = (
+                _scale_for_display(unfiltered_data)
+                if unfiltered_data is not None
+                else None
+            )
+            scaled_filtered = (
+                _scale_for_display(filtered_data)
+                if filtered_data is not None
+                else None
+            )
             fs_eff = fs
             if waveform == "zadoffchu" and oversampling > 1 and self.rrc_enable.get():
                 fs_eff = fs * oversampling
-            self._display_gen_plots(scaled_data, fs_eff)
+            if scaled_unfiltered is not None and scaled_filtered is not None:
+                self._display_gen_plots(
+                    scaled_unfiltered,
+                    fs_eff,
+                    scaled_filtered,
+                    fs_eff,
+                )
+            else:
+                self._display_gen_plots(scaled_data, fs_eff)
 
         except Exception as exc:
             messagebox.showerror("Generate error", str(exc))
@@ -3129,7 +3255,7 @@ class TransceiverUI(tk.Tk):
             "--nsamps",
             "0",
             "--file",
-            self.tx_file.get(),
+            self._tx_transmit_file(),
         ]
         if hasattr(self, "tx_log"):
             self.tx_log.delete("1.0", tk.END)
