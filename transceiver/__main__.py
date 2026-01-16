@@ -13,6 +13,7 @@ import math
 import signal
 import contextlib
 import tempfile
+from multiprocessing import shared_memory
 from pathlib import Path
 from datetime import datetime
 
@@ -1310,19 +1311,91 @@ def _spawn_plot_worker(
 ) -> None:
     """Launch the PyQtGraph plot worker in a separate process."""
     temp_dir = Path(tempfile.mkdtemp(prefix="transceiver_plot_"))
-    data_path = temp_dir / "data.npy"
-    np.save(data_path, data)
+    data_path = None
+    shm_name = None
+    shm_shape = None
+    shm_dtype = None
+    try:
+        data_contiguous = np.ascontiguousarray(data)
+        shm = shared_memory.SharedMemory(create=True, size=data_contiguous.nbytes)
+        shm_view = np.ndarray(
+            data_contiguous.shape, dtype=data_contiguous.dtype, buffer=shm.buf
+        )
+        shm_view[...] = data_contiguous
+        shm_name = shm.name
+        shm_shape = list(data_contiguous.shape)
+        shm_dtype = data_contiguous.dtype.str
+        shm.close()
+
+        def _unlink_shared_memory(name: str) -> None:
+            try:
+                shm_cleanup = shared_memory.SharedMemory(name=name)
+            except (FileNotFoundError, OSError):
+                return
+            with contextlib.suppress(FileNotFoundError):
+                shm_cleanup.unlink()
+            shm_cleanup.close()
+
+        cleanup_timer = threading.Timer(30.0, _unlink_shared_memory, args=(shm_name,))
+        cleanup_timer.daemon = True
+        cleanup_timer.start()
+    except (BufferError, FileNotFoundError, OSError, ValueError):
+        data_path = temp_dir / "data.npy"
+        np.save(data_path, data)
     payload: dict[str, object] = {
         "mode": mode,
         "title": title,
         "fs": float(fs),
-        "data_file": str(data_path),
         "fullscreen": fullscreen,
     }
+    if shm_name:
+        payload["shm_name"] = shm_name
+        payload["shape"] = shm_shape
+        payload["dtype"] = shm_dtype
+    if data_path is not None:
+        payload["data_file"] = str(data_path)
     if ref_data is not None and np.size(ref_data) != 0:
-        ref_path = temp_dir / "ref.npy"
-        np.save(ref_path, ref_data)
-        payload["ref_file"] = str(ref_path)
+        ref_path = None
+        ref_shm_name = None
+        ref_shm_shape = None
+        ref_shm_dtype = None
+        try:
+            ref_contiguous = np.ascontiguousarray(ref_data)
+            ref_shm = shared_memory.SharedMemory(
+                create=True, size=ref_contiguous.nbytes
+            )
+            ref_view = np.ndarray(
+                ref_contiguous.shape, dtype=ref_contiguous.dtype, buffer=ref_shm.buf
+            )
+            ref_view[...] = ref_contiguous
+            ref_shm_name = ref_shm.name
+            ref_shm_shape = list(ref_contiguous.shape)
+            ref_shm_dtype = ref_contiguous.dtype.str
+            ref_shm.close()
+
+            def _unlink_ref_shared_memory(name: str) -> None:
+                try:
+                    ref_cleanup = shared_memory.SharedMemory(name=name)
+                except (FileNotFoundError, OSError):
+                    return
+                with contextlib.suppress(FileNotFoundError):
+                    ref_cleanup.unlink()
+                ref_cleanup.close()
+
+            ref_timer = threading.Timer(
+                30.0, _unlink_ref_shared_memory, args=(ref_shm_name,)
+            )
+            ref_timer.daemon = True
+            ref_timer.start()
+        except (BufferError, FileNotFoundError, OSError, ValueError):
+            ref_path = temp_dir / "ref.npy"
+            np.save(ref_path, ref_data)
+        if ref_shm_name:
+            payload["ref_shm_name"] = ref_shm_name
+            payload["ref_shape"] = ref_shm_shape
+            payload["ref_dtype"] = ref_shm_dtype
+        if ref_path is not None:
+            payload["ref_file"] = str(ref_path)
     if manual_lags is not None:
         payload["manual_lags"] = {
             key: (int(val) if val is not None else None)

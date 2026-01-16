@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 from pathlib import Path
+from multiprocessing import shared_memory
 
 import numpy as np
 import pyqtgraph as pg
@@ -13,10 +15,25 @@ from transceiver import __main__ as plot_impl
 from transceiver.helpers import rx_convert
 
 
-def _load_iq(path: str | None) -> np.ndarray | None:
+def _load_iq(
+    path: str | None, shm_meta: dict[str, object] | None
+) -> tuple[np.ndarray | None, shared_memory.SharedMemory | None]:
+    if shm_meta:
+        shm_name = shm_meta.get("name")
+        shape = shm_meta.get("shape")
+        dtype = shm_meta.get("dtype")
+        if shm_name and shape and dtype:
+            try:
+                shm = shared_memory.SharedMemory(name=str(shm_name))
+                array = np.ndarray(
+                    tuple(shape), dtype=np.dtype(dtype), buffer=shm.buf
+                )
+                return array, shm
+            except (FileNotFoundError, OSError, TypeError, ValueError):
+                pass
     if path is None:
-        return None
-    return rx_convert.load_iq_file(Path(path))
+        return None, None
+    return rx_convert.load_iq_file(Path(path)), None
 
 
 def _parse_payload(path: Path) -> dict:
@@ -37,13 +54,29 @@ def main() -> None:
     mode = payload.get("mode", "")
     title = payload.get("title", "")
     fs = float(payload.get("fs", 0.0))
-    data = _load_iq(payload.get("data_file"))
-    ref_data = _load_iq(payload.get("ref_file"))
+    data_meta = {
+        "name": payload.get("shm_name"),
+        "shape": payload.get("shape"),
+        "dtype": payload.get("dtype"),
+    }
+    ref_meta = {
+        "name": payload.get("ref_shm_name"),
+        "shape": payload.get("ref_shape"),
+        "dtype": payload.get("ref_dtype"),
+    }
+    data, data_shm = _load_iq(payload.get("data_file"), data_meta)
+    ref_data, ref_shm = _load_iq(payload.get("ref_file"), ref_meta)
     manual_lags = payload.get("manual_lags") or None
     fullscreen = bool(payload.get("fullscreen", False))
     output_path = payload.get("output_path")
 
     if data is None or np.size(data) == 0:
+        for shm in (data_shm, ref_shm):
+            if shm is None:
+                continue
+            with contextlib.suppress(FileNotFoundError):
+                shm.unlink()
+            shm.close()
         return
 
     if isinstance(manual_lags, dict):
@@ -92,6 +125,13 @@ def main() -> None:
                 json.dump(manual_state, handle)
         except Exception:
             pass
+
+    for shm in (data_shm, ref_shm):
+        if shm is None:
+            continue
+        with contextlib.suppress(FileNotFoundError):
+            shm.unlink()
+        shm.close()
 
 
 if __name__ == "__main__":
