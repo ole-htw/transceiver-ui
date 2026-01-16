@@ -1770,12 +1770,20 @@ class TransceiverUI(tk.Tk):
         self.rrc_beta_entry = SuggestEntry(gen_frame, "rrc_beta_entry")
         self.rrc_beta_entry.insert(0, "0.25")
         self.rrc_beta_entry.grid(row=6, column=1, sticky="ew")
+        self.rrc_beta_entry.entry.bind(
+            "<FocusOut>",
+            lambda _e: (self._sync_rx_inv_rrc_params(), self.auto_update_tx_filename()),
+        )
 
         self.rrc_span_label = ttk.Label(gen_frame, text="RRC Span")
         self.rrc_span_label.grid(row=7, column=0, sticky="w")
         self.rrc_span_entry = SuggestEntry(gen_frame, "rrc_span_entry")
         self.rrc_span_entry.insert(0, "6")
         self.rrc_span_entry.grid(row=7, column=1, sticky="ew")
+        self.rrc_span_entry.entry.bind(
+            "<FocusOut>",
+            lambda _e: (self._sync_rx_inv_rrc_params(), self.auto_update_tx_filename()),
+        )
         self.rrc_enable = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             gen_frame,
@@ -2004,12 +2012,14 @@ class TransceiverUI(tk.Tk):
         self.rx_inv_rrc_beta_entry = SuggestEntry(rx_frame, "rx_inv_rrc_beta")
         self.rx_inv_rrc_beta_entry.insert(0, "0.25")
         self.rx_inv_rrc_beta_entry.grid(row=7, column=1, sticky="ew")
+        self.rx_inv_rrc_beta_entry.entry.configure(state="disabled")
 
         self.rx_inv_rrc_span_label = ttk.Label(rx_frame, text="Inv. RRC Span")
         self.rx_inv_rrc_span_label.grid(row=8, column=0, sticky="w")
         self.rx_inv_rrc_span_entry = SuggestEntry(rx_frame, "rx_inv_rrc_span")
         self.rx_inv_rrc_span_entry.insert(0, "6")
         self.rx_inv_rrc_span_entry.grid(row=8, column=1, sticky="ew")
+        self.rx_inv_rrc_span_entry.entry.configure(state="disabled")
 
         ttk.Label(rx_frame, text="Inv. Oversampling").grid(
             row=9, column=0, sticky="w"
@@ -2033,8 +2043,6 @@ class TransceiverUI(tk.Tk):
             command=self._on_rx_inv_rrc_toggle,
         ).grid(row=7, column=2, sticky="w", rowspan=2)
         if not self.rx_inv_rrc_enable.get():
-            self.rx_inv_rrc_beta_entry.entry.configure(state="disabled")
-            self.rx_inv_rrc_span_entry.entry.configure(state="disabled")
             self.rx_inv_os_entry.entry.configure(state="disabled")
         else:
             self.rx_inv_os_entry.entry.configure(state="normal")
@@ -2153,6 +2161,7 @@ class TransceiverUI(tk.Tk):
         rx_frame.rowconfigure(18, weight=1)
         self.rx_canvases = []
         self.update_waveform_fields()
+        self._sync_rx_inv_rrc_params()
         self.auto_update_tx_filename()
         self.auto_update_rx_filename()
         self.toggle_rate_sync(self.sync_var.get())
@@ -2197,6 +2206,7 @@ class TransceiverUI(tk.Tk):
             self.f1_label.grid(row=3, column=0, sticky="w")
             self.f1_entry.grid(row=3, column=1, sticky="ew")
 
+        self._sync_rx_inv_rrc_params()
         self.auto_update_tx_filename()
 
     def _rrc_active(self) -> bool:
@@ -2212,16 +2222,26 @@ class TransceiverUI(tk.Tk):
         self.rrc_beta_entry.entry.configure(state=state)
         self.rrc_span_entry.entry.configure(state=state)
         self.os_entry.entry.configure(state=state)
+        self._sync_rx_inv_rrc_params()
         self.auto_update_tx_filename()
         self._reset_manual_xcorr_lags("RRC/Oversampling geändert")
 
     def _on_rx_inv_rrc_toggle(self) -> None:
         state = "normal" if self.rx_inv_rrc_enable.get() else "disabled"
-        self.rx_inv_rrc_beta_entry.entry.configure(state=state)
-        self.rx_inv_rrc_span_entry.entry.configure(state=state)
         self.rx_inv_os_entry.entry.configure(state=state)
+        self._sync_rx_inv_rrc_params()
         self._reset_manual_xcorr_lags("Oversampling geändert")
         self.update_trim()
+
+    def _sync_rx_inv_rrc_params(self) -> None:
+        beta = self.rrc_beta_entry.get() or "0.25"
+        span = self.rrc_span_entry.get() or "6"
+        self.rx_inv_rrc_beta_entry.delete(0, tk.END)
+        self.rx_inv_rrc_beta_entry.insert(0, beta)
+        self.rx_inv_rrc_span_entry.delete(0, tk.END)
+        self.rx_inv_rrc_span_entry.insert(0, span)
+        self.rx_inv_rrc_beta_entry.entry.configure(state="disabled")
+        self.rx_inv_rrc_span_entry.entry.configure(state="disabled")
 
     def _reset_manual_xcorr_lags(self, reason: str | None = None) -> None:
         if self.manual_xcorr_lags.get("los") is None and self.manual_xcorr_lags.get(
@@ -2660,11 +2680,11 @@ class TransceiverUI(tk.Tk):
         if factor < 1:
             factor = 1
         try:
-            beta = float(self.rx_inv_rrc_beta_entry.get())
+            beta = float(self.rrc_beta_entry.get())
         except Exception:
             beta = 0.25
         try:
-            span = int(self.rx_inv_rrc_span_entry.get())
+            span = int(self.rrc_span_entry.get())
         except Exception:
             span = 6
         filtered = data
@@ -3200,9 +3220,8 @@ class TransceiverUI(tk.Tk):
             params.get("rx_inv_rrc_enabled", params.get("rx_rrc_enabled", False))
         )
         state = "normal" if self.rx_inv_rrc_enable.get() else "disabled"
-        self.rx_inv_rrc_beta_entry.entry.configure(state=state)
-        self.rx_inv_rrc_span_entry.entry.configure(state=state)
         self.rx_inv_os_entry.entry.configure(state=state)
+        self._sync_rx_inv_rrc_params()
         self.rx_channel_2.set(params.get("rx_channel_2", False))
         self.rx_channel_view.set(params.get("rx_channel_view", "Kanal 1"))
         self.rx_file.delete(0, tk.END)
