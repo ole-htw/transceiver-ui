@@ -97,6 +97,8 @@ def _save_state(data: dict) -> None:
 _STATE = _load_state()
 
 AUTOSAVE_INTERVAL = 5  # seconds
+# Arrays larger than this skip shared memory and use .npy + mmap in plot worker.
+SHM_SIZE_THRESHOLD_BYTES = 25 * 1024 * 1024  # 25 MB
 
 # Paths to external helpers
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -1315,33 +1317,41 @@ def _spawn_plot_worker(
     shm_name = None
     shm_shape = None
     shm_dtype = None
-    try:
-        data_contiguous = np.ascontiguousarray(data)
-        shm = shared_memory.SharedMemory(create=True, size=data_contiguous.nbytes)
-        shm_view = np.ndarray(
-            data_contiguous.shape, dtype=data_contiguous.dtype, buffer=shm.buf
-        )
-        shm_view[...] = data_contiguous
-        shm_name = shm.name
-        shm_shape = list(data_contiguous.shape)
-        shm_dtype = data_contiguous.dtype.str
-        shm.close()
-
-        def _unlink_shared_memory(name: str) -> None:
-            try:
-                shm_cleanup = shared_memory.SharedMemory(name=name)
-            except (FileNotFoundError, OSError):
-                return
-            with contextlib.suppress(FileNotFoundError):
-                shm_cleanup.unlink()
-            shm_cleanup.close()
-
-        cleanup_timer = threading.Timer(30.0, _unlink_shared_memory, args=(shm_name,))
-        cleanup_timer.daemon = True
-        cleanup_timer.start()
-    except (BufferError, FileNotFoundError, OSError, ValueError):
+    data_contiguous = np.ascontiguousarray(data)
+    if data_contiguous.nbytes >= SHM_SIZE_THRESHOLD_BYTES:
         data_path = temp_dir / "data.npy"
-        np.save(data_path, data)
+        np.save(data_path, data_contiguous)
+    else:
+        try:
+            shm = shared_memory.SharedMemory(
+                create=True, size=data_contiguous.nbytes
+            )
+            shm_view = np.ndarray(
+                data_contiguous.shape, dtype=data_contiguous.dtype, buffer=shm.buf
+            )
+            shm_view[...] = data_contiguous
+            shm_name = shm.name
+            shm_shape = list(data_contiguous.shape)
+            shm_dtype = data_contiguous.dtype.str
+            shm.close()
+
+            def _unlink_shared_memory(name: str) -> None:
+                try:
+                    shm_cleanup = shared_memory.SharedMemory(name=name)
+                except (FileNotFoundError, OSError):
+                    return
+                with contextlib.suppress(FileNotFoundError):
+                    shm_cleanup.unlink()
+                shm_cleanup.close()
+
+            cleanup_timer = threading.Timer(
+                30.0, _unlink_shared_memory, args=(shm_name,)
+            )
+            cleanup_timer.daemon = True
+            cleanup_timer.start()
+        except (BufferError, FileNotFoundError, OSError, ValueError):
+            data_path = temp_dir / "data.npy"
+            np.save(data_path, data_contiguous)
     payload: dict[str, object] = {
         "mode": mode,
         "title": title,
@@ -1359,37 +1369,43 @@ def _spawn_plot_worker(
         ref_shm_name = None
         ref_shm_shape = None
         ref_shm_dtype = None
-        try:
-            ref_contiguous = np.ascontiguousarray(ref_data)
-            ref_shm = shared_memory.SharedMemory(
-                create=True, size=ref_contiguous.nbytes
-            )
-            ref_view = np.ndarray(
-                ref_contiguous.shape, dtype=ref_contiguous.dtype, buffer=ref_shm.buf
-            )
-            ref_view[...] = ref_contiguous
-            ref_shm_name = ref_shm.name
-            ref_shm_shape = list(ref_contiguous.shape)
-            ref_shm_dtype = ref_contiguous.dtype.str
-            ref_shm.close()
-
-            def _unlink_ref_shared_memory(name: str) -> None:
-                try:
-                    ref_cleanup = shared_memory.SharedMemory(name=name)
-                except (FileNotFoundError, OSError):
-                    return
-                with contextlib.suppress(FileNotFoundError):
-                    ref_cleanup.unlink()
-                ref_cleanup.close()
-
-            ref_timer = threading.Timer(
-                30.0, _unlink_ref_shared_memory, args=(ref_shm_name,)
-            )
-            ref_timer.daemon = True
-            ref_timer.start()
-        except (BufferError, FileNotFoundError, OSError, ValueError):
+        ref_contiguous = np.ascontiguousarray(ref_data)
+        if ref_contiguous.nbytes >= SHM_SIZE_THRESHOLD_BYTES:
             ref_path = temp_dir / "ref.npy"
-            np.save(ref_path, ref_data)
+            np.save(ref_path, ref_contiguous)
+        else:
+            try:
+                ref_shm = shared_memory.SharedMemory(
+                    create=True, size=ref_contiguous.nbytes
+                )
+                ref_view = np.ndarray(
+                    ref_contiguous.shape,
+                    dtype=ref_contiguous.dtype,
+                    buffer=ref_shm.buf,
+                )
+                ref_view[...] = ref_contiguous
+                ref_shm_name = ref_shm.name
+                ref_shm_shape = list(ref_contiguous.shape)
+                ref_shm_dtype = ref_contiguous.dtype.str
+                ref_shm.close()
+
+                def _unlink_ref_shared_memory(name: str) -> None:
+                    try:
+                        ref_cleanup = shared_memory.SharedMemory(name=name)
+                    except (FileNotFoundError, OSError):
+                        return
+                    with contextlib.suppress(FileNotFoundError):
+                        ref_cleanup.unlink()
+                    ref_cleanup.close()
+
+                ref_timer = threading.Timer(
+                    30.0, _unlink_ref_shared_memory, args=(ref_shm_name,)
+                )
+                ref_timer.daemon = True
+                ref_timer.start()
+            except (BufferError, FileNotFoundError, OSError, ValueError):
+                ref_path = temp_dir / "ref.npy"
+                np.save(ref_path, ref_contiguous)
         if ref_shm_name:
             payload["ref_shm_name"] = ref_shm_name
             payload["ref_shape"] = ref_shm_shape
