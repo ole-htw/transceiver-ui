@@ -73,14 +73,19 @@ def load_sc16(path: Path, channels: int = 1, layout: str = "blocked") -> np.ndar
     return _reshape_channels(data, channels, layout)
 
 
-def load_numpy(path: Path, channels: int = 1, layout: str = "blocked") -> np.ndarray:
+def load_numpy(
+    path: Path,
+    channels: int = 1,
+    layout: str = "blocked",
+    mmap_mode: str | None = None,
+) -> np.ndarray:
     if path.suffix.lower() == ".npz":
-        with np.load(path, allow_pickle=False) as npz:
+        with np.load(path, allow_pickle=False, mmap_mode=mmap_mode) as npz:
             if not npz.files:
                 raise ValueError("NPZ-Datei enthält keine Arrays.")
             data = npz[npz.files[0]]
     else:
-        data = np.load(path, allow_pickle=False)
+        data = np.load(path, allow_pickle=False, mmap_mode=mmap_mode)
 
     if not np.iscomplexobj(data):
         if data.ndim >= 1 and data.shape[-1] == 2:

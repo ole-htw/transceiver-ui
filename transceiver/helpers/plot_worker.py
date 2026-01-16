@@ -16,7 +16,10 @@ from transceiver.helpers import rx_convert
 def _load_iq(path: str | None) -> np.ndarray | None:
     if path is None:
         return None
-    return rx_convert.load_iq_file(Path(path))
+    file_path = Path(path)
+    if file_path.suffix.lower() in {".npy", ".npz"}:
+        return rx_convert.load_numpy(file_path, mmap_mode="r")
+    return rx_convert.load_iq_file(file_path)
 
 
 def _parse_payload(path: Path) -> dict:
