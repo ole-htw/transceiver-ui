@@ -2206,6 +2206,16 @@ class TransceiverUI(tk.Tk):
         self.range_slider.set_data(data)
         if self.trim_var.get():
             data = self._trim_data(data)
+        
+        # RX Oversampling an TX anpassen, falls TX oversampled gespeichert wurde
+        tx_os = getattr(self, "_last_tx_os", 1)
+        if tx_os > 1:
+            try:
+                # UI-Feld aktualisieren, damit alles konsistent bleibt
+                self.rx_os_entry.delete(0, tk.END)
+                self.rx_os_entry.insert(0, str(tx_os))
+            except Exception:
+                pass
         data, fac = self._oversample_data(data)
         fs *= fac
         self.latest_data = data
@@ -3018,11 +3028,14 @@ class TransceiverUI(tk.Tk):
             zeros_mode = self.zeros_var.get()
             amp = float(self.amp_entry.get())
             waveform = self.wave_var.get()
+            self._last_tx_os = 1
+            if waveform == "zadoffchu" and oversampling > 1 and self.rrc_enable.get():
+                self._last_tx_os = oversampling
 
             if waveform == "sinus":
                 freq = float(eval(self.f_entry.get())) if self.f_entry.get() else 0.0
                 data = generate_waveform(
-                    waveform, fs, freq, samples, oversampling=oversampling
+                    waveform, fs, freq, samples, oversampling=1
                 )
             elif waveform == "zadoffchu":
                 q = int(self.q_entry.get()) if self.q_entry.get() else 1
@@ -3057,7 +3070,7 @@ class TransceiverUI(tk.Tk):
                     samples,
                     f0=f0,
                     f1=f1,
-                    oversampling=oversampling,
+                    oversampling=1,
                 )
 
             if repeats > 1:
@@ -3085,7 +3098,11 @@ class TransceiverUI(tk.Tk):
             max_abs = np.max(np.abs(data)) if np.any(data) else 1.0
             scale = amp / max_abs if max_abs > 1e-9 else 1.0
             scaled_data = data * scale
-            self._display_gen_plots(scaled_data, fs)
+            fs_eff = fs
+            if waveform == "zadoffchu" and oversampling > 1 and self.rrc_enable.get():
+                fs_eff = fs * oversampling
+            self._display_gen_plots(scaled_data, fs_eff)
+
         except Exception as exc:
             messagebox.showerror("Generate error", str(exc))
 

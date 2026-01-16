@@ -46,4 +46,5 @@ zeep
 zipp
 pyqtgraph
 PySide6
+scipy
 
