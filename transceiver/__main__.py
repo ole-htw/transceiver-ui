@@ -1224,10 +1224,27 @@ def _gen_repeat_tx_filename(filename: str) -> str:
     return str(path.with_name(f"{stem}_repeat{path.suffix}"))
 
 
+def _gen_zeros_tx_filename(filename: str) -> str:
+    """Return a zero-padded filename derived from *filename*."""
+    path = Path(filename)
+    stem = path.stem if path.suffix else path.name
+    return str(path.with_name(f"{stem}_zeros{path.suffix}"))
+
+
 def _strip_repeat_tx_filename(filename: str) -> str:
     """Return *filename* without a trailing ``_repeat`` suffix in the stem."""
     path = Path(filename)
     suffix = "_repeat"
+    if path.stem.endswith(suffix):
+        base_stem = path.stem[: -len(suffix)]
+        return str(path.with_name(f"{base_stem}{path.suffix}"))
+    return filename
+
+
+def _strip_zeros_tx_filename(filename: str) -> str:
+    """Return *filename* without a trailing ``_zeros`` suffix in the stem."""
+    path = Path(filename)
+    suffix = "_zeros"
     if path.stem.endswith(suffix):
         base_stem = path.stem[: -len(suffix)]
         return str(path.with_name(f"{base_stem}{path.suffix}"))
@@ -2346,6 +2363,8 @@ class TransceiverUI(tk.Tk):
             return 1
 
     def _tx_transmit_file(self) -> str:
+        if getattr(self, "_zeros_tx_file", None):
+            return self._zeros_tx_file
         if getattr(self, "_repeat_tx_file", None):
             return self._repeat_tx_file
         if self._rrc_active():
@@ -2445,9 +2464,16 @@ class TransceiverUI(tk.Tk):
         if repeats > 1:
             repeat_name = _gen_repeat_tx_filename(base_name)
             self._repeat_tx_file = repeat_name
-            self.tx_file.insert(0, repeat_name)
+            base_name = repeat_name
         else:
             self._repeat_tx_file = None
+        zeros_enabled = self.zeros_enable.get()
+        if zeros_enabled:
+            zeros_name = _gen_zeros_tx_filename(base_name)
+            self._zeros_tx_file = zeros_name
+            self.tx_file.insert(0, zeros_name)
+        else:
+            self._zeros_tx_file = None
             self.tx_file.insert(0, base_name)
         if previous != self.tx_file.get():
             self._reset_manual_xcorr_lags("TX-Datei geändert")
@@ -2516,12 +2542,18 @@ class TransceiverUI(tk.Tk):
         filtered_fs: float | None = None,
         repeated_data: np.ndarray | None = None,
         repeated_fs: float | None = None,
+        zeros_data: np.ndarray | None = None,
+        zeros_fs: float | None = None,
         symbol_rate: float | None = None,
         filtered_symbol_rate: float | None = None,
         repeated_symbol_rate: float | None = None,
+        zeros_symbol_rate: float | None = None,
     ) -> None:
         """Render preview plots below the generation parameters."""
-        if repeated_data is not None:
+        if zeros_data is not None:
+            self.latest_data = zeros_data
+            self.latest_fs = zeros_fs if zeros_fs is not None else fs
+        elif repeated_data is not None:
             self.latest_data = repeated_data
             self.latest_fs = repeated_fs if repeated_fs is not None else fs
         elif filtered_data is not None:
@@ -2535,7 +2567,7 @@ class TransceiverUI(tk.Tk):
             child.destroy()
         self.gen_canvases.clear()
 
-        if filtered_data is None and repeated_data is None:
+        if filtered_data is None and repeated_data is None and zeros_data is None:
             tab_frame = ttk.Frame(self.gen_plots_frame)
             tab_frame.grid(row=0, column=0, sticky="nsew")
             tab_frame.columnconfigure(0, weight=1)
@@ -2546,56 +2578,60 @@ class TransceiverUI(tk.Tk):
         notebook.grid(row=0, column=0, sticky="nsew")
         self.gen_plots_frame.columnconfigure(0, weight=1)
 
+        tabs: list[tuple[str, np.ndarray, float, float | None]] = []
         if filtered_data is None:
-            base_tab = ttk.Frame(notebook)
-            base_tab.columnconfigure(0, weight=1)
-            repeat_tab = ttk.Frame(notebook)
-            repeat_tab.columnconfigure(0, weight=1)
-
-            notebook.add(base_tab, text="Signal")
-            notebook.add(repeat_tab, text="Signal + Wiederholt")
-            notebook.select(repeat_tab)
-
-            self._render_gen_tab(base_tab, data, fs, symbol_rate=symbol_rate)
-            self._render_gen_tab(
-                repeat_tab,
-                repeated_data,
-                repeated_fs if repeated_fs is not None else fs,
-                symbol_rate=repeated_symbol_rate or symbol_rate,
-            )
-            return
-
-        unfiltered_tab = ttk.Frame(notebook)
-        unfiltered_tab.columnconfigure(0, weight=1)
-        filtered_tab = ttk.Frame(notebook)
-        filtered_tab.columnconfigure(0, weight=1)
-        repeat_tab = None
-        if repeated_data is not None:
-            repeat_tab = ttk.Frame(notebook)
-            repeat_tab.columnconfigure(0, weight=1)
-
-        notebook.add(unfiltered_tab, text="Ungefiltert")
-        notebook.add(filtered_tab, text="Gefiltert")
-        if repeat_tab is not None:
-            notebook.add(repeat_tab, text="Gefiltert + Wiederholt")
-            notebook.select(repeat_tab)
+            tabs.append(("Signal", data, fs, symbol_rate))
         else:
-            notebook.select(filtered_tab)
-
-        self._render_gen_tab(unfiltered_tab, data, fs, symbol_rate=symbol_rate)
-        self._render_gen_tab(
-            filtered_tab,
-            filtered_data,
-            filtered_fs if filtered_fs is not None else fs,
-            symbol_rate=filtered_symbol_rate,
-        )
-        if repeat_tab is not None:
-            self._render_gen_tab(
-                repeat_tab,
-                repeated_data,
-                repeated_fs if repeated_fs is not None else fs,
-                symbol_rate=repeated_symbol_rate or filtered_symbol_rate,
+            tabs.append(("Ungefiltert", data, fs, symbol_rate))
+            tabs.append(
+                (
+                    "Gefiltert",
+                    filtered_data,
+                    filtered_fs if filtered_fs is not None else fs,
+                    filtered_symbol_rate,
+                )
             )
+
+        if repeated_data is not None:
+            repeat_label = (
+                "Gefiltert + Wiederholt" if filtered_data is not None else "Signal + Wiederholt"
+            )
+            tabs.append(
+                (
+                    repeat_label,
+                    repeated_data,
+                    repeated_fs if repeated_fs is not None else fs,
+                    repeated_symbol_rate or filtered_symbol_rate or symbol_rate,
+                )
+            )
+        if zeros_data is not None:
+            zeros_label = "Signal + Nullen"
+            if filtered_data is not None and repeated_data is not None:
+                zeros_label = "Gefiltert + Wiederholt + Nullen"
+            elif filtered_data is not None:
+                zeros_label = "Gefiltert + Nullen"
+            elif repeated_data is not None:
+                zeros_label = "Signal + Wiederholt + Nullen"
+            tabs.append(
+                (
+                    zeros_label,
+                    zeros_data,
+                    zeros_fs if zeros_fs is not None else fs,
+                    zeros_symbol_rate
+                    or repeated_symbol_rate
+                    or filtered_symbol_rate
+                    or symbol_rate,
+                )
+            )
+
+        for label, tab_data, tab_fs, tab_symbol_rate in tabs:
+            tab = ttk.Frame(notebook)
+            tab.columnconfigure(0, weight=1)
+            notebook.add(tab, text=label)
+            self._render_gen_tab(tab, tab_data, tab_fs, symbol_rate=tab_symbol_rate)
+
+        if tabs:
+            notebook.select(len(tabs) - 1)
 
     def _select_rx_display_data(self, data: np.ndarray) -> tuple[np.ndarray, str]:
         """Return the RX data according to the channel view selection."""
@@ -2664,7 +2700,9 @@ class TransceiverUI(tk.Tk):
             raw = raw.reshape(-1, 2).astype(np.float32)
             return raw[:, 0] + 1j * raw[:, 1]
 
-        tx_reference_path = _strip_repeat_tx_filename(self.tx_file.get())
+        tx_reference_path = _strip_repeat_tx_filename(
+            _strip_zeros_tx_filename(self.tx_file.get())
+        )
         try:
             self.tx_data = _load_tx_samples(tx_reference_path)
         except Exception:
@@ -2672,7 +2710,9 @@ class TransceiverUI(tk.Tk):
         self.tx_data_unfiltered = np.array([], dtype=np.complex64)
         if self.rx_inv_rrc_enable.get():
             unfiltered_path = self.file_entry.get() or self.tx_file.get()
-            unfiltered_path = _strip_repeat_tx_filename(unfiltered_path)
+            unfiltered_path = _strip_repeat_tx_filename(
+                _strip_zeros_tx_filename(unfiltered_path)
+            )
             if unfiltered_path == self.tx_file.get():
                 self.tx_data_unfiltered = self.tx_data
             else:
@@ -3734,13 +3774,12 @@ class TransceiverUI(tk.Tk):
                 repeat_source = filtered_data if filtered_data is not None else data
                 repeated_data = np.tile(repeat_source, repeats)
 
-            unfiltered_data = _append_zeros(unfiltered_data)
-            filtered_data = _append_zeros(filtered_data)
-            repeated_data = _append_zeros(repeated_data)
-            if filtered_data is not None:
-                data = filtered_data
-            else:
-                data = _append_zeros(data)
+            base_data = filtered_data if filtered_data is not None else data
+            final_data = repeated_data if repeated_data is not None else base_data
+            zeros_data = None
+            if self.zeros_enable.get() and zeros > 0:
+                zeros_data = _append_zeros(final_data)
+                final_data = zeros_data
 
             save_interleaved(
                 self.file_entry.get(),
@@ -3778,6 +3817,27 @@ class TransceiverUI(tk.Tk):
                 if filtered_data is not None:
                     self._reset_manual_xcorr_lags("TX-Datei geändert")
 
+            if zeros_data is not None:
+                zeros_base = (
+                    self._repeat_tx_file
+                    if self._repeat_tx_file is not None
+                    else (
+                        self._filtered_tx_file
+                        if filtered_data is not None
+                        else self.file_entry.get()
+                    )
+                )
+                zeros_filename = _gen_zeros_tx_filename(zeros_base)
+                self._zeros_tx_file = zeros_filename
+                self.tx_file.delete(0, tk.END)
+                self.tx_file.insert(0, zeros_filename)
+                save_interleaved(zeros_filename, zeros_data, amplitude=amp)
+                self._reset_manual_xcorr_lags("TX-Datei geändert")
+            else:
+                self._zeros_tx_file = None
+                if not self.tx_file.get():
+                    self.tx_file.insert(0, self._tx_transmit_file())
+
             def _scale_for_display(signal: np.ndarray) -> np.ndarray:
                 max_abs = np.max(np.abs(signal)) if np.any(signal) else 1.0
                 scale = amp / max_abs if max_abs > 1e-9 else 1.0
@@ -3799,9 +3859,15 @@ class TransceiverUI(tk.Tk):
                 if repeated_data is not None
                 else None
             )
+            scaled_zeros = (
+                _scale_for_display(zeros_data)
+                if zeros_data is not None
+                else None
+            )
             symbol_rate = None
             filtered_symbol_rate = None
             repeated_symbol_rate = None
+            zeros_symbol_rate = None
             if waveform == "zadoffchu":
                 symbol_rate = fs
                 if oversampling > 1 and self.rrc_enable.get():
@@ -3811,6 +3877,8 @@ class TransceiverUI(tk.Tk):
                     repeated_symbol_rate = filtered_symbol_rate
                 else:
                     repeated_symbol_rate = symbol_rate
+            if zeros_data is not None:
+                zeros_symbol_rate = repeated_symbol_rate or filtered_symbol_rate or symbol_rate
             if scaled_unfiltered is not None and scaled_filtered is not None:
                 self._display_gen_plots(
                     scaled_unfiltered,
@@ -3819,21 +3887,34 @@ class TransceiverUI(tk.Tk):
                     fs,
                     repeated_data=scaled_repeated,
                     repeated_fs=fs,
+                    zeros_data=scaled_zeros,
+                    zeros_fs=fs,
                     symbol_rate=symbol_rate,
                     filtered_symbol_rate=filtered_symbol_rate,
                     repeated_symbol_rate=repeated_symbol_rate,
+                    zeros_symbol_rate=zeros_symbol_rate,
                 )
-            elif scaled_repeated is not None:
+            elif scaled_repeated is not None or scaled_zeros is not None:
                 self._display_gen_plots(
                     scaled_data,
                     fs,
                     repeated_data=scaled_repeated,
                     repeated_fs=fs,
+                    zeros_data=scaled_zeros,
+                    zeros_fs=fs,
                     symbol_rate=symbol_rate,
                     repeated_symbol_rate=repeated_symbol_rate,
+                    zeros_symbol_rate=zeros_symbol_rate,
                 )
             else:
-                self._display_gen_plots(scaled_data, fs, symbol_rate=symbol_rate)
+                self._display_gen_plots(
+                    scaled_data,
+                    fs,
+                    zeros_data=scaled_zeros,
+                    zeros_fs=fs,
+                    symbol_rate=symbol_rate,
+                    zeros_symbol_rate=zeros_symbol_rate,
+                )
 
         except ValueError as exc:
             messagebox.showerror("Generate", str(exc))
