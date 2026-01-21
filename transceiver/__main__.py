@@ -2925,10 +2925,12 @@ class TransceiverUI(tk.Tk):
         self._on_trim_change(reset_manual=False)
         self.apply_trim_btn.configure(state="disabled")
         self.trim_dirty = False
-        if hasattr(self, "raw_rx_data") and self.raw_rx_data is not None:
+        has_rx_data = hasattr(self, "raw_rx_data") and self.raw_rx_data is not None
+        if has_rx_data:
             fs = getattr(self, "latest_fs_raw", self.latest_fs)
             self._display_rx_plots(self.raw_rx_data, fs, reset_manual=False)
         if (
+            has_rx_data
             hasattr(self, "latest_data")
             and self.latest_data is not None
             and (
