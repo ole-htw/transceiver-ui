@@ -13,7 +13,7 @@ import math
 import signal
 import contextlib
 import tempfile
-from multiprocessing import shared_memory
+from multiprocessing import shared_memory, Pipe, Process
 from pathlib import Path
 from datetime import datetime
 
@@ -1298,6 +1298,80 @@ def _format_stats_text(stats: dict) -> str:
     return "\n".join(lines)
 
 
+class PlotWorkerManager:
+    """Manage a persistent PyQtGraph plot worker process."""
+
+    def __init__(self) -> None:
+        self._process: Process | None = None
+        self._conn = None
+        self._lock = threading.Lock()
+
+    def start(self) -> None:
+        with self._lock:
+            if self._process and self._process.is_alive():
+                return
+            if self._conn:
+                try:
+                    self._conn.close()
+                except OSError:
+                    pass
+                self._conn = None
+            recv_conn, send_conn = Pipe(duplex=False)
+            self._conn = send_conn
+            from .helpers import plot_worker
+
+            self._process = Process(
+                target=plot_worker.worker_loop,
+                args=(recv_conn,),
+                daemon=True,
+            )
+            self._process.start()
+            recv_conn.close()
+
+    def send_payload(self, payload: dict[str, object]) -> None:
+        if payload is None:
+            return
+        with self._lock:
+            if not self._process or not self._process.is_alive():
+                self.start()
+            if not self._conn:
+                return
+            try:
+                self._conn.send({"command": "plot", "payload": payload})
+            except (BrokenPipeError, EOFError, OSError):
+                self.start()
+                if self._conn:
+                    self._conn.send({"command": "plot", "payload": payload})
+
+    def stop(self) -> None:
+        with self._lock:
+            if self._conn:
+                try:
+                    self._conn.send({"command": "shutdown"})
+                except (BrokenPipeError, EOFError, OSError):
+                    pass
+                try:
+                    self._conn.close()
+                except OSError:
+                    pass
+                self._conn = None
+            if self._process:
+                self._process.join(timeout=2)
+                if self._process.is_alive():
+                    self._process.terminate()
+                self._process = None
+
+
+_plot_worker_manager: PlotWorkerManager | None = None
+
+
+def _get_plot_worker_manager() -> PlotWorkerManager:
+    global _plot_worker_manager
+    if _plot_worker_manager is None:
+        _plot_worker_manager = PlotWorkerManager()
+    return _plot_worker_manager
+
+
 def visualize(
     data: np.ndarray,
     fs: float,
@@ -1451,18 +1525,7 @@ def _spawn_plot_worker(
             for key, val in manual_lags.items()
         }
         payload["output_path"] = str(temp_dir / "manual_lags.json")
-    payload_path = temp_dir / "payload.json"
-    with payload_path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle)
-    subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "transceiver.helpers.plot_worker",
-            "--payload",
-            str(payload_path),
-        ]
-    )
+    _get_plot_worker_manager().send_payload(payload)
 
 
 def _plot_on_pg(
@@ -1693,6 +1756,8 @@ class TransceiverUI(tk.Tk):
         self._last_tx_end = 0.0
         self._filtered_tx_file = None
         self._closing = False
+        self._plot_worker_manager = _get_plot_worker_manager()
+        self._plot_worker_manager.start()
         self.create_widgets()
         try:
             self.state("zoomed")
@@ -3591,6 +3656,8 @@ class TransceiverUI(tk.Tk):
         self._closing = True
         self.stop_transmit()
         self.stop_receive()
+        if getattr(self, "_plot_worker_manager", None) is not None:
+            self._plot_worker_manager.stop()
         _save_state(self._get_current_params())
         self.destroy()
 
