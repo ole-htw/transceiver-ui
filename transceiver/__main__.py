@@ -1224,6 +1224,16 @@ def _gen_repeat_tx_filename(filename: str) -> str:
     return str(path.with_name(f"{stem}_repeat{path.suffix}"))
 
 
+def _strip_repeat_tx_filename(filename: str) -> str:
+    """Return *filename* without a trailing ``_repeat`` suffix in the stem."""
+    path = Path(filename)
+    suffix = "_repeat"
+    if path.stem.endswith(suffix):
+        base_stem = path.stem[: -len(suffix)]
+        return str(path.with_name(f"{base_stem}{path.suffix}"))
+    return filename
+
+
 def _gen_rx_filename(app) -> str:
     """Generate RX filename based on current UI settings."""
     freq = _try_parse_number_expr(app.rx_freq.get(), default=0.0)
@@ -2620,13 +2630,15 @@ class TransceiverUI(tk.Tk):
             raw = raw.reshape(-1, 2).astype(np.float32)
             return raw[:, 0] + 1j * raw[:, 1]
 
+        tx_reference_path = _strip_repeat_tx_filename(self.tx_file.get())
         try:
-            self.tx_data = _load_tx_samples(self.tx_file.get())
+            self.tx_data = _load_tx_samples(tx_reference_path)
         except Exception:
             self.tx_data = np.array([], dtype=np.complex64)
         self.tx_data_unfiltered = np.array([], dtype=np.complex64)
         if self.rx_inv_rrc_enable.get():
             unfiltered_path = self.file_entry.get() or self.tx_file.get()
+            unfiltered_path = _strip_repeat_tx_filename(unfiltered_path)
             if unfiltered_path == self.tx_file.get():
                 self.tx_data_unfiltered = self.tx_data
             else:
