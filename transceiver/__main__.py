@@ -1456,6 +1456,8 @@ def _spawn_plot_worker(
                     shm_cleanup = shared_memory.SharedMemory(name=name)
                 except (FileNotFoundError, OSError):
                     return
+                with contextlib.suppress(Exception):
+                    resource_tracker.unregister(shm_cleanup.name, "shared_memory")
                 with contextlib.suppress(FileNotFoundError):
                     shm_cleanup.unlink()
                 shm_cleanup.close()
@@ -1512,6 +1514,10 @@ def _spawn_plot_worker(
                         ref_cleanup = shared_memory.SharedMemory(name=name)
                     except (FileNotFoundError, OSError):
                         return
+                    with contextlib.suppress(Exception):
+                        resource_tracker.unregister(
+                            ref_cleanup.name, "shared_memory"
+                        )
                     with contextlib.suppress(FileNotFoundError):
                         ref_cleanup.unlink()
                     ref_cleanup.close()
