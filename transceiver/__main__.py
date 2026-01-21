@@ -106,6 +106,20 @@ BIN_DIR = ROOT_DIR / "bin"
 REPLAY_BIN = str(BIN_DIR / "rfnoc_replay_samples_from_file")
 
 
+def _maybe_untrack_shared_memory(name: str) -> None:
+    try:
+        tracker = resource_tracker._resource_tracker  # type: ignore[attr-defined]
+        cache = getattr(tracker, "_cache", None) or getattr(tracker, "cache", None)
+        if isinstance(cache, dict):
+            names = cache.get("shared_memory")
+            if isinstance(names, (set, list, tuple)) and name not in names:
+                return
+    except Exception:
+        pass
+    with contextlib.suppress(Exception):
+        resource_tracker.unregister(name, "shared_memory")
+
+
 class RangeSlider(ttk.Frame):
     """Horizontal slider with two handles and optional signal preview."""
 
@@ -1448,8 +1462,7 @@ def _spawn_plot_worker(
             shm_name = shm.name
             shm_shape = list(data_contiguous.shape)
             shm_dtype = data_contiguous.dtype.str
-            with contextlib.suppress(Exception):
-                resource_tracker.unregister(shm.name, "shared_memory")
+            _maybe_untrack_shared_memory(shm.name)
             shm.close()
 
             def _unlink_shared_memory(name: str) -> None:
@@ -1457,8 +1470,7 @@ def _spawn_plot_worker(
                     shm_cleanup = shared_memory.SharedMemory(name=name)
                 except (FileNotFoundError, OSError):
                     return
-                with contextlib.suppress(Exception):
-                    resource_tracker.unregister(shm_cleanup.name, "shared_memory")
+                _maybe_untrack_shared_memory(shm_cleanup.name)
                 with contextlib.suppress(FileNotFoundError):
                     shm_cleanup.unlink()
                 shm_cleanup.close()
@@ -1506,8 +1518,7 @@ def _spawn_plot_worker(
                 ref_shm_name = ref_shm.name
                 ref_shm_shape = list(ref_contiguous.shape)
                 ref_shm_dtype = ref_contiguous.dtype.str
-                with contextlib.suppress(Exception):
-                    resource_tracker.unregister(ref_shm.name, "shared_memory")
+                _maybe_untrack_shared_memory(ref_shm.name)
                 ref_shm.close()
 
                 def _unlink_ref_shared_memory(name: str) -> None:
@@ -1515,10 +1526,7 @@ def _spawn_plot_worker(
                         ref_cleanup = shared_memory.SharedMemory(name=name)
                     except (FileNotFoundError, OSError):
                         return
-                    with contextlib.suppress(Exception):
-                        resource_tracker.unregister(
-                            ref_cleanup.name, "shared_memory"
-                        )
+                    _maybe_untrack_shared_memory(ref_cleanup.name)
                     with contextlib.suppress(FileNotFoundError):
                         ref_cleanup.unlink()
                     ref_cleanup.close()
