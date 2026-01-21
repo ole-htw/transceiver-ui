@@ -2717,8 +2717,8 @@ class TransceiverUI(tk.Tk):
                 unfiltered_tab = ttk.Frame(notebook)
                 unfiltered_tab.columnconfigure(0, weight=1)
 
-                notebook.add(filtered_tab, text="inv. filter")
                 notebook.add(unfiltered_tab, text="RX")
+                notebook.add(filtered_tab, text="inv. filter")
                 notebook.select(filtered_tab)
 
                 crosscorr_title = (
