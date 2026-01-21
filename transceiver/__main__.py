@@ -2633,16 +2633,19 @@ class TransceiverUI(tk.Tk):
         aoa_text = "AoA (ESPRIT): --"
         echo_aoa_text = "Echo AoA: --"
         self.echo_aoa_results = []
-        aoa_data = None
+        aoa_raw_data = None
         aoa_time = None
         aoa_series = None
+        aoa_time_unfiltered = None
+        aoa_series_unfiltered = None
         if self.raw_rx_data.ndim == 2 and self.raw_rx_data.shape[0] >= 2:
-            aoa_data = self.raw_rx_data[:2]
+            aoa_raw_data = self.raw_rx_data[:2]
             if self.trim_var.get():
-                aoa_data = self._trim_data_multichannel(aoa_data)
+                aoa_raw_data = self._trim_data_multichannel(aoa_raw_data)
+            aoa_data = aoa_raw_data
             if self.rx_inv_rrc_enable.get():
                 aoa_data = np.vstack(
-                    [self._apply_inverse_rrc(chan)[0] for chan in aoa_data]
+                    [self._apply_inverse_rrc(chan)[0] for chan in aoa_raw_data]
                 )
             try:
                 antenna_spacing = _parse_number_expr_or_error(
@@ -2658,6 +2661,13 @@ class TransceiverUI(tk.Tk):
                         aoa_time, aoa_series = doa_esprit.estimate_aoa_esprit_series(
                             aoa_data, antenna_spacing, wavelength
                         )
+                        if self.rx_inv_rrc_enable.get() and aoa_raw_data is not None:
+                            (
+                                aoa_time_unfiltered,
+                                aoa_series_unfiltered,
+                            ) = doa_esprit.estimate_aoa_esprit_series(
+                                aoa_raw_data, antenna_spacing, wavelength
+                            )
                 if ref_data.size > 0:
                     echo_data = aoa_data
                     echo_out = _correlate_and_estimate_echo_aoa(
@@ -2712,150 +2722,154 @@ class TransceiverUI(tk.Tk):
 
         modes = ["Signal", "Freq", "InstantFreq", "Crosscorr"]
         title_suffix = f" ({channel_label})" if channel_label else ""
-        for idx, mode in enumerate(modes):
-            if mode == "Crosscorr" and self.rx_inv_rrc_enable.get():
-                notebook = ttk.Notebook(self.rx_plots_frame)
-                notebook.grid(row=idx, column=0, sticky="nsew", pady=2)
-                self.rx_plots_frame.columnconfigure(0, weight=1)
 
-                filtered_tab = ttk.Frame(notebook)
-                filtered_tab.columnconfigure(0, weight=1)
-                unfiltered_tab = ttk.Frame(notebook)
-                unfiltered_tab.columnconfigure(0, weight=1)
-
-                notebook.add(unfiltered_tab, text="RX")
-                notebook.add(filtered_tab, text="inv. filter")
-                notebook.select(filtered_tab)
-
-                crosscorr_title = (
-                    f"RX {mode}{title_suffix} ({ref_label})"
-                    if ref_label
-                    else f"RX {mode}{title_suffix}"
-                )
+        def _render_rx_preview(
+            target_frame: ttk.Frame,
+            plot_data: np.ndarray,
+            plot_fs: float,
+            plot_ref_data: np.ndarray,
+            plot_ref_label: str,
+            aoa_plot_time: np.ndarray | None,
+            aoa_plot_series: np.ndarray | None,
+        ) -> None:
+            target_frame.columnconfigure(0, weight=1)
+            for idx, mode in enumerate(modes):
                 fig = Figure(figsize=(5, 2), dpi=100)
                 ax = fig.add_subplot(111)
+                ref = plot_ref_data if mode == "Crosscorr" else None
+                crosscorr_title = (
+                    f"RX {mode}{title_suffix} ({plot_ref_label})"
+                    if mode == "Crosscorr" and plot_ref_label
+                    else f"RX {mode}{title_suffix}"
+                )
                 _plot_on_mpl(
                     ax,
-                    data,
-                    fs,
+                    plot_data,
+                    plot_fs,
                     mode,
                     crosscorr_title,
-                    ref_data,
+                    ref,
                     manual_lags=self.manual_xcorr_lags,
                 )
-                canvas = FigureCanvasTkAgg(fig, master=filtered_tab)
+                canvas = FigureCanvasTkAgg(fig, master=target_frame)
                 canvas.draw()
                 widget = canvas.get_tk_widget()
-                widget.grid(row=0, column=0, sticky="nsew", pady=2)
-                widget.bind(
-                    "<Button-1>",
-                    lambda _e, m=mode, d=data, s=fs, r=ref_data, t=crosscorr_title: (
-                        self._show_fullscreen(d, s, m, t, ref_data=r)
-                    ),
-                )
+                widget.grid(row=idx, column=0, sticky="nsew", pady=2)
+                if mode == "Crosscorr":
+                    handler = (
+                        lambda _e,
+                        m=mode,
+                        d=plot_data,
+                        s=plot_fs,
+                        r=ref,
+                        t=crosscorr_title: (
+                            self._show_fullscreen(d, s, m, t, ref_data=r)
+                        )
+                    )
+                else:
+                    handler = (
+                        lambda _e,
+                        m=mode,
+                        d=plot_data,
+                        s=plot_fs: self._show_fullscreen(
+                            d, s, m, f"RX {m}{title_suffix}"
+                        )
+                    )
+                widget.bind("<Button-1>", handler)
                 self.rx_canvases.append(canvas)
 
-                rx_title = (
-                    f"RX {mode}{title_suffix} ({rx_ref_label})"
-                    if rx_ref_label
-                    else f"RX {mode}{title_suffix}"
-                )
-                fig = Figure(figsize=(5, 2), dpi=100)
-                ax = fig.add_subplot(111)
-                _plot_on_mpl(
-                    ax,
-                    rx_data,
-                    rx_fs,
-                    mode,
-                    rx_title,
-                    rx_ref_data,
-                    manual_lags=self.manual_xcorr_lags,
-                )
-                canvas = FigureCanvasTkAgg(fig, master=unfiltered_tab)
-                canvas.draw()
-                widget = canvas.get_tk_widget()
-                widget.grid(row=0, column=0, sticky="nsew", pady=2)
-                widget.bind(
-                    "<Button-1>",
-                    lambda _e,
-                    m=mode,
-                    d=rx_data,
-                    s=rx_fs,
-                    r=rx_ref_data,
-                    t=rx_title: (self._show_fullscreen(d, s, m, t, ref_data=r)),
-                )
-                self.rx_canvases.append(canvas)
-                self.rx_canvases.append(notebook)
-                continue
-
-            fig = Figure(figsize=(5, 2), dpi=100)
-            ax = fig.add_subplot(111)
-            ref = ref_data if mode == "Crosscorr" else None
-            crosscorr_title = (
-                f"RX {mode}{title_suffix} ({ref_label})"
-                if mode == "Crosscorr" and ref_label
-                else f"RX {mode}{title_suffix}"
-            )
-            _plot_on_mpl(
-                ax,
-                data,
-                fs,
-                mode,
-                crosscorr_title,
-                ref,
+            stats = _calc_stats(
+                plot_data,
+                plot_fs,
+                plot_ref_data,
                 manual_lags=self.manual_xcorr_lags,
             )
-            canvas = FigureCanvasTkAgg(fig, master=self.rx_plots_frame)
-            canvas.draw()
-            widget = canvas.get_tk_widget()
-            widget.grid(row=idx, column=0, sticky="nsew", pady=2)
-            if mode == "Crosscorr":
-                handler = lambda _e, m=mode, d=data, s=fs, r=ref, t=crosscorr_title: (
-                    self._show_fullscreen(d, s, m, t, ref_data=r)
-                )
-            else:
-                handler = lambda _e, m=mode, d=data, s=fs: self._show_fullscreen(
-                    d, s, m, f"RX {m}{title_suffix}"
-                )
-            widget.bind("<Button-1>", handler)
-            self.rx_canvases.append(canvas)
+            text = _format_stats_text(stats)
+            stats_label = ttk.Label(target_frame, justify="left", anchor="w")
+            stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
+            stats_label.configure(text=text)
+            if self.rx_view.get() == "AoA (ESPRIT)":
+                fig = Figure(figsize=(5, 2), dpi=100)
+                ax = fig.add_subplot(111)
+                if (
+                    aoa_plot_time is None
+                    or aoa_plot_series is None
+                    or aoa_plot_series.size == 0
+                ):
+                    ax.set_title("AoA (ESPRIT)")
+                    ax.text(
+                        0.5,
+                        0.5,
+                        "Keine AoA-Daten",
+                        ha="center",
+                        va="center",
+                    )
+                    ax.set_axis_off()
+                else:
+                    t = aoa_plot_time / plot_fs
+                    ax.plot(t, aoa_plot_series, "b")
+                    ax.set_title("AoA (ESPRIT)")
+                    ax.set_xlabel("Time [s]")
+                    ax.set_ylabel("Angle [deg]")
+                    ax.grid(True)
+                canvas = FigureCanvasTkAgg(fig, master=target_frame)
+                canvas.draw()
+                widget = canvas.get_tk_widget()
+                widget.grid(row=len(modes) + 1, column=0, sticky="nsew", pady=2)
+                self.rx_canvases.append(canvas)
 
-        stats = _calc_stats(
-            data,
-            fs,
-            ref_data,
-            manual_lags=self.manual_xcorr_lags,
-        )
-        text = _format_stats_text(stats)
-        if not hasattr(self, "rx_stats_label"):
-            self.rx_stats_label = ttk.Label(
-                self.rx_plots_frame, justify="left", anchor="w"
+        if self.rx_inv_rrc_enable.get():
+            notebook = ttk.Notebook(self.rx_plots_frame)
+            notebook.grid(row=0, column=0, sticky="nsew")
+            self.rx_plots_frame.columnconfigure(0, weight=1)
+
+            unfiltered_tab = ttk.Frame(notebook)
+            unfiltered_tab.columnconfigure(0, weight=1)
+            filtered_tab = ttk.Frame(notebook)
+            filtered_tab.columnconfigure(0, weight=1)
+
+            notebook.add(unfiltered_tab, text="RX")
+            notebook.add(filtered_tab, text="inv. filter")
+            notebook.select(filtered_tab)
+            self.rx_canvases.append(notebook)
+
+            _render_rx_preview(
+                unfiltered_tab,
+                rx_data,
+                rx_fs,
+                rx_ref_data,
+                rx_ref_label,
+                aoa_time_unfiltered if aoa_time_unfiltered is not None else aoa_time,
+                (
+                    aoa_series_unfiltered
+                    if aoa_series_unfiltered is not None
+                    else aoa_series
+                ),
             )
-        self.rx_stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
-        self.rx_stats_label.configure(text=text)
+            _render_rx_preview(
+                filtered_tab,
+                data,
+                fs,
+                ref_data,
+                ref_label,
+                aoa_time,
+                aoa_series,
+            )
+        else:
+            _render_rx_preview(
+                self.rx_plots_frame,
+                data,
+                fs,
+                ref_data,
+                ref_label,
+                aoa_time,
+                aoa_series,
+            )
+
         if hasattr(self, "rx_aoa_label"):
             self.rx_aoa_label.configure(text=aoa_text)
         if hasattr(self, "rx_echo_aoa_label"):
             self.rx_echo_aoa_label.configure(text=echo_aoa_text)
-        if self.rx_view.get() == "AoA (ESPRIT)":
-            fig = Figure(figsize=(5, 2), dpi=100)
-            ax = fig.add_subplot(111)
-            if aoa_time is None or aoa_series is None or aoa_series.size == 0:
-                ax.set_title("AoA (ESPRIT)")
-                ax.text(0.5, 0.5, "Keine AoA-Daten", ha="center", va="center")
-                ax.set_axis_off()
-            else:
-                t = aoa_time / fs
-                ax.plot(t, aoa_series, "b")
-                ax.set_title("AoA (ESPRIT)")
-                ax.set_xlabel("Time [s]")
-                ax.set_ylabel("Angle [deg]")
-                ax.grid(True)
-            canvas = FigureCanvasTkAgg(fig, master=self.rx_plots_frame)
-            canvas.draw()
-            widget = canvas.get_tk_widget()
-            widget.grid(row=len(modes) + 1, column=0, sticky="nsew", pady=2)
-            self.rx_canvases.append(canvas)
 
     def _trim_data(self, data: np.ndarray) -> np.ndarray:
         """Return trimmed view of *data* based on slider settings."""
