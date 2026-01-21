@@ -1964,7 +1964,7 @@ class TransceiverUI(tk.Tk):
                 scrollregion=self.gen_canvas.bbox("all")
             ),
         )
-        gen_frame.rowconfigure(13, weight=1)
+        gen_frame.rowconfigure(11, weight=1)
         self.gen_canvases = []
         self.latest_data = None
         self.latest_fs = 0.0
