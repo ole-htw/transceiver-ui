@@ -1777,42 +1777,43 @@ class TransceiverUI(tk.Tk):
         self.repeat_entry.insert(0, "1")
         self.repeat_entry.grid(row=5, column=1, sticky="ew")
 
-        self.rrc_beta_label = ttk.Label(gen_frame, text="RRC β")
-        self.rrc_beta_label.grid(row=6, column=0, sticky="w")
-        self.rrc_beta_entry = SuggestEntry(gen_frame, "rrc_beta_entry")
+        self.rrc_enable = tk.BooleanVar(value=True)
+        filter_label_frame = ttk.Frame(gen_frame)
+        ttk.Label(filter_label_frame, text="Filter").grid(row=0, column=0, sticky="w")
+        ttk.Checkbutton(
+            filter_label_frame,
+            variable=self.rrc_enable,
+            command=self._on_rrc_toggle,
+        ).grid(row=0, column=1, sticky="w", padx=(4, 0))
+
+        filter_frame = ttk.Labelframe(gen_frame, labelwidget=filter_label_frame)
+        filter_frame.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        filter_frame.columnconfigure(1, weight=1)
+
+        self.rrc_beta_label = ttk.Label(filter_frame, text="RRC β")
+        self.rrc_beta_label.grid(row=0, column=0, sticky="w")
+        self.rrc_beta_entry = SuggestEntry(filter_frame, "rrc_beta_entry")
         self.rrc_beta_entry.insert(0, "0.25")
-        self.rrc_beta_entry.grid(row=6, column=1, sticky="ew")
+        self.rrc_beta_entry.grid(row=0, column=1, sticky="ew")
         self.rrc_beta_entry.entry.bind(
             "<FocusOut>",
             lambda _e: (self._sync_rx_inv_rrc_params(), self.auto_update_tx_filename()),
         )
 
-        self.rrc_span_label = ttk.Label(gen_frame, text="RRC Span")
-        self.rrc_span_label.grid(row=7, column=0, sticky="w")
-        self.rrc_span_entry = SuggestEntry(gen_frame, "rrc_span_entry")
+        self.rrc_span_label = ttk.Label(filter_frame, text="RRC Span")
+        self.rrc_span_label.grid(row=1, column=0, sticky="w")
+        self.rrc_span_entry = SuggestEntry(filter_frame, "rrc_span_entry")
         self.rrc_span_entry.insert(0, "6")
-        self.rrc_span_entry.grid(row=7, column=1, sticky="ew")
+        self.rrc_span_entry.grid(row=1, column=1, sticky="ew")
         self.rrc_span_entry.entry.bind(
             "<FocusOut>",
             lambda _e: (self._sync_rx_inv_rrc_params(), self.auto_update_tx_filename()),
         )
-        self.rrc_enable = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            gen_frame,
-            variable=self.rrc_enable,
-            command=self._on_rrc_toggle,
-        ).grid(row=6, column=2, sticky="w", rowspan=2)
-        if not self.rrc_enable.get():
-            self.rrc_beta_entry.entry.configure(state="disabled")
-            self.rrc_span_entry.entry.configure(state="disabled")
 
-        ttk.Label(gen_frame, text="Oversampling").grid(row=8, column=0, sticky="w")
-        self.os_entry = SuggestEntry(gen_frame, "os_entry")
+        ttk.Label(filter_frame, text="Oversampling").grid(row=2, column=0, sticky="w")
+        self.os_entry = SuggestEntry(filter_frame, "os_entry")
         self.os_entry.insert(0, "1")
-        self.os_entry.grid(row=8, column=1, sticky="ew")
-        self.os_entry.entry.configure(
-            state="normal" if self.rrc_enable.get() else "disabled"
-        )
+        self.os_entry.grid(row=2, column=1, sticky="ew")
         self.os_entry.entry.bind(
             "<FocusOut>",
             lambda _e: (
@@ -1822,7 +1823,14 @@ class TransceiverUI(tk.Tk):
             ),
         )
 
-        ttk.Label(gen_frame, text="Zeros").grid(row=9, column=0, sticky="w")
+        if not self.rrc_enable.get():
+            self.rrc_beta_entry.entry.configure(state="disabled")
+            self.rrc_span_entry.entry.configure(state="disabled")
+            self.os_entry.entry.configure(state="disabled")
+        else:
+            self.os_entry.entry.configure(state="normal")
+
+        ttk.Label(gen_frame, text="Zeros").grid(row=7, column=0, sticky="w")
         self.zeros_var = tk.StringVar(value="none")
         ttk.Combobox(
             gen_frame,
@@ -1838,24 +1846,24 @@ class TransceiverUI(tk.Tk):
             ],
             state="readonly",
             width=10,
-        ).grid(row=9, column=1, sticky="ew")
+        ).grid(row=7, column=1, sticky="ew")
 
-        ttk.Label(gen_frame, text="Amplitude").grid(row=10, column=0, sticky="w")
+        ttk.Label(gen_frame, text="Amplitude").grid(row=8, column=0, sticky="w")
         self.amp_entry = SuggestEntry(gen_frame, "amp_entry")
         self.amp_entry.insert(0, "10000")
-        self.amp_entry.grid(row=10, column=1, sticky="ew")
+        self.amp_entry.grid(row=8, column=1, sticky="ew")
 
-        ttk.Label(gen_frame, text="File").grid(row=11, column=0, sticky="w")
+        ttk.Label(gen_frame, text="File").grid(row=9, column=0, sticky="w")
         self.file_entry = SuggestEntry(gen_frame, "file_entry")
         self.file_entry.insert(0, "tx_signal.bin")
-        self.file_entry.grid(row=11, column=1, sticky="ew")
+        self.file_entry.grid(row=9, column=1, sticky="ew")
 
         ttk.Button(gen_frame, text="Generate", command=self.generate).grid(
-            row=12, column=0, columnspan=2, pady=5
+            row=10, column=0, columnspan=2, pady=5
         )
 
         scroll_container = ttk.Frame(gen_frame)
-        scroll_container.grid(row=13, column=0, columnspan=2, sticky="nsew")
+        scroll_container.grid(row=11, column=0, columnspan=2, sticky="nsew")
         scroll_container.columnconfigure(0, weight=1)
         scroll_container.rowconfigure(0, weight=1)
 
