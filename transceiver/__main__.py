@@ -2122,12 +2122,13 @@ class TransceiverUI(tk.Tk):
         )
 
         self.rx_inv_rrc_enable = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
+        self.rx_inv_rrc_check = ttk.Checkbutton(
             rx_frame,
             text="Inv. RRC",
             variable=self.rx_inv_rrc_enable,
             command=self._on_rx_inv_rrc_toggle,
-        ).grid(row=7, column=0, columnspan=2, sticky="w")
+        )
+        self.rx_inv_rrc_check.grid(row=7, column=0, columnspan=2, sticky="w")
         self.rx_inv_rrc_beta_label = ttk.Label(rx_frame, text="Inv. RRC β")
         self.rx_inv_rrc_beta_entry = SuggestEntry(rx_frame, "rx_inv_rrc_beta")
         self.rx_inv_rrc_beta_entry.insert(0, "0.25")
@@ -2256,7 +2257,7 @@ class TransceiverUI(tk.Tk):
         rx_frame.rowconfigure(16, weight=1)
         self.rx_canvases = []
         self.update_waveform_fields()
-        self._sync_rx_inv_rrc_params()
+        self._update_rx_inv_rrc_availability()
         self.auto_update_tx_filename()
         self.auto_update_rx_filename()
         self.toggle_rate_sync(self.sync_var.get())
@@ -2301,7 +2302,7 @@ class TransceiverUI(tk.Tk):
             self.f1_label.grid(row=3, column=0, sticky="w")
             self.f1_entry.grid(row=3, column=1, sticky="ew")
 
-        self._sync_rx_inv_rrc_params()
+        self._update_rx_inv_rrc_availability()
         self.auto_update_tx_filename()
 
     def _rrc_active(self) -> bool:
@@ -2325,7 +2326,7 @@ class TransceiverUI(tk.Tk):
         self.rrc_beta_entry.entry.configure(state=state)
         self.rrc_span_entry.entry.configure(state=state)
         self.os_entry.entry.configure(state=state)
-        self._sync_rx_inv_rrc_params()
+        self._update_rx_inv_rrc_availability()
         self.auto_update_tx_filename()
         self._reset_manual_xcorr_lags("RRC/Oversampling geändert")
 
@@ -2348,6 +2349,14 @@ class TransceiverUI(tk.Tk):
         self._sync_rx_inv_rrc_params()
         self._reset_manual_xcorr_lags("Oversampling geändert")
         self.update_trim()
+
+    def _update_rx_inv_rrc_availability(self) -> None:
+        has_filtered_signal = self._rrc_active()
+        state = "normal" if has_filtered_signal else "disabled"
+        self.rx_inv_rrc_check.configure(state=state)
+        if not has_filtered_signal:
+            self.rx_inv_rrc_enable.set(False)
+        self._sync_rx_inv_rrc_params()
 
     def _sync_rx_inv_rrc_params(self) -> None:
         beta = self.rrc_beta_entry.get() or "0.25"
@@ -2571,8 +2580,9 @@ class TransceiverUI(tk.Tk):
             if unfiltered.size:
                 ref = _strip_trailing_zeros(unfiltered)
                 label = "TX ungefiltert"
-            elif ref.size:
-                label = "TX (gefiltert)"
+            else:
+                ref = np.array([], dtype=np.complex64)
+                label = ""
         return ref, label
 
     def _display_rx_plots(
@@ -3456,7 +3466,7 @@ class TransceiverUI(tk.Tk):
         self.rx_inv_rrc_enable.set(
             params.get("rx_inv_rrc_enabled", params.get("rx_rrc_enabled", False))
         )
-        self._sync_rx_inv_rrc_params()
+        self._update_rx_inv_rrc_availability()
         self.rx_channel_2.set(params.get("rx_channel_2", False))
         self.rx_channel_view.set(params.get("rx_channel_view", "Kanal 1"))
         self.rx_file.delete(0, tk.END)
