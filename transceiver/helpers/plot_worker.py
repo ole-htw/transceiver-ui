@@ -109,6 +109,7 @@ def worker_loop(conn, initial_payload: dict[str, object] | None = None) -> None:
     plot_item = win.getPlotItem()
     manual_state: dict[str, int | None] = {"los": None, "echo": None}
     output_path: str | None = None
+    last_signature: tuple[object, ...] | None = None
     win.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, False)
 
     def _handle_close_event(event) -> None:
@@ -124,7 +125,7 @@ def worker_loop(conn, initial_payload: dict[str, object] | None = None) -> None:
         _write_manual_state(output_path, manual_state)
 
     def _apply_payload(payload: dict[str, object]) -> None:
-        nonlocal manual_state, output_path
+        nonlocal manual_state, output_path, last_signature
         payload, manual_state = _prepare_payload(payload)
         mode = payload.get("mode", "")
         title = payload.get("title", "")
@@ -145,6 +146,14 @@ def worker_loop(conn, initial_payload: dict[str, object] | None = None) -> None:
         manual_lags = payload.get("manual_lags") or None
         fullscreen = bool(payload.get("fullscreen", False))
         output_path = payload.get("output_path")
+        signature = (
+            mode,
+            title,
+            payload.get("data_file"),
+            payload.get("shm_name"),
+            payload.get("ref_file"),
+            payload.get("ref_shm_name"),
+        )
 
         if data is None or np.size(data) == 0:
             _cleanup_shm(data_shm)
@@ -173,6 +182,10 @@ def worker_loop(conn, initial_payload: dict[str, object] | None = None) -> None:
             reduce_data=False,
             reduction_step=reduction_step,
         )
+        if signature != last_signature:
+            plot_item.enableAutoRange(axis="xy", enable=True)
+            plot_item.getViewBox().autoRange()
+            last_signature = signature
 
         if fullscreen:
             try:
