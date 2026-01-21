@@ -13,7 +13,7 @@ import math
 import signal
 import contextlib
 import tempfile
-from multiprocessing import shared_memory, Pipe, Process
+from multiprocessing import shared_memory, Pipe, Process, resource_tracker
 from pathlib import Path
 from datetime import datetime
 
@@ -1447,6 +1447,8 @@ def _spawn_plot_worker(
             shm_name = shm.name
             shm_shape = list(data_contiguous.shape)
             shm_dtype = data_contiguous.dtype.str
+            with contextlib.suppress(Exception):
+                resource_tracker.unregister(shm.name, "shared_memory")
             shm.close()
 
             def _unlink_shared_memory(name: str) -> None:
@@ -1501,6 +1503,8 @@ def _spawn_plot_worker(
                 ref_shm_name = ref_shm.name
                 ref_shm_shape = list(ref_contiguous.shape)
                 ref_shm_dtype = ref_contiguous.dtype.str
+                with contextlib.suppress(Exception):
+                    resource_tracker.unregister(ref_shm.name, "shared_memory")
                 ref_shm.close()
 
                 def _unlink_ref_shared_memory(name: str) -> None:
