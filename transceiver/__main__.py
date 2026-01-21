@@ -2700,9 +2700,7 @@ class TransceiverUI(tk.Tk):
             raw = raw.reshape(-1, 2).astype(np.float32)
             return raw[:, 0] + 1j * raw[:, 1]
 
-        tx_reference_path = _strip_repeat_tx_filename(
-            _strip_zeros_tx_filename(self.tx_file.get())
-        )
+        tx_reference_path = _strip_zeros_tx_filename(self.tx_file.get())
         try:
             self.tx_data = _load_tx_samples(tx_reference_path)
         except Exception:
@@ -2710,9 +2708,7 @@ class TransceiverUI(tk.Tk):
         self.tx_data_unfiltered = np.array([], dtype=np.complex64)
         if self.rx_inv_rrc_enable.get():
             unfiltered_path = self.file_entry.get() or self.tx_file.get()
-            unfiltered_path = _strip_repeat_tx_filename(
-                _strip_zeros_tx_filename(unfiltered_path)
-            )
+            unfiltered_path = _strip_zeros_tx_filename(unfiltered_path)
             if unfiltered_path == self.tx_file.get():
                 self.tx_data_unfiltered = self.tx_data
             else:
