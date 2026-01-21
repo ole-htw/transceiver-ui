@@ -1366,6 +1366,7 @@ class PlotWorkerManager:
                 self._process.join(timeout=2)
                 if self._process.is_alive():
                     self._process.terminate()
+                    self._process.join(timeout=2)
                 self._process = None
 
 
@@ -3898,7 +3899,9 @@ class TransceiverUI(tk.Tk):
         self.stop_receive()
         if getattr(self, "_plot_worker_manager", None) is not None:
             self._plot_worker_manager.stop()
+        self._cmd_running = False
         _save_state(self._get_current_params())
+        self.quit()
         self.destroy()
 
 

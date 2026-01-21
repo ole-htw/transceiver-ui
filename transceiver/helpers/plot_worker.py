@@ -49,6 +49,8 @@ def _parse_payload(path: Path) -> dict:
 def _cleanup_shm(shm: shared_memory.SharedMemory | None) -> None:
     if shm is None:
         return
+    with contextlib.suppress(Exception):
+        resource_tracker.unregister(shm.name, "shared_memory")
     with contextlib.suppress(FileNotFoundError):
         shm.unlink()
     shm.close()
