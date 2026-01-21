@@ -2937,7 +2937,7 @@ class TransceiverUI(tk.Tk):
             self._display_rx_plots(self.raw_rx_data, fs, reset_manual=False)
         if (
             has_rx_data
-            hasattr(self, "latest_data")
+            and hasattr(self, "latest_data")
             and self.latest_data is not None
             and (
                 self.trim_var.get()
