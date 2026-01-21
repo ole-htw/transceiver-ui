@@ -89,6 +89,8 @@ def worker_loop(conn, initial_payload: dict[str, object] | None = None) -> None:
     pg.setConfigOption("foreground", "k")
     app = pg.mkQApp()
     win = pg.plot(show=False)
+    win.hide()
+    win.setVisible(False)
     plot_item = win.getPlotItem()
     manual_state: dict[str, int | None] = {"los": None, "echo": None}
     output_path: str | None = None
