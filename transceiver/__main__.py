@@ -1772,11 +1772,6 @@ class TransceiverUI(tk.Tk):
             "<FocusOut>", lambda _e: self.auto_update_tx_filename()
         )
 
-        ttk.Label(gen_frame, text="Repeats").grid(row=5, column=0, sticky="w")
-        self.repeat_entry = SuggestEntry(gen_frame, "repeat_entry")
-        self.repeat_entry.insert(0, "1")
-        self.repeat_entry.grid(row=5, column=1, sticky="ew")
-
         self.rrc_enable = tk.BooleanVar(value=True)
         filter_label_frame = ttk.Frame(gen_frame)
         ttk.Label(filter_label_frame, text="Filter").grid(row=0, column=0, sticky="w")
@@ -1787,7 +1782,7 @@ class TransceiverUI(tk.Tk):
         ).grid(row=0, column=1, sticky="w", padx=(4, 0))
 
         filter_frame = ttk.Labelframe(gen_frame, labelwidget=filter_label_frame)
-        filter_frame.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        filter_frame.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         filter_frame.columnconfigure(1, weight=1)
 
         self.rrc_beta_label = ttk.Label(filter_frame, text="RRC β")
@@ -1829,6 +1824,22 @@ class TransceiverUI(tk.Tk):
             self.os_entry.entry.configure(state="disabled")
         else:
             self.os_entry.entry.configure(state="normal")
+
+        self.repeat_enable = tk.BooleanVar(value=True)
+        self._repeat_last_value = "1"
+        repeat_label_frame = ttk.Frame(gen_frame)
+        ttk.Label(repeat_label_frame, text="Repeats").grid(row=0, column=0, sticky="w")
+        ttk.Checkbutton(
+            repeat_label_frame,
+            variable=self.repeat_enable,
+            command=self._on_repeat_toggle,
+        ).grid(row=0, column=1, sticky="w", padx=(4, 0))
+        repeat_frame = ttk.Labelframe(gen_frame, labelwidget=repeat_label_frame)
+        repeat_frame.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        repeat_frame.columnconfigure(0, weight=1)
+        self.repeat_entry = SuggestEntry(repeat_frame, "repeat_entry")
+        self.repeat_entry.insert(0, "1")
+        self.repeat_entry.grid(row=0, column=0, sticky="ew")
 
         ttk.Label(gen_frame, text="Zeros").grid(row=7, column=0, sticky="w")
         self.zeros_var = tk.StringVar(value="none")
@@ -2227,6 +2238,21 @@ class TransceiverUI(tk.Tk):
         self._sync_rx_inv_rrc_params()
         self.auto_update_tx_filename()
         self._reset_manual_xcorr_lags("RRC/Oversampling geändert")
+
+    def _on_repeat_toggle(self) -> None:
+        if self.repeat_enable.get():
+            self.repeat_entry.entry.configure(state="normal")
+            if self.repeat_entry.get() in ("", "0"):
+                self.repeat_entry.delete(0, tk.END)
+                self.repeat_entry.insert(0, self._repeat_last_value or "1")
+        else:
+            current = self.repeat_entry.get()
+            if current and current != "0":
+                self._repeat_last_value = current
+            self.repeat_entry.delete(0, tk.END)
+            self.repeat_entry.insert(0, "0")
+            self.repeat_entry.entry.configure(state="disabled")
+        self.auto_update_tx_filename()
 
     def _on_rx_inv_rrc_toggle(self) -> None:
         self._sync_rx_inv_rrc_params()
@@ -3081,6 +3107,7 @@ class TransceiverUI(tk.Tk):
             "samples": self.samples_entry.get(),
             "rrc_oversampling": self.os_entry.get(),
             "repeats": self.repeat_entry.get(),
+            "repeats_enabled": self.repeat_enable.get(),
             "rrc_beta": self.rrc_beta_entry.get(),
             "rrc_span": self.rrc_span_entry.get(),
             "rrc_enabled": self.rrc_enable.get(),
@@ -3144,7 +3171,15 @@ class TransceiverUI(tk.Tk):
             ),
         )
         self.repeat_entry.delete(0, tk.END)
-        self.repeat_entry.insert(0, params.get("repeats", "1"))
+        repeats_value = params.get("repeats", "1")
+        self.repeat_entry.insert(0, repeats_value)
+        if str(repeats_value).strip() not in ("", "0"):
+            self._repeat_last_value = str(repeats_value)
+        repeat_enabled = params.get("repeats_enabled")
+        if repeat_enabled is None:
+            repeat_enabled = str(repeats_value).strip() != "0"
+        self.repeat_enable.set(bool(repeat_enabled))
+        self._on_repeat_toggle()
         self.rrc_beta_entry.delete(0, tk.END)
         self.rrc_beta_entry.insert(
             0, params.get("rrc_beta", params.get("rx_inv_rrc_beta", "0.25"))
