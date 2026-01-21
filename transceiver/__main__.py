@@ -2433,6 +2433,8 @@ class TransceiverUI(tk.Tk):
         if self.trim_var.get():
             data = self._trim_data(data)
 
+        data_unfiltered = data
+        fs_unfiltered = fs
         data, fac = self._apply_inverse_rrc(data)
         fs *= fac
         self.latest_fs = fs
@@ -2460,6 +2462,10 @@ class TransceiverUI(tk.Tk):
                 except Exception:
                     self.tx_data_unfiltered = np.array([], dtype=np.complex64)
         ref_data, ref_label = self._get_crosscorr_reference()
+        unfiltered_ref_data = getattr(self, "tx_data", np.array([], dtype=np.complex64))
+        unfiltered_ref_label = "TX"
+        if self.rx_inv_rrc_enable.get() and unfiltered_ref_data.size:
+            unfiltered_ref_label = "TX (gefiltert)"
         aoa_text = "AoA (ESPRIT): --"
         echo_aoa_text = "Echo AoA: --"
         self.echo_aoa_results = []
@@ -2543,6 +2549,81 @@ class TransceiverUI(tk.Tk):
         modes = ["Signal", "Freq", "InstantFreq", "Crosscorr"]
         title_suffix = f" ({channel_label})" if channel_label else ""
         for idx, mode in enumerate(modes):
+            if mode == "Crosscorr" and self.rx_inv_rrc_enable.get():
+                notebook = ttk.Notebook(self.rx_plots_frame)
+                notebook.grid(row=idx, column=0, sticky="nsew", pady=2)
+                self.rx_plots_frame.columnconfigure(0, weight=1)
+
+                filtered_tab = ttk.Frame(notebook)
+                filtered_tab.columnconfigure(0, weight=1)
+                unfiltered_tab = ttk.Frame(notebook)
+                unfiltered_tab.columnconfigure(0, weight=1)
+
+                notebook.add(filtered_tab, text="Gefiltert")
+                notebook.add(unfiltered_tab, text="Ungefiltert")
+                notebook.select(filtered_tab)
+
+                crosscorr_title = (
+                    f"RX {mode}{title_suffix} ({ref_label})"
+                    if ref_label
+                    else f"RX {mode}{title_suffix}"
+                )
+                fig = Figure(figsize=(5, 2), dpi=100)
+                ax = fig.add_subplot(111)
+                _plot_on_mpl(
+                    ax,
+                    data,
+                    fs,
+                    mode,
+                    crosscorr_title,
+                    ref_data,
+                    manual_lags=self.manual_xcorr_lags,
+                )
+                canvas = FigureCanvasTkAgg(fig, master=filtered_tab)
+                canvas.draw()
+                widget = canvas.get_tk_widget()
+                widget.grid(row=0, column=0, sticky="nsew", pady=2)
+                widget.bind(
+                    "<Button-1>",
+                    lambda _e, m=mode, d=data, s=fs, r=ref_data, t=crosscorr_title: (
+                        self._show_fullscreen(d, s, m, t, ref_data=r)
+                    ),
+                )
+                self.rx_canvases.append(canvas)
+
+                unfiltered_title = (
+                    f"RX {mode}{title_suffix} ({unfiltered_ref_label})"
+                    if unfiltered_ref_label
+                    else f"RX {mode}{title_suffix}"
+                )
+                fig = Figure(figsize=(5, 2), dpi=100)
+                ax = fig.add_subplot(111)
+                _plot_on_mpl(
+                    ax,
+                    data_unfiltered,
+                    fs_unfiltered,
+                    mode,
+                    unfiltered_title,
+                    unfiltered_ref_data,
+                    manual_lags=self.manual_xcorr_lags,
+                )
+                canvas = FigureCanvasTkAgg(fig, master=unfiltered_tab)
+                canvas.draw()
+                widget = canvas.get_tk_widget()
+                widget.grid(row=0, column=0, sticky="nsew", pady=2)
+                widget.bind(
+                    "<Button-1>",
+                    lambda _e,
+                    m=mode,
+                    d=data_unfiltered,
+                    s=fs_unfiltered,
+                    r=unfiltered_ref_data,
+                    t=unfiltered_title: (self._show_fullscreen(d, s, m, t, ref_data=r)),
+                )
+                self.rx_canvases.append(canvas)
+                self.rx_canvases.append(notebook)
+                continue
+
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
             ref = ref_data if mode == "Crosscorr" else None
