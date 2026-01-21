@@ -1942,13 +1942,23 @@ class TransceiverUI(tk.Tk):
         self.repeat_entry.insert(0, "1")
         self.repeat_entry.grid(row=0, column=0, sticky="ew")
 
-        ttk.Label(gen_frame, text="Zeros").grid(row=7, column=0, sticky="w")
-        self.zeros_var = tk.StringVar(value="none")
-        ttk.Combobox(
-            gen_frame,
+        self.zeros_enable = tk.BooleanVar(value=False)
+        self._zeros_last_value = "same"
+        zeros_label_frame = ttk.Frame(gen_frame)
+        ttk.Label(zeros_label_frame, text="Zeros").grid(row=0, column=0, sticky="w")
+        ttk.Checkbutton(
+            zeros_label_frame,
+            variable=self.zeros_enable,
+            command=self._on_zeros_toggle,
+        ).grid(row=0, column=1, sticky="w", padx=(4, 0))
+        zeros_frame = ttk.Labelframe(gen_frame, labelwidget=zeros_label_frame)
+        zeros_frame.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        zeros_frame.columnconfigure(0, weight=1)
+        self.zeros_var = tk.StringVar(value="same")
+        self.zeros_combo = ttk.Combobox(
+            zeros_frame,
             textvariable=self.zeros_var,
             values=[
-                "none",
                 "same",
                 "half",
                 "quarter",
@@ -1958,7 +1968,9 @@ class TransceiverUI(tk.Tk):
             ],
             state="readonly",
             width=10,
-        ).grid(row=7, column=1, sticky="ew")
+        )
+        self.zeros_combo.grid(row=0, column=0, sticky="ew")
+        self.zeros_combo.configure(state="disabled")
 
         ttk.Label(gen_frame, text="Amplitude").grid(row=8, column=0, sticky="w")
         self.amp_entry = SuggestEntry(gen_frame, "amp_entry")
@@ -2362,6 +2374,18 @@ class TransceiverUI(tk.Tk):
             self.repeat_entry.delete(0, tk.END)
             self.repeat_entry.insert(0, "0")
             self.repeat_entry.entry.configure(state="disabled")
+        self.auto_update_tx_filename()
+
+    def _on_zeros_toggle(self) -> None:
+        if self.zeros_enable.get():
+            self.zeros_combo.configure(state="readonly")
+            if self.zeros_var.get() not in self.zeros_combo["values"]:
+                self.zeros_var.set(self._zeros_last_value or "same")
+        else:
+            current = self.zeros_var.get()
+            if current:
+                self._zeros_last_value = current
+            self.zeros_combo.configure(state="disabled")
         self.auto_update_tx_filename()
 
     def _on_rx_inv_rrc_toggle(self) -> None:
@@ -3378,6 +3402,7 @@ class TransceiverUI(tk.Tk):
             "rrc_span": self.rrc_span_entry.get(),
             "rrc_enabled": self.rrc_enable.get(),
             "zeros": self.zeros_var.get(),
+            "zeros_enabled": self.zeros_enable.get(),
             "amplitude": self.amp_entry.get(),
             "file": self.file_entry.get(),
             "sync_rates": self.sync_var.get(),
@@ -3459,7 +3484,17 @@ class TransceiverUI(tk.Tk):
         self.rrc_beta_entry.entry.configure(state=state)
         self.rrc_span_entry.entry.configure(state=state)
         self.os_entry.entry.configure(state=state)
-        self.zeros_var.set(params.get("zeros", "none"))
+        zeros_value = params.get("zeros", "same")
+        zeros_enabled = params.get("zeros_enabled")
+        if zeros_enabled is None:
+            zeros_enabled = str(zeros_value).strip() not in ("", "none")
+        if zeros_value not in self.zeros_combo["values"]:
+            zeros_value = "same"
+        self.zeros_var.set(zeros_value)
+        if zeros_value:
+            self._zeros_last_value = zeros_value
+        self.zeros_enable.set(bool(zeros_enabled))
+        self._on_zeros_toggle()
         self.amp_entry.delete(0, tk.END)
         self.amp_entry.insert(0, params.get("amplitude", ""))
         self.file_entry.delete(0, tk.END)
@@ -3587,7 +3622,7 @@ class TransceiverUI(tk.Tk):
             if not self.rrc_enable.get():
                 oversampling = 1
             repeats = self._get_repeat_count() if self.repeat_entry.get() else 1
-            zeros_mode = self.zeros_var.get()
+            zeros_mode = self.zeros_var.get() if self.zeros_enable.get() else "none"
             amp = _parse_number_expr_or_error(self.amp_entry.get())
             waveform = self.wave_var.get()
             rrc_active = self._rrc_active()
