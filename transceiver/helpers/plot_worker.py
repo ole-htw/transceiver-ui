@@ -92,6 +92,13 @@ def worker_loop(conn, initial_payload: dict[str, object] | None = None) -> None:
     plot_item = win.getPlotItem()
     manual_state: dict[str, int | None] = {"los": None, "echo": None}
     output_path: str | None = None
+    win.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, False)
+
+    def _handle_close_event(event) -> None:
+        event.ignore()
+        win.hide()
+
+    win.closeEvent = _handle_close_event
 
     def _update_manual(kind: str, lag_value: float) -> None:
         if kind not in ("los", "echo"):
