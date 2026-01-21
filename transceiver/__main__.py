@@ -2657,11 +2657,13 @@ class TransceiverUI(tk.Tk):
                 self, "tx_data_unfiltered", np.array([], dtype=np.complex64)
             )
             if unfiltered.size:
-                ref = _strip_trailing_zeros(unfiltered)
+                ref = unfiltered
                 label = "TX ungefiltert"
             else:
                 ref = np.array([], dtype=np.complex64)
                 label = ""
+        if ref.size:
+            ref = _strip_trailing_zeros(ref)
         return ref, label
 
     def _display_rx_plots(
@@ -2722,6 +2724,8 @@ class TransceiverUI(tk.Tk):
                     self.tx_data_unfiltered = np.array([], dtype=np.complex64)
         ref_data, ref_label = self._get_crosscorr_reference()
         rx_ref_data = getattr(self, "tx_data", np.array([], dtype=np.complex64))
+        if rx_ref_data.size:
+            rx_ref_data = _strip_trailing_zeros(rx_ref_data)
         rx_ref_label = "TX"
         if self.rx_inv_rrc_enable.get() and rx_ref_data.size:
             rx_ref_label = "TX (gefiltert)"
