@@ -2524,8 +2524,8 @@ class TransceiverUI(tk.Tk):
         if self.trim_var.get():
             data = self._trim_data(data)
 
-        data_unfiltered = data
-        fs_unfiltered = fs
+        rx_data = data
+        rx_fs = fs
         data, fac = self._apply_inverse_rrc(data)
         fs *= fac
         self.latest_fs = fs
@@ -2553,10 +2553,10 @@ class TransceiverUI(tk.Tk):
                 except Exception:
                     self.tx_data_unfiltered = np.array([], dtype=np.complex64)
         ref_data, ref_label = self._get_crosscorr_reference()
-        unfiltered_ref_data = getattr(self, "tx_data", np.array([], dtype=np.complex64))
-        unfiltered_ref_label = "TX"
-        if self.rx_inv_rrc_enable.get() and unfiltered_ref_data.size:
-            unfiltered_ref_label = "TX (gefiltert)"
+        rx_ref_data = getattr(self, "tx_data", np.array([], dtype=np.complex64))
+        rx_ref_label = "TX"
+        if self.rx_inv_rrc_enable.get() and rx_ref_data.size:
+            rx_ref_label = "TX (gefiltert)"
         aoa_text = "AoA (ESPRIT): --"
         echo_aoa_text = "Echo AoA: --"
         self.echo_aoa_results = []
@@ -2650,8 +2650,8 @@ class TransceiverUI(tk.Tk):
                 unfiltered_tab = ttk.Frame(notebook)
                 unfiltered_tab.columnconfigure(0, weight=1)
 
-                notebook.add(filtered_tab, text="Gefiltert")
-                notebook.add(unfiltered_tab, text="Ungefiltert")
+                notebook.add(filtered_tab, text="inv. filter")
+                notebook.add(unfiltered_tab, text="RX")
                 notebook.select(filtered_tab)
 
                 crosscorr_title = (
@@ -2682,20 +2682,20 @@ class TransceiverUI(tk.Tk):
                 )
                 self.rx_canvases.append(canvas)
 
-                unfiltered_title = (
-                    f"RX {mode}{title_suffix} ({unfiltered_ref_label})"
-                    if unfiltered_ref_label
+                rx_title = (
+                    f"RX {mode}{title_suffix} ({rx_ref_label})"
+                    if rx_ref_label
                     else f"RX {mode}{title_suffix}"
                 )
                 fig = Figure(figsize=(5, 2), dpi=100)
                 ax = fig.add_subplot(111)
                 _plot_on_mpl(
                     ax,
-                    data_unfiltered,
-                    fs_unfiltered,
+                    rx_data,
+                    rx_fs,
                     mode,
-                    unfiltered_title,
-                    unfiltered_ref_data,
+                    rx_title,
+                    rx_ref_data,
                     manual_lags=self.manual_xcorr_lags,
                 )
                 canvas = FigureCanvasTkAgg(fig, master=unfiltered_tab)
@@ -2706,10 +2706,10 @@ class TransceiverUI(tk.Tk):
                     "<Button-1>",
                     lambda _e,
                     m=mode,
-                    d=data_unfiltered,
-                    s=fs_unfiltered,
-                    r=unfiltered_ref_data,
-                    t=unfiltered_title: (self._show_fullscreen(d, s, m, t, ref_data=r)),
+                    d=rx_data,
+                    s=rx_fs,
+                    r=rx_ref_data,
+                    t=rx_title: (self._show_fullscreen(d, s, m, t, ref_data=r)),
                 )
                 self.rx_canvases.append(canvas)
                 self.rx_canvases.append(notebook)
