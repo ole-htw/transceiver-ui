@@ -7,6 +7,7 @@ import contextlib
 import json
 from pathlib import Path
 from multiprocessing import shared_memory
+from multiprocessing import resource_tracker
 
 import numpy as np
 import pyqtgraph as pg
@@ -25,6 +26,8 @@ def _load_iq(
         if shm_name and shape and dtype:
             try:
                 shm = shared_memory.SharedMemory(name=str(shm_name))
+                with contextlib.suppress(Exception):
+                    resource_tracker.unregister(shm._name, "shared_memory")
                 array = np.ndarray(
                     tuple(shape), dtype=np.dtype(dtype), buffer=shm.buf
                 )
@@ -77,8 +80,6 @@ def main() -> None:
         for shm in (data_shm, ref_shm):
             if shm is None:
                 continue
-            with contextlib.suppress(FileNotFoundError):
-                shm.unlink()
             shm.close()
         return
 
@@ -134,8 +135,6 @@ def main() -> None:
     for shm in (data_shm, ref_shm):
         if shm is None:
             continue
-        with contextlib.suppress(FileNotFoundError):
-            shm.unlink()
         shm.close()
 
 
