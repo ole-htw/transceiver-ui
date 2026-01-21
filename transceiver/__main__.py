@@ -1203,6 +1203,13 @@ def _gen_rrc_tx_filename(filename: str) -> str:
     return str(path.with_name(f"{stem}_rrc{path.suffix}"))
 
 
+def _gen_repeat_tx_filename(filename: str) -> str:
+    """Return a repeated filename derived from *filename*."""
+    path = Path(filename)
+    stem = path.stem if path.suffix else path.name
+    return str(path.with_name(f"{stem}_repeat{path.suffix}"))
+
+
 def _gen_rx_filename(app) -> str:
     """Generate RX filename based on current UI settings."""
     freq = _try_parse_number_expr(app.rx_freq.get(), default=0.0)
@@ -2290,7 +2297,15 @@ class TransceiverUI(tk.Tk):
     def _rrc_active(self) -> bool:
         return self.rrc_enable.get() and self.wave_var.get().lower() == "zadoffchu"
 
+    def _get_repeat_count(self) -> int:
+        try:
+            return int(self.repeat_entry.get())
+        except Exception:
+            return 1
+
     def _tx_transmit_file(self) -> str:
+        if getattr(self, "_repeat_tx_file", None):
+            return self._repeat_tx_file
         if self._rrc_active():
             return self._filtered_tx_file or self.tx_file.get()
         return self.tx_file.get()
@@ -2359,11 +2374,19 @@ class TransceiverUI(tk.Tk):
         self.tx_file.delete(0, tk.END)
         if self._rrc_active():
             filtered_name = _gen_rrc_tx_filename(name)
-            self.tx_file.insert(0, filtered_name)
             self._filtered_tx_file = filtered_name
+            base_name = filtered_name
         else:
-            self.tx_file.insert(0, name)
             self._filtered_tx_file = None
+            base_name = name
+        repeats = self._get_repeat_count()
+        if repeats > 1:
+            repeat_name = _gen_repeat_tx_filename(base_name)
+            self._repeat_tx_file = repeat_name
+            self.tx_file.insert(0, repeat_name)
+        else:
+            self._repeat_tx_file = None
+            self.tx_file.insert(0, base_name)
         if previous != self.tx_file.get():
             self._reset_manual_xcorr_lags("TX-Datei geändert")
 
@@ -2429,11 +2452,17 @@ class TransceiverUI(tk.Tk):
         fs: float,
         filtered_data: np.ndarray | None = None,
         filtered_fs: float | None = None,
+        repeated_data: np.ndarray | None = None,
+        repeated_fs: float | None = None,
         symbol_rate: float | None = None,
         filtered_symbol_rate: float | None = None,
+        repeated_symbol_rate: float | None = None,
     ) -> None:
         """Render preview plots below the generation parameters."""
-        if filtered_data is not None:
+        if repeated_data is not None:
+            self.latest_data = repeated_data
+            self.latest_fs = repeated_fs if repeated_fs is not None else fs
+        elif filtered_data is not None:
             self.latest_data = filtered_data
             self.latest_fs = filtered_fs if filtered_fs is not None else fs
         else:
@@ -2444,7 +2473,7 @@ class TransceiverUI(tk.Tk):
             child.destroy()
         self.gen_canvases.clear()
 
-        if filtered_data is None:
+        if filtered_data is None and repeated_data is None:
             tab_frame = ttk.Frame(self.gen_plots_frame)
             tab_frame.grid(row=0, column=0, sticky="nsew")
             tab_frame.columnconfigure(0, weight=1)
@@ -2455,14 +2484,41 @@ class TransceiverUI(tk.Tk):
         notebook.grid(row=0, column=0, sticky="nsew")
         self.gen_plots_frame.columnconfigure(0, weight=1)
 
+        if filtered_data is None:
+            base_tab = ttk.Frame(notebook)
+            base_tab.columnconfigure(0, weight=1)
+            repeat_tab = ttk.Frame(notebook)
+            repeat_tab.columnconfigure(0, weight=1)
+
+            notebook.add(base_tab, text="Signal")
+            notebook.add(repeat_tab, text="Signal + Wiederholt")
+            notebook.select(repeat_tab)
+
+            self._render_gen_tab(base_tab, data, fs, symbol_rate=symbol_rate)
+            self._render_gen_tab(
+                repeat_tab,
+                repeated_data,
+                repeated_fs if repeated_fs is not None else fs,
+                symbol_rate=repeated_symbol_rate or symbol_rate,
+            )
+            return
+
         unfiltered_tab = ttk.Frame(notebook)
         unfiltered_tab.columnconfigure(0, weight=1)
         filtered_tab = ttk.Frame(notebook)
         filtered_tab.columnconfigure(0, weight=1)
+        repeat_tab = None
+        if repeated_data is not None:
+            repeat_tab = ttk.Frame(notebook)
+            repeat_tab.columnconfigure(0, weight=1)
 
         notebook.add(unfiltered_tab, text="Ungefiltert")
         notebook.add(filtered_tab, text="Gefiltert")
-        notebook.select(filtered_tab)
+        if repeat_tab is not None:
+            notebook.add(repeat_tab, text="Gefiltert + Wiederholt")
+            notebook.select(repeat_tab)
+        else:
+            notebook.select(filtered_tab)
 
         self._render_gen_tab(unfiltered_tab, data, fs, symbol_rate=symbol_rate)
         self._render_gen_tab(
@@ -2471,6 +2527,13 @@ class TransceiverUI(tk.Tk):
             filtered_fs if filtered_fs is not None else fs,
             symbol_rate=filtered_symbol_rate,
         )
+        if repeat_tab is not None:
+            self._render_gen_tab(
+                repeat_tab,
+                repeated_data,
+                repeated_fs if repeated_fs is not None else fs,
+                symbol_rate=repeated_symbol_rate or filtered_symbol_rate,
+            )
 
     def _select_rx_display_data(self, data: np.ndarray) -> tuple[np.ndarray, str]:
         """Return the RX data according to the channel view selection."""
@@ -3466,7 +3529,7 @@ class TransceiverUI(tk.Tk):
             oversampling = int(self.os_entry.get()) if self.os_entry.get() else 1
             if not self.rrc_enable.get():
                 oversampling = 1
-            repeats = int(self.repeat_entry.get()) if self.repeat_entry.get() else 1
+            repeats = self._get_repeat_count() if self.repeat_entry.get() else 1
             zeros_mode = self.zeros_var.get()
             amp = _parse_number_expr_or_error(self.amp_entry.get())
             waveform = self.wave_var.get()
@@ -3550,13 +3613,6 @@ class TransceiverUI(tk.Tk):
                     oversampling=1,
                 )
 
-            if repeats > 1:
-                data = np.tile(data, repeats)
-                if unfiltered_data is not None:
-                    unfiltered_data = np.tile(unfiltered_data, repeats)
-                if filtered_data is not None:
-                    filtered_data = np.tile(filtered_data, repeats)
-
             zeros = 0
             if zeros_mode == "same":
                 zeros = 1
@@ -3581,8 +3637,14 @@ class TransceiverUI(tk.Tk):
                     [signal, np.zeros(zeros_len, dtype=np.complex64)]
                 )
 
+            repeated_data = None
+            if repeats > 1:
+                repeat_source = filtered_data if filtered_data is not None else data
+                repeated_data = np.tile(repeat_source, repeats)
+
             unfiltered_data = _append_zeros(unfiltered_data)
             filtered_data = _append_zeros(filtered_data)
+            repeated_data = _append_zeros(repeated_data)
             if filtered_data is not None:
                 data = filtered_data
             else:
@@ -3598,10 +3660,31 @@ class TransceiverUI(tk.Tk):
                     self.file_entry.get()
                 )
                 self._filtered_tx_file = filtered_filename
-                self.tx_file.delete(0, tk.END)
-                self.tx_file.insert(0, filtered_filename)
                 save_interleaved(filtered_filename, filtered_data, amplitude=amp)
+
+            if repeats > 1 and repeated_data is not None:
+                repeat_base = (
+                    self._filtered_tx_file
+                    if filtered_data is not None
+                    else self.file_entry.get()
+                )
+                repeat_filename = _gen_repeat_tx_filename(repeat_base)
+                self._repeat_tx_file = repeat_filename
+                self.tx_file.delete(0, tk.END)
+                self.tx_file.insert(0, repeat_filename)
+                save_interleaved(repeat_filename, repeated_data, amplitude=amp)
                 self._reset_manual_xcorr_lags("TX-Datei geändert")
+            else:
+                self._repeat_tx_file = None
+                target_file = (
+                    self._filtered_tx_file
+                    if filtered_data is not None
+                    else self.file_entry.get()
+                )
+                self.tx_file.delete(0, tk.END)
+                self.tx_file.insert(0, target_file)
+                if filtered_data is not None:
+                    self._reset_manual_xcorr_lags("TX-Datei geändert")
 
             def _scale_for_display(signal: np.ndarray) -> np.ndarray:
                 max_abs = np.max(np.abs(signal)) if np.any(signal) else 1.0
@@ -3619,22 +3702,43 @@ class TransceiverUI(tk.Tk):
                 if filtered_data is not None
                 else None
             )
+            scaled_repeated = (
+                _scale_for_display(repeated_data)
+                if repeated_data is not None
+                else None
+            )
             symbol_rate = None
             filtered_symbol_rate = None
+            repeated_symbol_rate = None
             if waveform == "zadoffchu":
                 symbol_rate = fs
                 if oversampling > 1 and self.rrc_enable.get():
                     # Oversampling adds samples but does not change the DAC
                     # playback rate; keep the spectrum in Hz referenced to fs.
                     filtered_symbol_rate = fs / oversampling
+                    repeated_symbol_rate = filtered_symbol_rate
+                else:
+                    repeated_symbol_rate = symbol_rate
             if scaled_unfiltered is not None and scaled_filtered is not None:
                 self._display_gen_plots(
                     scaled_unfiltered,
                     fs,
                     scaled_filtered,
                     fs,
+                    repeated_data=scaled_repeated,
+                    repeated_fs=fs,
                     symbol_rate=symbol_rate,
                     filtered_symbol_rate=filtered_symbol_rate,
+                    repeated_symbol_rate=repeated_symbol_rate,
+                )
+            elif scaled_repeated is not None:
+                self._display_gen_plots(
+                    scaled_data,
+                    fs,
+                    repeated_data=scaled_repeated,
+                    repeated_fs=fs,
+                    symbol_rate=symbol_rate,
+                    repeated_symbol_rate=repeated_symbol_rate,
                 )
             else:
                 self._display_gen_plots(scaled_data, fs, symbol_rate=symbol_rate)
