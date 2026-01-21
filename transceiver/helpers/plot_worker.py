@@ -29,8 +29,7 @@ def _load_iq(
                 array = np.ndarray(
                     tuple(shape), dtype=np.dtype(dtype), buffer=shm.buf
                 )
-                with contextlib.suppress(Exception):
-                    resource_tracker.unregister(shm.name, "shared_memory")
+                plot_impl._maybe_untrack_shared_memory(shm.name)
                 return array, shm
             except (FileNotFoundError, OSError, TypeError, ValueError):
                 pass
