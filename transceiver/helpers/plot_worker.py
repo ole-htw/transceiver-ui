@@ -72,6 +72,18 @@ def _write_manual_state(path: str | None, manual_state: dict[str, int | None]) -
         pass
 
 
+def _install_qt_message_filter() -> None:
+    previous_handler = QtCore.qInstallMessageHandler(None)
+
+    def _handler(mode, context, message) -> None:
+        if "unique connections require a pointer to member function" in message:
+            return
+        if previous_handler is not None:
+            previous_handler(mode, context, message)
+
+    QtCore.qInstallMessageHandler(_handler)
+
+
 def _prepare_payload(payload: dict[str, object]) -> tuple[dict[str, object], dict[str, int | None]]:
     manual_lags = payload.get("manual_lags") or None
     if isinstance(manual_lags, dict):
@@ -87,6 +99,7 @@ def _prepare_payload(payload: dict[str, object]) -> tuple[dict[str, object], dic
 def worker_loop(conn, initial_payload: dict[str, object] | None = None) -> None:
     pg.setConfigOption("background", "w")
     pg.setConfigOption("foreground", "k")
+    _install_qt_message_filter()
     app = pg.mkQApp()
     win = pg.plot(show=False)
     plot_item = win.getPlotItem()
