@@ -2178,7 +2178,6 @@ def _plot_on_mpl(
         )
         ax.set_xlabel("Sample Index")
         ax.set_ylabel("Amplitude")
-        ax.legend()
     elif mode in ("Freq", "Freq Analysis"):
         spec = np.fft.fftshift(np.fft.fft(data))
         freqs = np.fft.fftshift(np.fft.fftfreq(len(data), d=1 / fs))
@@ -2258,30 +2257,6 @@ def _plot_on_mpl(
                 linestyle="",
                 color=mpl_colors["echo"],
             )
-        ax.legend(
-            handles=[
-                *compare_handles,
-                Line2D(
-                    [0],
-                    [0],
-                    marker="o",
-                    linestyle="",
-                    markerfacecolor=mpl_colors["los"],
-                    markeredgecolor=mpl_colors["los"],
-                    label="LOS",
-                ),
-                Line2D(
-                    [0],
-                    [0],
-                    marker="o",
-                    linestyle="",
-                    markerfacecolor=mpl_colors["echo"],
-                    markeredgecolor=mpl_colors["echo"],
-                    label="Echo",
-                ),
-            ],
-            loc="upper right",
-        )
         ax.set_xlabel("Lag")
         ax.set_ylabel("Magnitude")
     ax.set_title(title)
