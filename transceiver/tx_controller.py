@@ -653,6 +653,10 @@ class TxController:
             # TX-spezifische Settings bleiben pro chan
             radio.set_tx_frequency(params.freq, radio_chan_idx)
             radio.set_tx_gain(params.gain, radio_chan_idx)
+            if hasattr(radio, "get_tx_gain"):
+                actual_gain = float(radio.get_tx_gain(radio_chan_idx))
+                if abs(actual_gain - params.gain) > 1e-6:
+                    self._log(f"TX (Replay): gain coerced {params.gain} -> {actual_gain}\n")
             if params.antenna:
                 radio.set_tx_antenna(params.antenna, radio_chan_idx)
             if params.bandwidth:
