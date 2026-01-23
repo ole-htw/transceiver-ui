@@ -3130,13 +3130,15 @@ class TransceiverUI(ctk.CTk):
         stats_rows = _format_stats_rows(stats, include_bw_extras=False)
         stats_frame = ctk.CTkFrame(frame, fg_color="transparent")
         stats_frame.grid(row=len(modes), column=0, sticky="ew", pady=2)
-        stats_frame.columnconfigure(1, weight=1)
+        stats_frame.columnconfigure((1, 3), weight=1)
         for idx, (label, value) in enumerate(stats_rows):
+            row = idx // 2
+            col = (idx % 2) * 2
             ctk.CTkLabel(stats_frame, justify="left", anchor="w", text=f"{label}:").grid(
-                row=idx, column=0, sticky="w", padx=(0, 6)
+                row=row, column=col, sticky="w", padx=(0, 6)
             )
             ctk.CTkLabel(stats_frame, justify="left", anchor="w", text=value).grid(
-                row=idx, column=1, sticky="w"
+                row=row, column=col + 1, sticky="w", padx=(0, 12)
             )
 
     def _display_gen_plots(
