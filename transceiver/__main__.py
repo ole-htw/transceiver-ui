@@ -4166,7 +4166,6 @@ class TransceiverUI(tk.Tk):
                 freq=freq,
                 gain=gain,
                 chan=0,
-                log_callback=lambda msg: self._out_queue.put(msg),
             )
         finally:
             if not started:
