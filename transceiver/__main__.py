@@ -14,6 +14,7 @@ import json
 import math
 import contextlib
 import tempfile
+import os
 from multiprocessing import shared_memory, Pipe, Process, resource_tracker
 from pathlib import Path
 from datetime import datetime
@@ -130,6 +131,74 @@ class _QueueLogHandler(logging.Handler):
             self._output_queue.put(message)
         except Exception:
             pass
+
+
+class _FDCapture:
+    def __init__(self, output_queue: "queue.Queue[str]") -> None:
+        self._output_queue = output_queue
+        self._reader_thread: threading.Thread | None = None
+        self._reader: contextlib.AbstractContextManager | None = None
+        self._orig_stdout_fd: int | None = None
+        self._orig_stderr_fd: int | None = None
+
+    def __enter__(self) -> "_FDCapture":
+        if self._reader_thread is not None:
+            return self
+        self._orig_stdout_fd = os.dup(1)
+        self._orig_stderr_fd = os.dup(2)
+        read_fd, write_fd = os.pipe()
+        self._reader = os.fdopen(
+            read_fd, "r", encoding="utf-8", errors="replace", buffering=1
+        )
+        os.dup2(write_fd, 1)
+        os.dup2(write_fd, 2)
+        os.close(write_fd)
+        self._reader_thread = threading.Thread(
+            target=self._reader_loop, name="tx-fd-reader", daemon=True
+        )
+        self._reader_thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self._restore_fds()
+        return None
+
+    def _reader_loop(self) -> None:
+        try:
+            for line in self._reader:  # type: ignore[union-attr]
+                if line:
+                    self._output_queue.put(line)
+        except Exception:
+            pass
+        finally:
+            with contextlib.suppress(Exception):
+                if self._reader is not None:
+                    self._reader.close()
+
+    def _restore_fds(self) -> None:
+        if self._orig_stdout_fd is None and self._orig_stderr_fd is None:
+            return
+        with contextlib.suppress(Exception):
+            sys.stdout.flush()
+            sys.stderr.flush()
+        if self._orig_stdout_fd is not None:
+            with contextlib.suppress(Exception):
+                os.dup2(self._orig_stdout_fd, 1)
+            with contextlib.suppress(Exception):
+                os.close(self._orig_stdout_fd)
+            self._orig_stdout_fd = None
+        if self._orig_stderr_fd is not None:
+            with contextlib.suppress(Exception):
+                os.dup2(self._orig_stderr_fd, 2)
+            with contextlib.suppress(Exception):
+                os.close(self._orig_stderr_fd)
+            self._orig_stderr_fd = None
+        if self._reader is not None:
+            with contextlib.suppress(Exception):
+                self._reader.close()
+        if self._reader_thread is not None:
+            self._reader_thread.join(timeout=1.0)
+            self._reader_thread = None
 
 
 class RangeSlider(ttk.Frame):
@@ -1930,6 +1999,7 @@ class TransceiverUI(tk.Tk):
         self._last_tx_end = 0.0
         self._filtered_tx_file = None
         self._tx_controller = None
+        self._tx_output_capture: _FDCapture | None = None
         self._closing = False
         self._plot_worker_manager = _get_plot_worker_manager()
         self._plot_worker_manager.start()
@@ -1948,6 +2018,18 @@ class TransceiverUI(tk.Tk):
             self._apply_params(_STATE)
         self._last_saved_state = self._get_current_params()
         self.after(AUTOSAVE_INTERVAL * 1000, self._autosave_state)
+
+    def _start_tx_output_capture(self) -> None:
+        if self._tx_output_capture is not None:
+            return
+        self._tx_output_capture = _FDCapture(self._out_queue)
+        self._tx_output_capture.__enter__()
+
+    def _stop_tx_output_capture(self) -> None:
+        if self._tx_output_capture is None:
+            return
+        self._tx_output_capture.__exit__(None, None, None)
+        self._tx_output_capture = None
 
     def create_widgets(self):
         self.rowconfigure(0, weight=1)
@@ -4046,15 +4128,21 @@ class TransceiverUI(tk.Tk):
             self.tx_stop.config(state="normal")
         if hasattr(self, "tx_retrans"):
             self.tx_retrans.config(state="normal")
-        started = controller.start_tx(
-            self._tx_transmit_file(),
-            repeat=True,
-            rate=rate,
-            freq=freq,
-            gain=gain,
-            chan=0,
-            log_callback=lambda msg: self._out_queue.put(msg),
-        )
+        self._start_tx_output_capture()
+        started = False
+        try:
+            started = controller.start_tx(
+                self._tx_transmit_file(),
+                repeat=True,
+                rate=rate,
+                freq=freq,
+                gain=gain,
+                chan=0,
+                log_callback=lambda msg: self._out_queue.put(msg),
+            )
+        finally:
+            if not started:
+                self._stop_tx_output_capture()
         if not started:
             self._out_queue.put("TX already running; start request ignored.\n")
             self._process_queue()
@@ -4071,6 +4159,7 @@ class TransceiverUI(tk.Tk):
             return
         if controller.last_error:
             self._out_queue.put(f"TX error: {controller.last_error}\n")
+        self._stop_tx_output_capture()
         self._cmd_running = False
         self._tx_running = False
         self._last_tx_end = controller.last_end_monotonic or time.monotonic()
@@ -4084,6 +4173,7 @@ class TransceiverUI(tk.Tk):
             self._tx_running = False
             self._cmd_running = False
             self._last_tx_end = time.monotonic()
+            self._stop_tx_output_capture()
             self._ui(self._reset_tx_buttons)
             return
         stopped = controller.stop_tx(timeout=5.0)
@@ -4093,6 +4183,7 @@ class TransceiverUI(tk.Tk):
         self._cmd_running = controller.is_running
         self._last_tx_end = controller.last_end_monotonic or time.monotonic()
         if not controller.is_running:
+            self._stop_tx_output_capture()
             self._ui(self._reset_tx_buttons)
 
     def retransmit(self) -> None:

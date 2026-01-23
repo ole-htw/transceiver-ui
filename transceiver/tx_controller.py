@@ -151,6 +151,7 @@ class TxController:
                 raise ValueError("TX file contains no samples.")
 
             args = _ensure_uhd_frame_sizes(self._args)
+            # UHD logs are emitted natively to stdout/stderr, not via Python logging.
             usrp = uhd.usrp.MultiUSRP(args)
             usrp.set_tx_rate(params.rate, params.chan)
             usrp.set_tx_freq(params.freq, params.chan)
