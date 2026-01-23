@@ -1807,6 +1807,8 @@ def _plot_on_pg(
             symbolBrush=pg.mkBrush(echo_color),
             symbolPen=pg.mkPen(echo_color),
         )
+        los_legend.setData([0], [0])
+        echo_legend.setData([0], [0])
         legend.addItem(los_legend, "LOS")
         legend.addItem(echo_legend, "Echo")
 
