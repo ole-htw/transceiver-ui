@@ -1737,11 +1737,23 @@ def _plot_on_pg(
 
         legend = plot.addLegend()
         legend.anchor(itemPos=(1, 0), parentPos=(1, 0), offset=(-10, 10))
+        los_color = pg.mkColor("r")
+        echo_color = pg.mkColor("g")
         los_legend = pg.PlotDataItem(
-            [], [], pen=None, symbol="o", symbolBrush="r", symbolPen="r"
+            [],
+            [],
+            pen=None,
+            symbol="o",
+            symbolBrush=pg.mkBrush(los_color),
+            symbolPen=pg.mkPen(los_color),
         )
         echo_legend = pg.PlotDataItem(
-            [], [], pen=None, symbol="o", symbolBrush="g", symbolPen="g"
+            [],
+            [],
+            pen=None,
+            symbol="o",
+            symbolBrush=pg.mkBrush(echo_color),
+            symbolPen=pg.mkPen(echo_color),
         )
         legend.addItem(los_legend, "LOS")
         legend.addItem(echo_legend, "Echo")
