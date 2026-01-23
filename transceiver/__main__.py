@@ -385,6 +385,8 @@ class RangeSlider(ctk.CTkFrame):
         self.canvas.delete("signal")
         if self.data.size:
             y = np.asarray(self.data)
+            if np.iscomplexobj(y):
+                y = np.abs(y)
             step = max(1, len(y) // self.width)
             y = y[::step]
             max_val = float(np.max(np.abs(y))) if y.size else 0.0
