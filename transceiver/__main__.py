@@ -3671,11 +3671,11 @@ class TransceiverUI(ctk.CTk):
 
     def _reset_tx_buttons(self) -> None:
         if hasattr(self, "tx_stop"):
-            self.tx_stop.config(state="disabled")
+            self.tx_stop.configure(state="disabled")
         if hasattr(self, "tx_button"):
-            self.tx_button.config(state="normal")
+            self.tx_button.configure(state="normal")
         if hasattr(self, "tx_retrans"):
-            self.tx_retrans.config(state="disabled")
+            self.tx_retrans.configure(state="disabled")
 
     def _run_rx_cmd(
         self, cmd: list[str], out_file: str, channels: int, rate: float
@@ -3718,9 +3718,9 @@ class TransceiverUI(ctk.CTk):
 
     def _reset_rx_buttons(self) -> None:
         if hasattr(self, "rx_stop"):
-            self.rx_stop.config(state="disabled")
+            self.rx_stop.configure(state="disabled")
         if hasattr(self, "rx_button"):
-            self.rx_button.config(state="normal")
+            self.rx_button.configure(state="normal")
 
     def _set_manual_xcorr_lag(self, kind: str, lag_value: float) -> None:
         """Store manual lag selection and refresh LOS/echo stats."""
@@ -4421,11 +4421,11 @@ class TransceiverUI(ctk.CTk):
         self._cmd_running = True
         self._tx_running = True
         if hasattr(self, "tx_button"):
-            self.tx_button.config(state="disabled")
+            self.tx_button.configure(state="disabled")
         if hasattr(self, "tx_stop"):
-            self.tx_stop.config(state="normal")
+            self.tx_stop.configure(state="normal")
         if hasattr(self, "tx_retrans"):
-            self.tx_retrans.config(state="normal")
+            self.tx_retrans.configure(state="normal")
         self._start_tx_output_capture()
         started = False
         try:
@@ -4498,9 +4498,9 @@ class TransceiverUI(ctk.CTk):
             except Exception:
                 pass
         if hasattr(self, "rx_stop"):
-            self.rx_stop.config(state="disabled")
+            self.rx_stop.configure(state="disabled")
         if hasattr(self, "rx_button"):
-            self.rx_button.config(state="normal")
+            self.rx_button.configure(state="normal")
 
     def receive(self):
         out_file = self.rx_file.get()
@@ -4532,9 +4532,9 @@ class TransceiverUI(ctk.CTk):
             cmd += ["--channels", "0", "1"]
         self._cmd_running = True
         if hasattr(self, "rx_stop"):
-            self.rx_stop.config(state="normal")
+            self.rx_stop.configure(state="normal")
         if hasattr(self, "rx_button"):
-            self.rx_button.config(state="disabled")
+            self.rx_button.configure(state="disabled")
         threading.Thread(
             target=self._run_rx_cmd,
             args=(cmd, out_file, channels, rate),
