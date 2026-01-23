@@ -2569,8 +2569,9 @@ class TransceiverUI(ctk.CTk):
             scroll_container, orientation="vertical", command=self.gen_canvas.yview
         )
         self.gen_scroll.grid(row=0, column=1, sticky="ns")
-        self.gen_canvas.configure(yscrollcommand=self.gen_scroll.set)
-        self._gen_scroll_active = True
+        self.gen_scroll.grid_remove()
+        self.gen_canvas.configure(yscrollcommand=None)
+        self._gen_scroll_active = False
 
         # enable mouse wheel scrolling
         self.gen_canvas.bind("<Enter>", self._bind_gen_mousewheel)
@@ -3716,6 +3717,11 @@ class TransceiverUI(ctk.CTk):
             return
         bbox = self.gen_canvas.bbox("all")
         if not bbox:
+            if self.gen_scroll.winfo_ismapped():
+                self.gen_scroll.grid_remove()
+            self.gen_canvas.configure(yscrollcommand=None)
+            self.gen_canvas.yview_moveto(0)
+            self._gen_scroll_active = False
             return
         content_height = bbox[3] - bbox[1]
         canvas_height = self.gen_canvas.winfo_height()
