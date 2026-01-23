@@ -987,6 +987,10 @@ class SuggestEntry(ctk.CTkFrame):
     def _render(self) -> None:
         for w in self.sugg_frame.winfo_children():
             w.destroy()
+        if not self.suggestions:
+            self.sugg_frame.grid_remove()
+            return
+        self.sugg_frame.grid()
         for val in self.suggestions:
             frame = ctk.CTkFrame(self.sugg_frame, corner_radius=6)
             lbl = ctk.CTkLabel(frame, text=val)
