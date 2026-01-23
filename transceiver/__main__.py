@@ -289,6 +289,12 @@ def _apply_mpl_gray_style(ax, color: str = "#9E9E9E") -> None:
         legend.get_frame().set_facecolor("none")
 
 
+def _apply_mpl_preview_layout(ax) -> None:
+    """Ensure preview plots reserve enough space for axis labels."""
+    fig = ax.figure
+    fig.subplots_adjust(left=0.18, right=0.98, bottom=0.22, top=0.9)
+
+
 def _make_bordered_group(
     parent: tk.Misc,
     title: str,
@@ -2253,6 +2259,7 @@ def _plot_on_mpl(
             ax.set_title("No TX data")
             ax.grid(True)
             _apply_mpl_gray_style(ax)
+            _apply_mpl_preview_layout(ax)
             return
         data, ref_data, step_r = _reduce_pair(data, ref_data)
         if crosscorr_compare is not None and crosscorr_compare.size:
@@ -2316,6 +2323,7 @@ def _plot_on_mpl(
     ax.set_title(title)
     ax.grid(True)
     _apply_mpl_gray_style(ax)
+    _apply_mpl_preview_layout(ax)
 
 
 class TransceiverUI(ctk.CTk):
