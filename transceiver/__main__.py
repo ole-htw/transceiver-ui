@@ -29,6 +29,14 @@ from .helpers.tx_generator import generate_waveform, rrc_coeffs
 from .helpers.iq_utils import save_interleaved
 from .helpers import rx_convert
 from .helpers import doa_esprit
+from .helpers.correlation_utils import (
+    apply_manual_lags as _apply_manual_lags,
+    autocorr_fft as _autocorr_fft,
+    find_los_echo as _find_los_echo,
+    lag_overlap as _lag_overlap,
+    xcorr_fft as _xcorr_fft,
+)
+from .helpers.path_cancellation import apply_path_cancellation
 from .helpers.number_parser import parse_number_expr
 from .tx_controller import TxController
 
@@ -1071,26 +1079,6 @@ def _add_draggable_markers(
     return los_marker, echo_marker
 
 
-def _apply_manual_lags(
-    lags: np.ndarray,
-    los_idx: int | None,
-    echo_idx: int | None,
-    manual_lags: dict[str, int | None] | None,
-) -> tuple[int | None, int | None]:
-    """Return marker indices adjusted by manual lag selections."""
-    if manual_lags is None or lags.size == 0:
-        return los_idx, echo_idx
-    manual_los = manual_lags.get("los")
-    manual_echo = manual_lags.get("echo")
-    min_lag = float(lags.min())
-    max_lag = float(lags.max())
-    if manual_los is not None and min_lag <= manual_los <= max_lag:
-        los_idx = int(np.abs(lags - manual_los).argmin())
-    if manual_echo is not None and min_lag <= manual_echo <= max_lag:
-        echo_idx = int(np.abs(lags - manual_echo).argmin())
-    return los_idx, echo_idx
-
-
 def _echo_delay_samples(
     lags: np.ndarray, los_idx: int | None, echo_idx: int | None
 ) -> int | None:
@@ -1098,52 +1086,6 @@ def _echo_delay_samples(
     if los_idx is None or echo_idx is None:
         return None
     return int(abs(lags[echo_idx] - lags[los_idx]))
-
-
-def _xcorr_fft(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Return the full cross-correlation of *a* and *b* using FFT."""
-    n = len(a) + len(b) - 1
-    nfft = 1 << (n - 1).bit_length()
-    A = np.fft.fft(a, nfft)
-    B = np.fft.fft(b, nfft)
-    cc = np.fft.ifft(A * np.conj(B))
-    return np.concatenate((cc[-(len(b) - 1) :], cc[: len(a)]))
-
-
-def _autocorr_fft(x: np.ndarray) -> np.ndarray:
-    """Return the full autocorrelation of *x* using FFT."""
-    return _xcorr_fft(x, x)
-
-
-def _find_los_echo(cc: np.ndarray) -> tuple[int | None, int | None]:
-    """Return indices of the LOS peak and the first echo in ``cc``.
-
-    Parameters
-    ----------
-    cc : np.ndarray
-        Complex cross-correlation data.
-
-    Returns
-    -------
-    tuple[int | None, int | None]
-        Index of the LOS peak and the first echo. ``None`` if not found.
-    """
-
-    mag = np.abs(cc)
-    if mag.size == 0:
-        return None, None
-
-    los = int(np.argmax(mag))
-    echo = None
-    for i in range(los + 1, len(mag) - 1):
-        if mag[i] >= mag[i - 1] and mag[i] >= mag[i + 1]:
-            echo = int(i)
-            break
-
-    if echo is None and los + 1 < len(mag):
-        echo = int(np.argmax(mag[los + 1 :]) + los + 1)
-
-    return los, echo
 
 
 def _estimate_los_lag(
@@ -1164,21 +1106,6 @@ def _estimate_los_lag(
     if los_idx is None:
         return None
     return int(lags[los_idx])
-
-
-def _lag_overlap(
-    data_len: int, ref_len: int, lag: int
-) -> tuple[int, int, int]:
-    """Return (data_start, ref_start, length) for a given lag."""
-    if lag >= 0:
-        r_start = lag
-        s_start = 0
-        length = min(data_len - r_start, ref_len)
-    else:
-        r_start = 0
-        s_start = -lag
-        length = min(data_len, ref_len - s_start)
-    return r_start, s_start, length
 
 
 def _format_complex(value: complex | np.complexfloating | None) -> str:
@@ -2743,90 +2670,9 @@ class TransceiverUI(tk.Tk):
     def _apply_path_cancellation(
         self, data: np.ndarray, ref_data: np.ndarray
     ) -> tuple[np.ndarray, dict[str, object]]:
-        info: dict[str, object] = {
-            "applied": False,
-            "k0": None,
-            "a0": None,
-            "k1": None,
-            "corr2_peak": None,
-            "delta_k": None,
-            "warning": None,
-        }
-        if data.size == 0 or ref_data.size == 0:
-            return data, info
-
-        def _append_warning(message: str) -> None:
-            if info["warning"]:
-                info["warning"] = f"{info['warning']} {message}"
-            else:
-                info["warning"] = message
-
-        n = min(len(data), len(ref_data))
-        if n == 0:
-            return data, info
-        cc = _xcorr_fft(data[:n], ref_data[:n])
-        lags = np.arange(-n + 1, n)
-        base_los_idx, _ = _find_los_echo(cc)
-        los_idx, _ = _apply_manual_lags(
-            lags, base_los_idx, None, self.manual_xcorr_lags
+        return apply_path_cancellation(
+            data, ref_data, manual_lags=self.manual_xcorr_lags
         )
-        if los_idx is None:
-            _append_warning("Pfad-Cancellation nicht möglich (kein LOS-Peak).")
-            return data, info
-        k0 = int(lags[los_idx])
-        r_start, s_start, length = _lag_overlap(len(data), len(ref_data), k0)
-        if length <= 0:
-            _append_warning(
-                "Pfad-Cancellation nicht möglich (Segment außerhalb Bounds)."
-            )
-            return data, info
-        if length < len(ref_data):
-            _append_warning(
-                "Pfad-Cancellation: Fenster gekürzt (Segment außerhalb Bounds)."
-            )
-        r_seg = data[r_start : r_start + length]
-        s_seg = ref_data[s_start : s_start + length]
-        denom = np.vdot(s_seg, s_seg)
-        if denom == 0:
-            _append_warning(
-                "Pfad-Cancellation nicht möglich (Referenz ohne Energie)."
-            )
-            return data, info
-        coeff = np.vdot(s_seg, r_seg) / (denom + 1e-12)
-        if abs(coeff) < 1e-6:
-            _append_warning("Pfad-Cancellation: a0 ist sehr klein.")
-        residual = data.copy()
-        residual[r_start : r_start + length] = r_seg - coeff * s_seg
-
-        n2 = min(len(residual), len(ref_data))
-        if n2 == 0:
-            return data, info
-        cc2 = _xcorr_fft(residual[:n2], ref_data[:n2])
-        mag2 = np.abs(cc2)
-        k1 = None
-        corr2_peak = None
-        if mag2.size:
-            lags2 = np.arange(-n2 + 1, n2)
-            k1_idx = int(np.argmax(mag2))
-            k1 = int(lags2[k1_idx])
-            corr2_peak = float(mag2[k1_idx])
-        base_peak = float(np.max(np.abs(cc))) if cc.size else 0.0
-        if corr2_peak is None or corr2_peak < 0.1 * base_peak:
-            _append_warning("Echo nach Pfad-Cancellation nicht detektierbar.")
-            k1 = None
-
-        delta_k = k1 - k0 if k1 is not None else None
-        info.update(
-            {
-                "applied": True,
-                "k0": k0,
-                "a0": coeff,
-                "k1": k1,
-                "corr2_peak": corr2_peak,
-                "delta_k": delta_k,
-            }
-        )
-        return residual, info
 
     def _path_cancellation_note(
         self, info: dict[str, object], ref_data: np.ndarray
