@@ -1647,6 +1647,7 @@ def _spawn_plot_worker(
     title: str,
     ref_data: np.ndarray | None = None,
     manual_lags: dict[str, int | None] | None = None,
+    crosscorr_compare: np.ndarray | None = None,
     fullscreen: bool = False,
 ) -> str | None:
     """Launch the PyQtGraph plot worker in a separate process."""
@@ -1658,11 +1659,16 @@ def _spawn_plot_worker(
     data_contiguous = np.ascontiguousarray(data)
     reduction_step = 1
     ref_contiguous = None
+    compare_contiguous = None
     if ref_data is not None and np.size(ref_data) != 0:
         ref_contiguous = np.ascontiguousarray(ref_data)
         data_contiguous, ref_contiguous, reduction_step = _reduce_pair(
             data_contiguous, ref_contiguous
         )
+        if crosscorr_compare is not None and np.size(crosscorr_compare) != 0:
+            compare_contiguous = np.ascontiguousarray(crosscorr_compare)[
+                ::reduction_step
+            ]
     else:
         data_contiguous, reduction_step = _reduce_data(data_contiguous)
     fs = float(fs) / reduction_step
@@ -1728,6 +1734,36 @@ def _spawn_plot_worker(
             payload["ref_dtype"] = ref_shm_dtype
         if ref_path is not None:
             payload["ref_file"] = str(ref_path)
+    if compare_contiguous is not None and np.size(compare_contiguous) != 0:
+        compare_path = None
+        compare_shm_name = None
+        compare_shm_shape = None
+        compare_shm_dtype = None
+        if compare_contiguous.nbytes >= SHM_SIZE_THRESHOLD_BYTES:
+            compare_path = temp_dir / "compare.npy"
+            np.save(compare_path, compare_contiguous)
+        else:
+            try:
+                compare_shm = _create_shared_memory(compare_contiguous.nbytes)
+                compare_view = np.ndarray(
+                    compare_contiguous.shape,
+                    dtype=compare_contiguous.dtype,
+                    buffer=compare_shm.buf,
+                )
+                compare_view[...] = compare_contiguous
+                compare_shm_name = compare_shm.name
+                compare_shm_shape = list(compare_contiguous.shape)
+                compare_shm_dtype = compare_contiguous.dtype.str
+                compare_shm.close()
+            except (BufferError, FileNotFoundError, OSError, ValueError):
+                compare_path = temp_dir / "compare.npy"
+                np.save(compare_path, compare_contiguous)
+        if compare_shm_name:
+            payload["compare_shm_name"] = compare_shm_name
+            payload["compare_shape"] = compare_shm_shape
+            payload["compare_dtype"] = compare_shm_dtype
+        if compare_path is not None:
+            payload["compare_file"] = str(compare_path)
     output_path = None
     if manual_lags is not None:
         payload["manual_lags"] = {
@@ -1747,6 +1783,7 @@ def _plot_on_pg(
     mode: str,
     title: str,
     ref_data: np.ndarray | None = None,
+    crosscorr_compare: np.ndarray | None = None,
     manual_lags: dict[str, int | None] | None = None,
     on_los_drag=None,
     on_echo_drag=None,
@@ -1809,11 +1846,31 @@ def _plot_on_pg(
         if reduce_data:
             data, ref_data, step_r = _reduce_pair(data, ref_data)
             fs /= step_r
+            if crosscorr_compare is not None and crosscorr_compare.size:
+                crosscorr_compare = crosscorr_compare[::step_r]
         n = min(len(data), len(ref_data))
         cc = _xcorr_fft(data[:n], ref_data[:n])
         lags = np.arange(-n + 1, n) * step_r
         mag = np.abs(cc)
-        plot.plot(lags, mag, pen="b")
+        legend = plot.addLegend()
+        main_label = (
+            "mit Pfad-Cancellation"
+            if crosscorr_compare is not None and crosscorr_compare.size
+            else "Kreuzkorrelation"
+        )
+        plot.plot(lags, mag, pen="b", name=main_label)
+        if crosscorr_compare is not None and crosscorr_compare.size:
+            n2 = min(len(crosscorr_compare), len(ref_data))
+            cc2 = _xcorr_fft(crosscorr_compare[:n2], ref_data[:n2])
+            lags2 = np.arange(-n2 + 1, n2) * step_r
+            plot.plot(
+                lags2,
+                np.abs(cc2),
+                pen=pg.mkPen("m", style=QtCore.Qt.DashLine),
+                name="ohne Pfad-Cancellation",
+            )
+        if legend is None:
+            legend = plot.addLegend()
         base_los_idx, base_echo_idx = _find_los_echo(cc)
         los_idx, echo_idx = _apply_manual_lags(
             lags, base_los_idx, base_echo_idx, manual_lags
@@ -1852,7 +1909,6 @@ def _plot_on_pg(
         )
         _update_echo_text()
 
-        legend = plot.addLegend()
         legend.anchor(itemPos=(1, 0), parentPos=(1, 0), offset=(-10, 10))
         los_color = pg.mkColor("r")
         echo_color = pg.mkColor("g")
@@ -1935,6 +1991,7 @@ def _plot_on_mpl(
     mode: str,
     title: str,
     ref_data: np.ndarray | None = None,
+    crosscorr_compare: np.ndarray | None = None,
     manual_lags: dict[str, int | None] | None = None,
 ) -> None:
     """Helper to draw a small matplotlib preview plot."""
@@ -1976,12 +2033,31 @@ def _plot_on_mpl(
             ax.grid(True)
             return
         data, ref_data, step_r = _reduce_pair(data, ref_data)
+        if crosscorr_compare is not None and crosscorr_compare.size:
+            crosscorr_compare = crosscorr_compare[::step_r]
         fs /= step_r
         n = min(len(data), len(ref_data))
         cc = _xcorr_fft(data[:n], ref_data[:n])
         lags = np.arange(-n + 1, n) * step_r
         mag = np.abs(cc)
         ax.plot(lags, mag, "b")
+        compare_handles: list[Line2D] = []
+        if crosscorr_compare is not None and crosscorr_compare.size:
+            n2 = min(len(crosscorr_compare), len(ref_data))
+            cc2 = _xcorr_fft(crosscorr_compare[:n2], ref_data[:n2])
+            lags2 = np.arange(-n2 + 1, n2) * step_r
+            mag2 = np.abs(cc2)
+            ax.plot(lags2, mag2, "m--", alpha=0.8)
+            compare_handles = [
+                Line2D([0], [0], color="b", label="mit Pfad-Cancellation"),
+                Line2D(
+                    [0],
+                    [0],
+                    color="m",
+                    linestyle="--",
+                    label="ohne Pfad-Cancellation",
+                ),
+            ]
         los_idx, echo_idx = _find_los_echo(cc)
         los_idx, echo_idx = _apply_manual_lags(
             lags, los_idx, echo_idx, manual_lags
@@ -1992,6 +2068,7 @@ def _plot_on_mpl(
             ax.plot(lags[echo_idx], mag[echo_idx], "go")
         ax.legend(
             handles=[
+                *compare_handles,
                 Line2D(
                     [0],
                     [0],
@@ -3017,8 +3094,10 @@ class TransceiverUI(ctk.CTk):
 
         rx_data = data
         rx_fs = fs
+        rx_data_uncanceled = rx_data
         data, fac = self._apply_inverse_rrc(data)
         fs *= fac
+        data_uncanceled = data
 
         def _load_tx_samples(path: str) -> np.ndarray:
             raw = np.fromfile(path, dtype=np.int16)
@@ -3174,6 +3253,7 @@ class TransceiverUI(ctk.CTk):
             aoa_plot_series: np.ndarray | None,
             path_note: str | None,
             path_cancel_info: dict[str, object] | None,
+            crosscorr_compare: np.ndarray | None,
         ) -> None:
             target_frame.columnconfigure(0, weight=1)
             for idx, mode in enumerate(modes):
@@ -3192,6 +3272,7 @@ class TransceiverUI(ctk.CTk):
                     mode,
                     crosscorr_title,
                     ref,
+                    crosscorr_compare if mode == "Crosscorr" else None,
                     manual_lags=self.manual_xcorr_lags,
                 )
                 canvas = FigureCanvasTkAgg(fig, master=target_frame)
@@ -3205,8 +3286,11 @@ class TransceiverUI(ctk.CTk):
                         d=plot_data,
                         s=plot_fs,
                         r=ref,
+                        c=crosscorr_compare,
                         t=crosscorr_title: (
-                            self._show_fullscreen(d, s, m, t, ref_data=r)
+                            self._show_fullscreen(
+                                d, s, m, t, ref_data=r, crosscorr_compare=c
+                            )
                         )
                     )
                 else:
@@ -3293,6 +3377,7 @@ class TransceiverUI(ctk.CTk):
                 ),
                 rx_cancel_note,
                 rx_cancel_info if rx_cancel_info and rx_cancel_info.get("applied") else None,
+                rx_data_uncanceled if self.rx_path_cancel_enable.get() else None,
             )
             _render_rx_preview(
                 filtered_tab,
@@ -3304,6 +3389,7 @@ class TransceiverUI(ctk.CTk):
                 aoa_series,
                 cancel_note,
                 cancel_info if cancel_info and cancel_info.get("applied") else None,
+                data_uncanceled if self.rx_path_cancel_enable.get() else None,
             )
         else:
             _render_rx_preview(
@@ -3316,6 +3402,7 @@ class TransceiverUI(ctk.CTk):
                 aoa_series,
                 cancel_note,
                 cancel_info if cancel_info and cancel_info.get("applied") else None,
+                data_uncanceled if self.rx_path_cancel_enable.get() else None,
             )
 
         if hasattr(self, "rx_aoa_label"):
@@ -3711,6 +3798,7 @@ class TransceiverUI(ctk.CTk):
         mode: str,
         title: str,
         ref_data: np.ndarray | None = None,
+        crosscorr_compare: np.ndarray | None = None,
     ) -> None:
         if data is None:
             return
@@ -3723,6 +3811,7 @@ class TransceiverUI(ctk.CTk):
             title,
             ref_data=ref_data if ref_data is not None else getattr(self, "tx_data", None),
             manual_lags=self.manual_xcorr_lags,
+            crosscorr_compare=crosscorr_compare,
             fullscreen=True,
         )
         if mode == "Crosscorr":
