@@ -203,6 +203,23 @@ def _resolve_theme_color(color: str | tuple[str, str]) -> str:
     return color
 
 
+def _resolve_ctk_frame_bg(widget: tk.Misc) -> str:
+    parent = widget
+    while isinstance(parent, ctk.CTkBaseClass):
+        resolved = _resolve_theme_color(parent.cget("fg_color"))
+        if resolved != "transparent":
+            return resolved
+        parent = parent.master
+    return _resolve_theme_color(ctk.ThemeManager.theme["CTkFrame"]["fg_color"])
+
+
+def _apply_mpl_transparent(fig: Figure, ax) -> None:
+    fig.patch.set_facecolor("none")
+    fig.patch.set_alpha(0)
+    ax.set_facecolor("none")
+    ax.patch.set_alpha(0)
+
+
 def _make_bordered_group(
     parent: tk.Misc,
     title: str,
@@ -3030,10 +3047,12 @@ class TransceiverUI(ctk.CTk):
         for idx, mode in enumerate(modes):
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
+            _apply_mpl_transparent(fig, ax)
             _plot_on_mpl(ax, data, fs, mode, f"TX {mode}", ref_data=corr_ref)
             canvas = FigureCanvasTkAgg(fig, master=frame)
             canvas.draw()
             widget = canvas.get_tk_widget()
+            widget.configure(bg=_resolve_ctk_frame_bg(frame))
             widget.grid(row=idx, column=0, sticky="n", pady=2)
             widget.bind(
                 "<Button-1>",
@@ -3339,6 +3358,7 @@ class TransceiverUI(ctk.CTk):
             for idx, mode in enumerate(modes):
                 fig = Figure(figsize=(5, 2), dpi=100)
                 ax = fig.add_subplot(111)
+                _apply_mpl_transparent(fig, ax)
                 ref = plot_ref_data if mode == "Crosscorr" else None
                 crosscorr_title = (
                     f"RX {mode}{title_suffix} ({plot_ref_label})"
@@ -3358,6 +3378,7 @@ class TransceiverUI(ctk.CTk):
                 canvas = FigureCanvasTkAgg(fig, master=target_frame)
                 canvas.draw()
                 widget = canvas.get_tk_widget()
+                widget.configure(bg=_resolve_ctk_frame_bg(target_frame))
                 widget.grid(row=idx, column=0, sticky="n", pady=2)
                 if mode == "Crosscorr":
                     handler = (
@@ -3403,6 +3424,7 @@ class TransceiverUI(ctk.CTk):
             if self.rx_view.get() == "AoA (ESPRIT)":
                 fig = Figure(figsize=(5, 2), dpi=100)
                 ax = fig.add_subplot(111)
+                _apply_mpl_transparent(fig, ax)
                 if (
                     aoa_plot_time is None
                     or aoa_plot_series is None
@@ -3427,6 +3449,7 @@ class TransceiverUI(ctk.CTk):
                 canvas = FigureCanvasTkAgg(fig, master=target_frame)
                 canvas.draw()
                 widget = canvas.get_tk_widget()
+                widget.configure(bg=_resolve_ctk_frame_bg(target_frame))
                 widget.grid(row=len(modes) + 1, column=0, sticky="n", pady=2)
                 self.rx_canvases.append(canvas)
 
