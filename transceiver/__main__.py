@@ -1133,6 +1133,27 @@ def _estimate_los_lag(
     return int(lags[los_idx])
 
 
+def _lag_overlap(
+    data_len: int, ref_len: int, lag: int
+) -> tuple[int, int, int]:
+    """Return (data_start, ref_start, length) for a given lag."""
+    if lag >= 0:
+        r_start = lag
+        s_start = 0
+        length = min(data_len - r_start, ref_len)
+    else:
+        r_start = 0
+        s_start = -lag
+        length = min(data_len, ref_len - s_start)
+    return r_start, s_start, length
+
+
+def _format_complex(value: complex | np.complexfloating | None) -> str:
+    if value is None:
+        return "--"
+    return f"{value.real:+.4g}{value.imag:+.4g}j"
+
+
 def _subtract_reference_at_lag(
     data: np.ndarray,
     ref_data: np.ndarray,
@@ -1141,16 +1162,7 @@ def _subtract_reference_at_lag(
     """Return *data* with a scaled reference path removed at *lag*."""
     if data.size == 0 or ref_data.size == 0:
         return data, None
-    n = len(data)
-    m = len(ref_data)
-    if lag >= 0:
-        r_start = lag
-        s_start = 0
-        length = min(n - r_start, m)
-    else:
-        r_start = 0
-        s_start = -lag
-        length = min(n, m - s_start)
+    r_start, s_start, length = _lag_overlap(len(data), len(ref_data), lag)
     if length <= 0:
         return data, None
     r_seg = data[r_start : r_start + length]
@@ -1429,6 +1441,7 @@ def _calc_stats(
     manual_lags: dict[str, int | None] | None = None,
     symbol_rate: float | None = None,
     xcorr_reduce: bool = False,
+    path_cancel_info: dict[str, object] | None = None,
 ) -> dict:
     """Return basic signal statistics for display.
 
@@ -1475,6 +1488,13 @@ def _calc_stats(
         if symbol_rate is not None and symbol_rate > 0:
             stats["bw_rs"] = stats["bw"] / symbol_rate
 
+    if path_cancel_info is not None:
+        if (
+            path_cancel_info.get("k0") is not None
+            and path_cancel_info.get("k1") is not None
+        ):
+            stats["echo_delay"] = path_cancel_info.get("delta_k")
+        return stats
     if ref_data is not None and ref_data.size and data.size:
         xcorr_data = data
         xcorr_ref = ref_data
@@ -2032,6 +2052,8 @@ class TransceiverUI(tk.Tk):
         self._plot_worker_manager.start()
         self._xcorr_manual_file: Path | None = None
         self._xcorr_polling = False
+        self._last_path_cancel_log: tuple[object, ...] | None = None
+        self._last_path_cancel_info: dict[str, object] | None = None
         self.create_widgets()
         try:
             self.state("zoomed")
@@ -2688,16 +2710,89 @@ class TransceiverUI(tk.Tk):
     def _apply_path_cancellation(
         self, data: np.ndarray, ref_data: np.ndarray
     ) -> tuple[np.ndarray, dict[str, object]]:
-        info: dict[str, object] = {"applied": False, "lag": None, "coeff": None}
+        info: dict[str, object] = {
+            "applied": False,
+            "k0": None,
+            "a0": None,
+            "k1": None,
+            "corr2_peak": None,
+            "delta_k": None,
+            "warning": None,
+        }
         if data.size == 0 or ref_data.size == 0:
             return data, info
-        lag = _estimate_los_lag(data, ref_data, self.manual_xcorr_lags)
-        if lag is None:
+
+        def _append_warning(message: str) -> None:
+            if info["warning"]:
+                info["warning"] = f"{info['warning']} {message}"
+            else:
+                info["warning"] = message
+
+        n = min(len(data), len(ref_data))
+        if n == 0:
             return data, info
-        residual, coeff = _subtract_reference_at_lag(data, ref_data, lag)
-        if coeff is None:
+        cc = _xcorr_fft(data[:n], ref_data[:n])
+        lags = np.arange(-n + 1, n)
+        base_los_idx, _ = _find_los_echo(cc)
+        los_idx, _ = _apply_manual_lags(
+            lags, base_los_idx, None, self.manual_xcorr_lags
+        )
+        if los_idx is None:
+            _append_warning("Pfad-Cancellation nicht möglich (kein LOS-Peak).")
             return data, info
-        info.update({"applied": True, "lag": lag, "coeff": coeff})
+        k0 = int(lags[los_idx])
+        r_start, s_start, length = _lag_overlap(len(data), len(ref_data), k0)
+        if length <= 0:
+            _append_warning(
+                "Pfad-Cancellation nicht möglich (Segment außerhalb Bounds)."
+            )
+            return data, info
+        if length < len(ref_data):
+            _append_warning(
+                "Pfad-Cancellation: Fenster gekürzt (Segment außerhalb Bounds)."
+            )
+        r_seg = data[r_start : r_start + length]
+        s_seg = ref_data[s_start : s_start + length]
+        denom = np.vdot(s_seg, s_seg)
+        if denom == 0:
+            _append_warning(
+                "Pfad-Cancellation nicht möglich (Referenz ohne Energie)."
+            )
+            return data, info
+        coeff = np.vdot(s_seg, r_seg) / (denom + 1e-12)
+        if abs(coeff) < 1e-6:
+            _append_warning("Pfad-Cancellation: a0 ist sehr klein.")
+        residual = data.copy()
+        residual[r_start : r_start + length] = r_seg - coeff * s_seg
+
+        n2 = min(len(residual), len(ref_data))
+        if n2 == 0:
+            return data, info
+        cc2 = _xcorr_fft(residual[:n2], ref_data[:n2])
+        mag2 = np.abs(cc2)
+        k1 = None
+        corr2_peak = None
+        if mag2.size:
+            lags2 = np.arange(-n2 + 1, n2)
+            k1_idx = int(np.argmax(mag2))
+            k1 = int(lags2[k1_idx])
+            corr2_peak = float(mag2[k1_idx])
+        base_peak = float(np.max(np.abs(cc))) if cc.size else 0.0
+        if corr2_peak is None or corr2_peak < 0.1 * base_peak:
+            _append_warning("Echo nach Pfad-Cancellation nicht detektierbar.")
+            k1 = None
+
+        delta_k = k1 - k0 if k1 is not None else None
+        info.update(
+            {
+                "applied": True,
+                "k0": k0,
+                "a0": coeff,
+                "k1": k1,
+                "corr2_peak": corr2_peak,
+                "delta_k": delta_k,
+            }
+        )
         return residual, info
 
     def _path_cancellation_note(
@@ -3125,6 +3220,8 @@ class TransceiverUI(tk.Tk):
 
         rx_cancel_note = None
         cancel_note = None
+        rx_cancel_info: dict[str, object] | None = None
+        cancel_info: dict[str, object] | None = None
         if self.rx_path_cancel_enable.get():
             rx_data, rx_cancel_info = self._apply_path_cancellation(
                 rx_data, rx_ref_data
@@ -3134,6 +3231,12 @@ class TransceiverUI(tk.Tk):
                 rx_cancel_info, rx_ref_data
             )
             cancel_note = self._path_cancellation_note(cancel_info, ref_data)
+            label = "inv. filter" if self.rx_inv_rrc_enable.get() else "RX"
+            if cancel_info is not None:
+                self._log_path_cancellation(cancel_info, label)
+            self._last_path_cancel_info = cancel_info
+        else:
+            self._last_path_cancel_info = None
 
         self.latest_fs = fs
         self.latest_data = data
@@ -3157,6 +3260,7 @@ class TransceiverUI(tk.Tk):
             aoa_plot_time: np.ndarray | None,
             aoa_plot_series: np.ndarray | None,
             path_note: str | None,
+            path_cancel_info: dict[str, object] | None,
         ) -> None:
             target_frame.columnconfigure(0, weight=1)
             for idx, mode in enumerate(modes):
@@ -3210,6 +3314,7 @@ class TransceiverUI(tk.Tk):
                 plot_ref_data,
                 manual_lags=self.manual_xcorr_lags,
                 xcorr_reduce=True,
+                path_cancel_info=path_cancel_info,
             )
             text = _format_stats_text(stats)
             if path_note:
@@ -3276,6 +3381,7 @@ class TransceiverUI(tk.Tk):
                     else aoa_series
                 ),
                 rx_cancel_note,
+                rx_cancel_info if rx_cancel_info and rx_cancel_info.get("applied") else None,
             )
             _render_rx_preview(
                 filtered_tab,
@@ -3286,6 +3392,7 @@ class TransceiverUI(tk.Tk):
                 aoa_time,
                 aoa_series,
                 cancel_note,
+                cancel_info if cancel_info and cancel_info.get("applied") else None,
             )
         else:
             _render_rx_preview(
@@ -3297,6 +3404,7 @@ class TransceiverUI(tk.Tk):
                 aoa_time,
                 aoa_series,
                 cancel_note,
+                cancel_info if cancel_info and cancel_info.get("applied") else None,
             )
 
         if hasattr(self, "rx_aoa_label"):
@@ -3419,6 +3527,61 @@ class TransceiverUI(tk.Tk):
     def open_signal(self) -> None:
         """Open a window to compare up to four signals."""
         CompareWindow(self)
+
+    def _emit_rx_log(self, text: str) -> None:
+        message = text.rstrip() + "\n"
+        logged = False
+        if self.console and self.console.winfo_exists():
+            self.console.append(message)
+            logged = True
+        if hasattr(self, "tx_log") and self.tx_log.winfo_exists():
+            self.tx_log.insert(tk.END, message)
+            self.tx_log.see(tk.END)
+            logged = True
+        if not logged:
+            print(message, end="")
+
+    def _log_path_cancellation(self, info: dict[str, object], label: str) -> None:
+        if not self.rx_path_cancel_enable.get():
+            return
+        warning = info.get("warning")
+        if not info.get("applied"):
+            if warning:
+                log_key = (label, "warn", warning)
+                if self._last_path_cancel_log != log_key:
+                    self._emit_rx_log(
+                        f"Pfad-Cancellation ({label}): {warning}"
+                    )
+                    self._last_path_cancel_log = log_key
+            return
+        k0 = info.get("k0")
+        a0 = info.get("a0")
+        k1 = info.get("k1")
+        corr2_peak = info.get("corr2_peak")
+        delta_k = info.get("delta_k")
+        corr2_text = (
+            f"{corr2_peak:.4g}" if isinstance(corr2_peak, (int, float)) else "--"
+        )
+        log_key = (label, k0, a0, k1, corr2_text, delta_k, warning)
+        if self._last_path_cancel_log == log_key:
+            return
+        self._last_path_cancel_log = log_key
+        message = (
+            "Pfad-Cancellation ({label}): "
+            "k0={k0}, a0={a0}, k1={k1}, corr2_peak={corr2_peak}, delta_k={delta_k}"
+        ).format(
+            label=label,
+            k0=k0 if k0 is not None else "--",
+            a0=_format_complex(
+                a0 if isinstance(a0, (complex, np.complexfloating)) else None
+            ),
+            k1=k1 if k1 is not None else "--",
+            corr2_peak=corr2_text,
+            delta_k=delta_k if delta_k is not None else "--",
+        )
+        self._emit_rx_log(message)
+        if warning:
+            self._emit_rx_log(f"Pfad-Cancellation ({label}): {warning}")
 
     def _open_console(self, title: str) -> None:
         if self.console is None or not self.console.winfo_exists():
@@ -3575,12 +3738,18 @@ class TransceiverUI(tk.Tk):
         if not hasattr(self, "latest_data") or self.latest_data is None:
             return
         ref_data, _ref_label = self._get_crosscorr_reference()
+        path_cancel_info = None
+        if self.rx_path_cancel_enable.get():
+            info = self._last_path_cancel_info
+            if info and info.get("applied"):
+                path_cancel_info = info
         stats = _calc_stats(
             self.latest_data,
             self.latest_fs,
             ref_data,
             manual_lags=self.manual_xcorr_lags,
             xcorr_reduce=True,
+            path_cancel_info=path_cancel_info,
         )
         text = _format_stats_text(stats)
         for label in labels:
