@@ -2595,6 +2595,7 @@ class TransceiverUI(ctk.CTk):
         )
         self.gen_scroll.grid(row=0, column=1, sticky="ns")
         self.gen_canvas.configure(yscrollcommand=self.gen_scroll.set)
+        self._gen_scroll_active = True
 
         # enable mouse wheel scrolling
         self.gen_canvas.bind("<Enter>", self._bind_gen_mousewheel)
@@ -2611,14 +2612,16 @@ class TransceiverUI(ctk.CTk):
         )
         self.gen_plots_frame.bind(
             "<Configure>",
-            lambda _e: self.gen_canvas.configure(
-                scrollregion=self.gen_canvas.bbox("all")
+            lambda _e: (
+                self.gen_canvas.configure(scrollregion=self.gen_canvas.bbox("all")),
+                self._update_gen_scrollbar(),
             ),
         )
         self.gen_canvas.bind(
             "<Configure>",
-            lambda _e: self._center_canvas_window(
-                self.gen_canvas, self.gen_plots_window
+            lambda _e: (
+                self._center_canvas_window(self.gen_canvas, self.gen_plots_window),
+                self._update_gen_scrollbar(),
             ),
         )
         gen_body.rowconfigure(5, weight=1)
@@ -3733,6 +3736,27 @@ class TransceiverUI(ctk.CTk):
         canvas.itemconfigure(window_id, width=canvas_width)
         canvas.coords(window_id, canvas_width / 2, 0)
 
+    def _update_gen_scrollbar(self) -> None:
+        if not hasattr(self, "gen_canvas"):
+            return
+        bbox = self.gen_canvas.bbox("all")
+        if not bbox:
+            return
+        content_height = bbox[3] - bbox[1]
+        canvas_height = self.gen_canvas.winfo_height()
+        needs_scroll = content_height > (canvas_height + 1)
+        if needs_scroll:
+            if not self.gen_scroll.winfo_ismapped():
+                self.gen_scroll.grid(row=0, column=1, sticky="ns")
+            self.gen_canvas.configure(yscrollcommand=self.gen_scroll.set)
+            self._gen_scroll_active = True
+        else:
+            if self.gen_scroll.winfo_ismapped():
+                self.gen_scroll.grid_remove()
+            self.gen_canvas.configure(yscrollcommand=None)
+            self.gen_canvas.yview_moveto(0)
+            self._gen_scroll_active = False
+
     # ----- Mousewheel helpers -----
     def _bind_gen_mousewheel(self, _event) -> None:
         self.gen_canvas.bind_all("<MouseWheel>", self._on_gen_mousewheel)
@@ -3745,6 +3769,8 @@ class TransceiverUI(ctk.CTk):
         self.gen_canvas.unbind_all("<Button-5>")
 
     def _on_gen_mousewheel(self, event) -> None:
+        if not self._gen_scroll_active:
+            return
         delta = 0
         if hasattr(event, "delta") and event.delta:
             delta = -1 * int(event.delta / 120)
