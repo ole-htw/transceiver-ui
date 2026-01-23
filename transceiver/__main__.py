@@ -2807,7 +2807,7 @@ class TransceiverUI(ctk.CTk):
             rx_body,
             "Parameters",
         )
-        rx_params_frame.grid(row=0, column=0, columnspan=2, sticky="ew")
+        rx_params_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         rx_params_left = ctk.CTkFrame(rx_params_body, fg_color="transparent")
         rx_params_left.grid(row=0, column=1, sticky="nsew")
         rx_params_left.columnconfigure(1, weight=1)
@@ -2861,7 +2861,7 @@ class TransceiverUI(ctk.CTk):
             "Antenne 2",
             toggle_var=self.rx_channel_2,
         )
-        rx_ant_frame.grid(row=1, column=0, columnspan=2, sticky="ew")
+        rx_ant_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 6))
 
         rx_ant_content = ctk.CTkFrame(rx_ant_body, fg_color="transparent")
         rx_ant_content.grid(row=0, column=1, columnspan=2, sticky="nsew")
@@ -2870,7 +2870,9 @@ class TransceiverUI(ctk.CTk):
         self.rx_channel_view_label = ctk.CTkLabel(
             rx_ant_content, text="RX Ansicht", anchor="e"
         )
-        self.rx_channel_view_label.grid(row=0, column=0, sticky="e")
+        self.rx_channel_view_label.grid(
+            row=0, column=0, sticky="e", padx=label_padx
+        )
         self.rx_channel_view_box = ctk.CTkComboBox(
             rx_ant_content,
             variable=self.rx_channel_view,
@@ -2878,22 +2880,22 @@ class TransceiverUI(ctk.CTk):
             width=140,
             command=lambda _value: self.update_trim(),
         )
-        self.rx_channel_view_box.grid(row=0, column=1, sticky="w")
+        self.rx_channel_view_box.grid(row=0, column=1, sticky="w", padx=(0, 8))
         self.rx_channel_view_box.configure(state="disabled")
 
         ctk.CTkLabel(rx_ant_content, text="Antennenabstand [m]", anchor="e").grid(
-            row=1, column=0, sticky="e"
+            row=1, column=0, sticky="e", padx=label_padx
         )
         self.rx_ant_spacing = SuggestEntry(rx_ant_content, "rx_ant_spacing")
         self.rx_ant_spacing.insert(0, "0.03")
-        self.rx_ant_spacing.grid(row=1, column=1, sticky="ew")
+        self.rx_ant_spacing.grid(row=1, column=1, sticky="ew", padx=(0, 8))
 
         ctk.CTkLabel(rx_ant_content, text="Wellenlänge [m]", anchor="e").grid(
-            row=2, column=0, sticky="e"
+            row=2, column=0, sticky="e", padx=label_padx
         )
         self.rx_wavelength = SuggestEntry(rx_ant_content, "rx_wavelength")
         self.rx_wavelength.insert(0, "3e8/5.18e9")
-        self.rx_wavelength.grid(row=2, column=1, sticky="ew")
+        self.rx_wavelength.grid(row=2, column=1, sticky="ew", padx=(0, 8))
 
         self.rx_aoa_label = ctk.CTkLabel(rx_ant_content, text="AoA (ESPRIT): --")
         self.rx_aoa_label.grid(row=3, column=0, sticky="w", pady=(4, 0))
@@ -2904,7 +2906,7 @@ class TransceiverUI(ctk.CTk):
             rx_body,
             "Output",
         )
-        rx_output_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
+        rx_output_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         self.rx_file = SuggestEntry(rx_output_body, "rx_file")
         self.rx_file.insert(0, "rx_signal.bin")
         self.rx_file.grid(row=0, column=1, columnspan=2, sticky="ew")
@@ -2915,49 +2917,53 @@ class TransceiverUI(ctk.CTk):
         self.trim_end = tk.DoubleVar(value=100.0)
         self.trim_dirty = False
 
-        trim_frame = ctk.CTkFrame(rx_body)
-        trim_frame.grid(row=3, column=0, columnspan=2, sticky="ew")
-        trim_frame.columnconfigure(1, weight=1)
-
-        ctk.CTkCheckBox(
-            trim_frame,
-            text="Trim",
-            variable=self.trim_var,
-            command=self._on_trim_change,
-        ).grid(row=0, column=0, sticky="w")
+        trim_frame, trim_body, _ = _make_side_bordered_group(
+            rx_body,
+            "Trim",
+            toggle_var=self.trim_var,
+            toggle_command=self._on_trim_change,
+        )
+        trim_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        trim_body.columnconfigure(0, weight=1)
 
         self.range_slider = RangeSlider(
-            trim_frame,
+            trim_body,
             self.trim_start,
             self.trim_end,
             command=self._on_trim_change,
         )
-        self.range_slider.grid(row=0, column=1, sticky="ew", padx=2)
+        self.range_slider.grid(row=1, column=0, columnspan=2, sticky="ew", padx=2)
 
         self.apply_trim_btn = ctk.CTkButton(
-            trim_frame,
+            trim_body,
             text="Apply",
             command=self.update_trim,
         )
-        self.apply_trim_btn.grid(row=0, column=2, padx=2)
+        self.apply_trim_btn.grid(row=1, column=2, padx=2)
         self.apply_trim_btn.configure(state="disabled")
 
-        self.trim_start_label = ctk.CTkLabel(trim_frame, width=50, text="")
-        self.trim_start_label.grid(row=1, column=1, sticky="e")
-        self.trim_end_label = ctk.CTkLabel(trim_frame, width=50, text="")
-        self.trim_end_label.grid(row=1, column=2, sticky="e")
+        self.trim_start_label = ctk.CTkLabel(trim_body, width=50, text="")
+        self.trim_start_label.grid(row=2, column=1, sticky="e")
+        self.trim_end_label = ctk.CTkLabel(trim_body, width=50, text="")
+        self.trim_end_label.grid(row=2, column=2, sticky="e")
 
         self.rx_path_cancel_enable = tk.BooleanVar(value=False)
-        self.rx_path_cancel_check = ctk.CTkCheckBox(
+        (
+            self.rx_path_cancel_frame,
+            self.rx_path_cancel_body,
+            self.rx_path_cancel_check,
+        ) = _make_side_bordered_group(
             rx_body,
-            text="Pfad-Cancellation (LOS entfernen)",
-            variable=self.rx_path_cancel_enable,
-            command=self._on_rx_path_cancel_toggle,
+            "Pfad-Cancellation (LOS entfernen)",
+            toggle_var=self.rx_path_cancel_enable,
+            toggle_command=self._on_rx_path_cancel_toggle,
         )
-        self.rx_path_cancel_check.grid(row=4, column=0, columnspan=2, sticky="w")
+        self.rx_path_cancel_frame.grid(
+            row=4, column=0, columnspan=2, sticky="ew", pady=(0, 6)
+        )
 
         rx_btn_frame = ctk.CTkFrame(rx_body)
-        rx_btn_frame.grid(row=5, column=0, columnspan=2, pady=5)
+        rx_btn_frame.grid(row=5, column=0, columnspan=2, pady=(0, 5))
         rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
         self.rx_button = ctk.CTkButton(rx_btn_frame, text="Receive", command=self.receive)
@@ -3508,8 +3514,8 @@ class TransceiverUI(ctk.CTk):
                 aoa_text = "AoA (ESPRIT): Parameter ungültig"
                 echo_aoa_text = "Echo AoA: Parameter ungültig"
         else:
-            aoa_text = "AoA (ESPRIT): 2 Kanäle erforderlich"
-            echo_aoa_text = "Echo AoA: 2 Kanäle erforderlich"
+            aoa_text = "AoA (ESPRIT): -"
+            echo_aoa_text = "Echo AoA: -"
 
         if (
             self.raw_rx_data.ndim == 2
