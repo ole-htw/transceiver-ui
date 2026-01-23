@@ -2137,6 +2137,16 @@ def _plot_on_mpl(
     manual_lags: dict[str, int | None] | None = None,
 ) -> None:
     """Helper to draw a small matplotlib preview plot."""
+    mpl_colors = {
+        "real": "#4FC3F7",
+        "imag": "#FF8A65",
+        "freq": "#81C784",
+        "autocorr": "#BA68C8",
+        "crosscorr": "#64B5F6",
+        "compare": "#F06292",
+        "los": "#FF5252",
+        "echo": "#69F0AE",
+    }
     if data.ndim != 1:
         data = np.asarray(data)
         if data.ndim >= 2:
@@ -2144,21 +2154,30 @@ def _plot_on_mpl(
     data, step = _reduce_data(data)
     fs /= step
     if mode == "Signal":
-        ax.plot(np.real(data), "b", label="Real")
-        ax.plot(np.imag(data), "r--", label="Imag")
+        ax.plot(np.real(data), color=mpl_colors["real"], label="Real")
+        ax.plot(
+            np.imag(data),
+            color=mpl_colors["imag"],
+            linestyle="--",
+            label="Imag",
+        )
         ax.set_xlabel("Sample Index")
         ax.set_ylabel("Amplitude")
         ax.legend()
     elif mode in ("Freq", "Freq Analysis"):
         spec = np.fft.fftshift(np.fft.fft(data))
         freqs = np.fft.fftshift(np.fft.fftfreq(len(data), d=1 / fs))
-        ax.plot(freqs, 20 * np.log10(np.abs(spec) + 1e-9), "b")
+        ax.plot(
+            freqs,
+            20 * np.log10(np.abs(spec) + 1e-9),
+            color=mpl_colors["freq"],
+        )
         ax.set_xlabel("Frequency [Hz]")
         ax.set_ylabel("Magnitude [dB]")
     elif mode == "Autocorr":
         ac = _autocorr_fft(data)
         lags = np.arange(-len(data) + 1, len(data))
-        ax.plot(lags, np.abs(ac), "b")
+        ax.plot(lags, np.abs(ac), color=mpl_colors["autocorr"])
         ax.set_xlabel("Lag")
         ax.set_ylabel("Magnitude")
     elif mode == "Crosscorr":
@@ -2174,20 +2193,31 @@ def _plot_on_mpl(
         cc = _xcorr_fft(data[:n], ref_data[:n])
         lags = np.arange(-n + 1, n) * step_r
         mag = np.abs(cc)
-        ax.plot(lags, mag, "b")
+        ax.plot(lags, mag, color=mpl_colors["crosscorr"])
         compare_handles: list[Line2D] = []
         if crosscorr_compare is not None and crosscorr_compare.size:
             n2 = min(len(crosscorr_compare), len(ref_data))
             cc2 = _xcorr_fft(crosscorr_compare[:n2], ref_data[:n2])
             lags2 = np.arange(-n2 + 1, n2) * step_r
             mag2 = np.abs(cc2)
-            ax.plot(lags2, mag2, "m--", alpha=0.8)
+            ax.plot(
+                lags2,
+                mag2,
+                color=mpl_colors["compare"],
+                linestyle="--",
+                alpha=0.85,
+            )
             compare_handles = [
-                Line2D([0], [0], color="b", label="mit Pfad-Cancellation"),
                 Line2D(
                     [0],
                     [0],
-                    color="m",
+                    color=mpl_colors["crosscorr"],
+                    label="mit Pfad-Cancellation",
+                ),
+                Line2D(
+                    [0],
+                    [0],
+                    color=mpl_colors["compare"],
                     linestyle="--",
                     label="ohne Pfad-Cancellation",
                 ),
@@ -2197,9 +2227,21 @@ def _plot_on_mpl(
             lags, los_idx, echo_idx, manual_lags
         )
         if los_idx is not None:
-            ax.plot(lags[los_idx], mag[los_idx], "ro")
+            ax.plot(
+                lags[los_idx],
+                mag[los_idx],
+                marker="o",
+                linestyle="",
+                color=mpl_colors["los"],
+            )
         if echo_idx is not None:
-            ax.plot(lags[echo_idx], mag[echo_idx], "go")
+            ax.plot(
+                lags[echo_idx],
+                mag[echo_idx],
+                marker="o",
+                linestyle="",
+                color=mpl_colors["echo"],
+            )
         ax.legend(
             handles=[
                 *compare_handles,
@@ -2208,8 +2250,8 @@ def _plot_on_mpl(
                     [0],
                     marker="o",
                     linestyle="",
-                    markerfacecolor="r",
-                    markeredgecolor="r",
+                    markerfacecolor=mpl_colors["los"],
+                    markeredgecolor=mpl_colors["los"],
                     label="LOS",
                 ),
                 Line2D(
@@ -2217,8 +2259,8 @@ def _plot_on_mpl(
                     [0],
                     marker="o",
                     linestyle="",
-                    markerfacecolor="g",
-                    markeredgecolor="g",
+                    markerfacecolor=mpl_colors["echo"],
+                    markeredgecolor=mpl_colors["echo"],
                     label="Echo",
                 ),
             ],
