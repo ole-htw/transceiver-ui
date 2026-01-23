@@ -2788,6 +2788,7 @@ class TransceiverUI(tk.Tk):
         """Render preview plots below the receive parameters."""
         if reset_manual:
             self._reset_manual_xcorr_lags("Neue RX-Daten")
+        self.rx_stats_labels = []
         self.raw_rx_data = data
         self.latest_fs_raw = fs
         if data.ndim == 2 and data.shape[0] >= 2:
@@ -2998,6 +2999,7 @@ class TransceiverUI(tk.Tk):
             stats_label = ttk.Label(target_frame, justify="left", anchor="w")
             stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
             stats_label.configure(text=text)
+            self.rx_stats_labels.append(stats_label)
             if self.rx_view.get() == "AoA (ESPRIT)":
                 fig = Figure(figsize=(5, 2), dpi=100)
                 ax = fig.add_subplot(111)
@@ -3329,7 +3331,12 @@ class TransceiverUI(tk.Tk):
         self._refresh_rx_stats()
 
     def _refresh_rx_stats(self) -> None:
-        if not hasattr(self, "rx_stats_label"):
+        labels = []
+        if hasattr(self, "rx_stats_labels"):
+            labels = [label for label in self.rx_stats_labels if label is not None]
+        elif hasattr(self, "rx_stats_label"):
+            labels = [self.rx_stats_label]
+        if not labels:
             return
         if not hasattr(self, "latest_data") or self.latest_data is None:
             return
@@ -3341,7 +3348,9 @@ class TransceiverUI(tk.Tk):
             manual_lags=self.manual_xcorr_lags,
             xcorr_reduce=True,
         )
-        self.rx_stats_label.configure(text=_format_stats_text(stats))
+        text = _format_stats_text(stats)
+        for label in labels:
+            label.configure(text=text)
 
     def _start_manual_xcorr_polling(self, output_path: str | None) -> None:
         if not output_path:
