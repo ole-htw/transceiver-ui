@@ -203,6 +203,60 @@ def _resolve_theme_color(color: str | tuple[str, str]) -> str:
     return color
 
 
+INPUT_FIELD_MARGIN = 4
+INPUT_WIDGET_TYPES = (
+    ctk.CTkEntry,
+    ctk.CTkComboBox,
+    ctk.CTkOptionMenu,
+    ctk.CTkTextbox,
+)
+
+
+def _parse_padding(value) -> tuple[int, int]:
+    if value in (None, "", ()):
+        return 0, 0
+    if isinstance(value, (int, float)):
+        pad = int(value)
+        return pad, pad
+    if isinstance(value, (tuple, list)):
+        if len(value) == 1:
+            pad = int(value[0])
+            return pad, pad
+        if len(value) >= 2:
+            return int(value[0]), int(value[1])
+    if isinstance(value, str):
+        cleaned = value.strip().strip("(){}")
+        if not cleaned:
+            return 0, 0
+        parts = cleaned.replace(",", " ").split()
+        if len(parts) == 1:
+            pad = int(float(parts[0]))
+            return pad, pad
+        if len(parts) >= 2:
+            return int(float(parts[0])), int(float(parts[1]))
+    return 0, 0
+
+
+def _apply_input_margins(widget: tk.Misc) -> None:
+    for child in widget.winfo_children():
+        _apply_input_margins(child)
+    if not isinstance(widget, INPUT_WIDGET_TYPES):
+        return
+    manager = widget.winfo_manager()
+    if manager == "grid":
+        info = widget.grid_info()
+        top, bottom = _parse_padding(info.get("pady"))
+        widget.grid_configure(
+            pady=(max(top, INPUT_FIELD_MARGIN), max(bottom, INPUT_FIELD_MARGIN))
+        )
+    elif manager == "pack":
+        info = widget.pack_info()
+        top, bottom = _parse_padding(info.get("pady"))
+        widget.pack_configure(
+            pady=(max(top, INPUT_FIELD_MARGIN), max(bottom, INPUT_FIELD_MARGIN))
+        )
+
+
 def _resolve_ctk_frame_bg(widget: tk.Misc) -> str:
     parent = widget
     while isinstance(parent, ctk.CTkBaseClass):
@@ -2917,6 +2971,7 @@ class TransceiverUI(ctk.CTk):
         self.auto_update_rx_filename()
         self.toggle_rate_sync(self.sync_var.get())
         self.update_trim()
+        _apply_input_margins(self)
 
     def update_waveform_fields(self) -> None:
         """Show or hide waveform specific parameters."""
@@ -2969,6 +3024,7 @@ class TransceiverUI(ctk.CTk):
             self.f1_entry.grid(row=2, column=1, sticky="ew")
 
         self.auto_update_tx_filename()
+        _apply_input_margins(self)
 
     def _rrc_active(self) -> bool:
         return self.rrc_enable.get() and self.wave_var.get().lower() == "zadoffchu"
@@ -4200,6 +4256,7 @@ class TransceiverUI(ctk.CTk):
         ctk.CTkButton(win, text="Save", command=save).grid(
             row=1, column=0, columnspan=2, pady=5
         )
+        _apply_input_margins(win)
 
     def load_preset(self, name: str) -> None:
         preset = _PRESETS.get(name)
