@@ -18,6 +18,14 @@ pip install -r requirements.txt
 The binaries in `bin/` are pre‑compiled for RFNoC streaming. Rebuild them
 only if you need different functionality or platform support.
 
+## UHD Python bindings (TX controller)
+
+The transmit path now uses the UHD Python bindings in-process. Ensure that
+`uhd` is importable in your Python environment (e.g. by installing the UHD
+Python package that matches your driver version). The controller uses the
+TX streamer API and sends an end-of-burst marker on stop to avoid dirty
+shutdowns.
+
 ## Structure
 
 ```
@@ -49,4 +57,3 @@ signals.
 The receive view now also offers optional oversampling which can be applied
 after capturing the data.  This improves the accuracy of the channel impulse
 response when using the built‑in cross‑correlation tools.
-
