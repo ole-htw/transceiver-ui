@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
 from pathlib import Path
 from multiprocessing import shared_memory, Pipe, resource_tracker
@@ -29,7 +28,6 @@ def _load_iq(
                 array = np.ndarray(
                     tuple(shape), dtype=np.dtype(dtype), buffer=shm.buf
                 )
-                plot_impl._maybe_untrack_shared_memory(shm.name)
                 return array, shm
             except (FileNotFoundError, OSError, TypeError, ValueError):
                 pass
@@ -48,9 +46,6 @@ def _parse_payload(path: Path) -> dict:
 def _cleanup_shm(shm: shared_memory.SharedMemory | None) -> None:
     if shm is None:
         return
-    plot_impl._maybe_untrack_shared_memory(shm.name)
-    with contextlib.suppress(FileNotFoundError):
-        shm.unlink()
     shm.close()
 
 
