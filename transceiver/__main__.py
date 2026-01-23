@@ -490,7 +490,9 @@ class RangeSlider(ctk.CTkFrame):
         self.enabled = True
         self.width = width
         self.height = height
-        self.signal_color = "#e3e7ff"
+        self.signal_color = "#9aa0a6"
+        self.range_color = "#5f6f97"
+        self.handle_color = "#d9805f"
         self.canvas = tk.Canvas(
             self,
             width=width,
@@ -502,14 +504,14 @@ class RangeSlider(ctk.CTkFrame):
         self.columnconfigure(0, weight=1)
         self.canvas.bind("<Configure>", self._on_resize)
         self.data = np.array([], dtype=np.float32)
-        self.region = self.canvas.create_rectangle(
-            0, 0, 0, height, fill="#4b5fbf", outline=""
+        self.region = self._create_rounded_rect(
+            0, 0, 0, height, radius=6, fill=self.range_color, outline=""
         )
         self.handle_start = self.canvas.create_line(
-            0, 0, 0, height, fill="red", width=2
+            0, 0, 0, height, fill=self.handle_color, width=2
         )
         self.handle_end = self.canvas.create_line(
-            width, 0, width, height, fill="red", width=2
+            width, 0, width, height, fill=self.handle_color, width=2
         )
         self.active = None
         self.range_offset = 0.0
@@ -567,6 +569,44 @@ class RangeSlider(ctk.CTkFrame):
                 prev_x, prev_y = x, yv
         self._update_from_vars()
 
+    def _create_rounded_rect(
+        self,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        radius: float,
+        **kwargs,
+    ) -> int:
+        radius = max(0, min(radius, abs(x2 - x1) / 2, abs(y2 - y1) / 2))
+        points = [
+            x1 + radius,
+            y1,
+            x2 - radius,
+            y1,
+            x2,
+            y1,
+            x2,
+            y1 + radius,
+            x2,
+            y2 - radius,
+            x2,
+            y2,
+            x2 - radius,
+            y2,
+            x1 + radius,
+            y2,
+            x1,
+            y2,
+            x1,
+            y2 - radius,
+            x1,
+            y1 + radius,
+            x1,
+            y1,
+        ]
+        return self.canvas.create_polygon(points, smooth=True, **kwargs)
+
     def _update_from_vars(self, *_args) -> None:
         start = max(0.0, min(100.0, self.start_var.get()))
         end = max(0.0, min(100.0, self.end_var.get()))
@@ -576,7 +616,34 @@ class RangeSlider(ctk.CTkFrame):
         x2 = end / 100 * self.width
         self.canvas.coords(self.handle_start, x1, 0, x1, self.height)
         self.canvas.coords(self.handle_end, x2, 0, x2, self.height)
-        self.canvas.coords(self.region, x1, 0, x2, self.height)
+        radius = min(6, (x2 - x1) / 2, self.height / 2)
+        points = [
+            x1 + radius,
+            0,
+            x2 - radius,
+            0,
+            x2,
+            0,
+            x2,
+            radius,
+            x2,
+            self.height - radius,
+            x2,
+            self.height,
+            x2 - radius,
+            self.height,
+            x1 + radius,
+            self.height,
+            x1,
+            self.height,
+            x1,
+            self.height - radius,
+            x1,
+            radius,
+            x1,
+            0,
+        ]
+        self.canvas.coords(self.region, *points)
 
     def _on_resize(self, event) -> None:
         if event.width == self.width and event.height == self.height:
@@ -692,10 +759,14 @@ class SignalViewer(ctk.CTkToplevel):
         self.apply_trim_btn.grid(row=0, column=2, padx=2)
         self.apply_trim_btn.configure(state="disabled")
 
-        self.trim_start_label = ctk.CTkLabel(trim_frame, width=50, text="")
-        self.trim_start_label.grid(row=1, column=1, sticky="e")
-        self.trim_end_label = ctk.CTkLabel(trim_frame, width=50, text="")
-        self.trim_end_label.grid(row=1, column=2, sticky="e")
+        self.trim_label_frame = ctk.CTkFrame(trim_frame, fg_color="transparent")
+        self.trim_label_frame.grid(row=1, column=1, sticky="ew")
+        self.trim_label_frame.columnconfigure(0, weight=1)
+        self.trim_label_frame.columnconfigure(1, weight=1)
+        self.trim_start_label = ctk.CTkLabel(self.trim_label_frame, width=50, text="")
+        self.trim_start_label.grid(row=0, column=0, sticky="w")
+        self.trim_end_label = ctk.CTkLabel(self.trim_label_frame, width=50, text="")
+        self.trim_end_label.grid(row=0, column=1, sticky="e")
 
         btn_frame = ctk.CTkFrame(self)
         btn_frame.grid(row=1, column=0, pady=5)
@@ -956,10 +1027,14 @@ class SignalColumn(ctk.CTkFrame):
         self.apply_trim_btn.grid(row=0, column=2, padx=2)
         self.apply_trim_btn.configure(state="disabled")
 
-        self.trim_start_label = ctk.CTkLabel(trim_frame, width=50, text="")
-        self.trim_start_label.grid(row=1, column=1, sticky="e")
-        self.trim_end_label = ctk.CTkLabel(trim_frame, width=50, text="")
-        self.trim_end_label.grid(row=1, column=2, sticky="e")
+        self.trim_label_frame = ctk.CTkFrame(trim_frame, fg_color="transparent")
+        self.trim_label_frame.grid(row=1, column=1, sticky="ew")
+        self.trim_label_frame.columnconfigure(0, weight=1)
+        self.trim_label_frame.columnconfigure(1, weight=1)
+        self.trim_start_label = ctk.CTkLabel(self.trim_label_frame, width=50, text="")
+        self.trim_start_label.grid(row=0, column=0, sticky="w")
+        self.trim_end_label = ctk.CTkLabel(self.trim_label_frame, width=50, text="")
+        self.trim_end_label.grid(row=0, column=1, sticky="e")
 
         btn_frame = ctk.CTkFrame(self)
         btn_frame.grid(row=2, column=0, pady=5)
@@ -2942,10 +3017,14 @@ class TransceiverUI(ctk.CTk):
         self.apply_trim_btn.grid(row=0, column=2, padx=2)
         self.apply_trim_btn.configure(state="disabled")
 
-        self.trim_start_label = ctk.CTkLabel(trim_frame, width=50, text="")
-        self.trim_start_label.grid(row=1, column=1, sticky="e")
-        self.trim_end_label = ctk.CTkLabel(trim_frame, width=50, text="")
-        self.trim_end_label.grid(row=1, column=2, sticky="e")
+        self.trim_label_frame = ctk.CTkFrame(trim_frame, fg_color="transparent")
+        self.trim_label_frame.grid(row=1, column=1, sticky="ew")
+        self.trim_label_frame.columnconfigure(0, weight=1)
+        self.trim_label_frame.columnconfigure(1, weight=1)
+        self.trim_start_label = ctk.CTkLabel(self.trim_label_frame, width=50, text="")
+        self.trim_start_label.grid(row=0, column=0, sticky="w")
+        self.trim_end_label = ctk.CTkLabel(self.trim_label_frame, width=50, text="")
+        self.trim_end_label.grid(row=0, column=1, sticky="e")
 
         self.rx_path_cancel_enable = tk.BooleanVar(value=False)
         self.rx_path_cancel_check = ctk.CTkCheckBox(
