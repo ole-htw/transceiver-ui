@@ -178,8 +178,8 @@ def worker_loop(conn, initial_payload: dict[str, object] | None = None) -> None:
             title,
             ref_data=ref_data,
             manual_lags=manual_state if manual_lags is not None else None,
-            on_los_drag_end=lambda _idx, lag: _update_manual("los", lag),
-            on_echo_drag_end=lambda _idx, lag: _update_manual("echo", lag),
+            on_los_drag=lambda _idx, lag: _update_manual("los", lag),
+            on_echo_drag=lambda _idx, lag: _update_manual("echo", lag),
             reduce_data=False,
             reduction_step=reduction_step,
         )
