@@ -2545,7 +2545,7 @@ class TransceiverUI(ctk.CTk):
                 self.gen_canvas, self.gen_plots_window
             ),
         )
-        gen_body.rowconfigure(6, weight=1)
+        gen_body.rowconfigure(5, weight=1)
         self.gen_canvases = []
         self.latest_data = None
         self.latest_fs = 0.0
