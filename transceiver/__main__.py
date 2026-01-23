@@ -203,6 +203,16 @@ def _resolve_theme_color(color: str | tuple[str, str]) -> str:
     return color
 
 
+BUTTON_CURSOR = "hand2"
+
+
+def _apply_button_cursor(widget: tk.Misc) -> None:
+    for child in widget.winfo_children():
+        if isinstance(child, ctk.CTkButton):
+            child.configure(cursor=BUTTON_CURSOR)
+        _apply_button_cursor(child)
+
+
 INPUT_FIELD_MARGIN = 4
 INPUT_WIDGET_TYPES = (
     ctk.CTkEntry,
@@ -717,6 +727,7 @@ class SignalViewer(ctk.CTkToplevel):
 
         self.stats_label = ctk.CTkLabel(self.plots_frame, justify="left", anchor="w", text="")
 
+        _apply_button_cursor(self)
         self._display_plots(data, fs)
 
     def _trim_data(self, data: np.ndarray) -> np.ndarray:
@@ -863,6 +874,7 @@ class OpenSignalDialog(ctk.CTkToplevel):
         self.tree.bind("<Double-1>", lambda _e: self._on_open())
         self.grab_set()
         self.transient(parent)
+        _apply_button_cursor(self)
 
     def _populate(self) -> None:
         files = sorted(
@@ -981,6 +993,7 @@ class SignalColumn(ctk.CTkFrame):
         self.raw_data = None
         self.latest_title = ""
         self.stats_label = ctk.CTkLabel(self.plots_frame, justify="left", anchor="w", text="")
+        _apply_button_cursor(self)
 
     def open_signal(self) -> None:
         """Open a signal and display it inside this column."""
@@ -1125,6 +1138,7 @@ class CompareWindow(ctk.CTkToplevel):
             col = SignalColumn(self, parent)
             col.grid(row=0, column=i, sticky="nsew", padx=5, pady=5)
             self.columns.append(col)
+        _apply_button_cursor(self)
 
 
 class SuggestEntry(ctk.CTkFrame):
@@ -1216,10 +1230,12 @@ class SuggestEntry(ctk.CTkFrame):
                 command=lambda v=val: self._remove_suggestion(v),
                 width=24,
             )
+            rm.configure(cursor=BUTTON_CURSOR)
             rm.pack(side="right")
             frame.pack(side="left", padx=2, pady=1)
             frame.bind("<Button-1>", lambda _e, v=val: self._fill_entry(v))
             lbl.bind("<Button-1>", lambda _e, v=val: self._fill_entry(v))
+        _apply_button_cursor(self.sugg_frame)
 
 
 def _reduce_data(
@@ -2981,6 +2997,7 @@ class TransceiverUI(ctk.CTk):
         self.toggle_rate_sync(self.sync_var.get())
         self.update_trim()
         _apply_input_margins(self)
+        _apply_button_cursor(self)
 
     def update_waveform_fields(self) -> None:
         """Show or hide waveform specific parameters."""
@@ -4247,6 +4264,7 @@ class TransceiverUI(ctk.CTk):
             win.destroy()
 
         ctk.CTkButton(win, text="Load", command=load_selected).pack(pady=5)
+        _apply_button_cursor(win)
 
     def open_save_preset_window(self) -> None:
         win = ctk.CTkToplevel(self)
@@ -4271,6 +4289,7 @@ class TransceiverUI(ctk.CTk):
             row=1, column=0, columnspan=2, pady=5
         )
         _apply_input_margins(win)
+        _apply_button_cursor(win)
 
     def load_preset(self, name: str) -> None:
         preset = _PRESETS.get(name)
@@ -4307,6 +4326,7 @@ class TransceiverUI(ctk.CTk):
             win.destroy()
 
         ctk.CTkButton(win, text="Delete", command=delete_selected).pack(pady=5)
+        _apply_button_cursor(win)
 
     # ----- Actions -----
     def generate(self):
