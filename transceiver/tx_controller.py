@@ -650,17 +650,48 @@ class TxController:
             if abs(coerced_rate - params.rate) > 1e-6:
                 self._log(f"TX (Replay): rate coerced {params.rate} -> {coerced_rate}\n")
 
+            def _log_if_coerced(label: str, desired: object, actual: object, tol: float = 1e-6) -> None:
+                if isinstance(desired, (int, float)) and isinstance(actual, (int, float)):
+                    if abs(actual - desired) > tol:
+                        self._log(f"TX (Replay): {label} coerced {desired} -> {actual}\n")
+                elif actual != desired:
+                    self._log(f"TX (Replay): {label} coerced {desired} -> {actual}\n")
+
             # TX-spezifische Settings bleiben pro chan
             radio.set_tx_frequency(params.freq, radio_chan_idx)
+            if hasattr(radio, "get_tx_frequency"):
+                try:
+                    actual_freq = float(radio.get_tx_frequency(radio_chan_idx))
+                except Exception:
+                    actual_freq = None
+                if actual_freq is not None:
+                    _log_if_coerced("freq", params.freq, actual_freq)
             radio.set_tx_gain(params.gain, radio_chan_idx)
             if hasattr(radio, "get_tx_gain"):
-                actual_gain = float(radio.get_tx_gain(radio_chan_idx))
-                if abs(actual_gain - params.gain) > 1e-6:
-                    self._log(f"TX (Replay): gain coerced {params.gain} -> {actual_gain}\n")
+                try:
+                    actual_gain = float(radio.get_tx_gain(radio_chan_idx))
+                except Exception:
+                    actual_gain = None
+                if actual_gain is not None:
+                    _log_if_coerced("gain", params.gain, actual_gain)
             if params.antenna:
                 radio.set_tx_antenna(params.antenna, radio_chan_idx)
+                if hasattr(radio, "get_tx_antenna"):
+                    try:
+                        actual_antenna = radio.get_tx_antenna(radio_chan_idx)
+                    except Exception:
+                        actual_antenna = None
+                    if actual_antenna is not None:
+                        _log_if_coerced("antenna", params.antenna, actual_antenna)
             if params.bandwidth:
                 radio.set_tx_bandwidth(params.bandwidth, radio_chan_idx)
+                if hasattr(radio, "get_tx_bandwidth"):
+                    try:
+                        actual_bw = float(radio.get_tx_bandwidth(radio_chan_idx))
+                    except Exception:
+                        actual_bw = None
+                    if actual_bw is not None:
+                        _log_if_coerced("bandwidth", params.bandwidth, actual_bw)
 
 
 
