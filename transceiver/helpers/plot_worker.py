@@ -137,8 +137,16 @@ def worker_loop(conn, initial_payload: dict[str, object] | None = None) -> None:
             "shape": payload.get("ref_shape"),
             "dtype": payload.get("ref_dtype"),
         }
+        compare_meta = {
+            "name": payload.get("compare_shm_name"),
+            "shape": payload.get("compare_shape"),
+            "dtype": payload.get("compare_dtype"),
+        }
         data, data_shm = _load_iq(payload.get("data_file"), data_meta)
         ref_data, ref_shm = _load_iq(payload.get("ref_file"), ref_meta)
+        compare_data, compare_shm = _load_iq(
+            payload.get("compare_file"), compare_meta
+        )
         manual_lags = payload.get("manual_lags") or None
         fullscreen = bool(payload.get("fullscreen", False))
         output_path = payload.get("output_path")
@@ -149,11 +157,14 @@ def worker_loop(conn, initial_payload: dict[str, object] | None = None) -> None:
             payload.get("shm_name"),
             payload.get("ref_file"),
             payload.get("ref_shm_name"),
+            payload.get("compare_file"),
+            payload.get("compare_shm_name"),
         )
 
         if data is None or np.size(data) == 0:
             _cleanup_shm(data_shm)
             _cleanup_shm(ref_shm)
+            _cleanup_shm(compare_shm)
             return
 
         if data_shm is not None:
@@ -162,6 +173,9 @@ def worker_loop(conn, initial_payload: dict[str, object] | None = None) -> None:
         if ref_shm is not None and ref_data is not None:
             ref_data = np.array(ref_data)
             _cleanup_shm(ref_shm)
+        if compare_shm is not None and compare_data is not None:
+            compare_data = np.array(compare_data)
+            _cleanup_shm(compare_shm)
 
         _clear_plot(plot_item)
         win.setWindowTitle(str(title))
@@ -172,6 +186,7 @@ def worker_loop(conn, initial_payload: dict[str, object] | None = None) -> None:
             mode,
             title,
             ref_data=ref_data,
+            crosscorr_compare=compare_data,
             manual_lags=manual_state if manual_lags is not None else None,
             on_los_drag=lambda _idx, lag: _update_manual("los", lag),
             on_echo_drag=lambda _idx, lag: _update_manual("echo", lag),
