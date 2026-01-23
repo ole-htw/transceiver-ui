@@ -2053,6 +2053,17 @@ def _plot_on_pg(
     reduction_step: int = 1,
 ) -> None:
     """Helper to draw the selected visualization on a PyQtGraph PlotItem."""
+    colors = {
+        "real": "#4FC3F7",
+        "imag": "#FF8A65",
+        "freq": "#4DB6AC",
+        "autocorr": "#BA68C8",
+        "crosscorr": "#81D4FA",
+        "compare": "#F06292",
+        "los": "#EF5350",
+        "echo": "#66BB6A",
+        "text": "#E0E0E0",
+    }
     step = max(1, int(reduction_step))
     scene = plot.scene()
     if scene is not None and hasattr(plot, "_xcorr_click_handler"):
@@ -2066,9 +2077,11 @@ def _plot_on_pg(
         fs /= step
     if mode == "Signal":
         plot.addLegend()
-        plot.plot(np.real(data), pen=pg.mkPen("b"), name="Real")
+        plot.plot(np.real(data), pen=pg.mkPen(colors["real"]), name="Real")
         plot.plot(
-            np.imag(data), pen=pg.mkPen("r", style=QtCore.Qt.DashLine), name="Imag"
+            np.imag(data),
+            pen=pg.mkPen(colors["imag"], style=QtCore.Qt.DashLine),
+            name="Imag",
         )
         plot.setTitle(title)
         plot.setLabel("bottom", "Sample Index")
@@ -2076,14 +2089,18 @@ def _plot_on_pg(
     elif mode in ("Freq", "Freq Analysis"):
         spec = np.fft.fftshift(np.fft.fft(data))
         freqs = np.fft.fftshift(np.fft.fftfreq(len(data), d=1 / fs))
-        plot.plot(freqs, 20 * np.log10(np.abs(spec) + 1e-9), pen="b")
+        plot.plot(
+            freqs,
+            20 * np.log10(np.abs(spec) + 1e-9),
+            pen=pg.mkPen(colors["freq"]),
+        )
         plot.setTitle(f"Spectrum: {title}")
         plot.setLabel("bottom", "Frequency [Hz]")
         plot.setLabel("left", "Magnitude [dB]")
     elif mode == "Autocorr":
         ac = _autocorr_fft(data)
         lags = np.arange(-len(data) + 1, len(data))
-        plot.plot(lags, np.abs(ac), pen="b")
+        plot.plot(lags, np.abs(ac), pen=pg.mkPen(colors["autocorr"]))
         plot.setTitle(f"Autocorrelation: {title}")
         plot.setLabel("bottom", "Lag")
         plot.setLabel("left", "Magnitude")
@@ -2108,7 +2125,7 @@ def _plot_on_pg(
             if crosscorr_compare is not None and crosscorr_compare.size
             else "Kreuzkorrelation"
         )
-        plot.plot(lags, mag, pen="b", name=main_label)
+        plot.plot(lags, mag, pen=pg.mkPen(colors["crosscorr"]), name=main_label)
         if crosscorr_compare is not None and crosscorr_compare.size:
             n2 = min(len(crosscorr_compare), len(ref_data))
             cc2 = _xcorr_fft(crosscorr_compare[:n2], ref_data[:n2])
@@ -2116,7 +2133,7 @@ def _plot_on_pg(
             plot.plot(
                 lags2,
                 np.abs(cc2),
-                pen=pg.mkPen("m", style=QtCore.Qt.DashLine),
+                pen=pg.mkPen(colors["compare"], style=QtCore.Qt.DashLine),
                 name="ohne Pfad-Cancellation",
             )
         if legend is None:
@@ -2126,7 +2143,7 @@ def _plot_on_pg(
             lags, base_los_idx, base_echo_idx, manual_lags
         )
 
-        echo_text = pg.TextItem(color="k", anchor=(0, 1))
+        echo_text = pg.TextItem(color=colors["text"], anchor=(0, 1))
 
         def _position_echo_text() -> None:
             view_box = plot.getViewBox()
@@ -2160,8 +2177,8 @@ def _plot_on_pg(
         _update_echo_text()
 
         legend.anchor(itemPos=(1, 0), parentPos=(1, 0), offset=(-10, 10))
-        los_color = pg.mkColor("r")
-        echo_color = pg.mkColor("g")
+        los_color = pg.mkColor(colors["los"])
+        echo_color = pg.mkColor(colors["echo"])
         los_legend = pg.PlotDataItem(
             [],
             [],

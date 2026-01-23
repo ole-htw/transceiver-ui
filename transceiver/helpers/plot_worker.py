@@ -95,8 +95,8 @@ def _prepare_payload(payload: dict[str, object]) -> tuple[dict[str, object], dic
 
 
 def worker_loop(conn, initial_payload: dict[str, object] | None = None) -> None:
-    pg.setConfigOption("background", "w")
-    pg.setConfigOption("foreground", "k")
+    pg.setConfigOption("background", "#0f1115")
+    pg.setConfigOption("foreground", "#e6e6e6")
     _install_qt_message_filter()
     app = pg.mkQApp()
     win = pg.plot(show=False)
