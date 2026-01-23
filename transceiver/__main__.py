@@ -26,7 +26,7 @@ from pyqtgraph.Qt import QtCore
 import pyqtgraph as pg
 
 import sys
-from .helpers.tx_generator import generate_waveform, rrc_coeffs
+from .helpers.tx_generator import generate_waveform
 from .helpers.iq_utils import save_interleaved
 from .helpers import rx_convert
 from .helpers import doa_esprit
@@ -2291,7 +2291,7 @@ class TransceiverUI(ctk.CTk):
         self.rrc_beta_entry.grid(row=0, column=1, sticky="ew")
         self.rrc_beta_entry.entry.bind(
             "<FocusOut>",
-            lambda _e: (self._sync_rx_inv_rrc_params(), self.auto_update_tx_filename()),
+            lambda _e: self.auto_update_tx_filename(),
         )
 
         self.rrc_span_label = ctk.CTkLabel(filter_body, text="RRC Span")
@@ -2301,7 +2301,7 @@ class TransceiverUI(ctk.CTk):
         self.rrc_span_entry.grid(row=1, column=1, sticky="ew")
         self.rrc_span_entry.entry.bind(
             "<FocusOut>",
-            lambda _e: (self._sync_rx_inv_rrc_params(), self.auto_update_tx_filename()),
+            lambda _e: self.auto_update_tx_filename(),
         )
 
         ctk.CTkLabel(filter_body, text="Oversampling").grid(row=2, column=0, sticky="w")
@@ -2312,7 +2312,6 @@ class TransceiverUI(ctk.CTk):
             "<FocusOut>",
             lambda _e: (
                 self.auto_update_tx_filename(),
-                self._sync_rx_inv_rrc_params(),
                 self._reset_manual_xcorr_lags("Oversampling geändert"),
             ),
         )
@@ -2539,27 +2538,6 @@ class TransceiverUI(ctk.CTk):
         self.rx_channel_view_box.grid(row=6, column=1, sticky="w")
         self.rx_channel_view_box.configure(state="disabled")
 
-        self.rx_inv_rrc_enable = tk.BooleanVar(value=False)
-        self.rx_inv_rrc_check = ctk.CTkCheckBox(
-            rx_body,
-            text="Inv. RRC",
-            variable=self.rx_inv_rrc_enable,
-            command=self._on_rx_inv_rrc_toggle,
-        )
-        self.rx_inv_rrc_check.grid(row=7, column=0, columnspan=2, sticky="w")
-        self.rx_inv_rrc_beta_label = ctk.CTkLabel(rx_body, text="Inv. RRC β")
-        self.rx_inv_rrc_beta_entry = SuggestEntry(rx_body, "rx_inv_rrc_beta")
-        self.rx_inv_rrc_beta_entry.insert(0, "0.25")
-        self.rx_inv_rrc_beta_entry.entry.configure(state="disabled")
-
-        self.rx_inv_rrc_span_label = ctk.CTkLabel(rx_body, text="Inv. RRC Span")
-        self.rx_inv_rrc_span_entry = SuggestEntry(rx_body, "rx_inv_rrc_span")
-        self.rx_inv_rrc_span_entry.insert(0, "6")
-        self.rx_inv_rrc_span_entry.entry.configure(state="disabled")
-
-        self.rx_inv_os_entry = SuggestEntry(rx_body, "rx_inv_os_entry")
-        self.rx_inv_os_entry.insert(0, "1")
-        self.rx_inv_os_entry.entry.configure(state="disabled")
         self.rx_path_cancel_enable = tk.BooleanVar(value=False)
         self.rx_path_cancel_check = ctk.CTkCheckBox(
             rx_body,
@@ -2567,39 +2545,39 @@ class TransceiverUI(ctk.CTk):
             variable=self.rx_path_cancel_enable,
             command=self._on_rx_path_cancel_toggle,
         )
-        self.rx_path_cancel_check.grid(row=8, column=0, columnspan=2, sticky="w")
+        self.rx_path_cancel_check.grid(row=7, column=0, columnspan=2, sticky="w")
 
-        ctk.CTkLabel(rx_body, text="Output").grid(row=9, column=0, sticky="w")
+        ctk.CTkLabel(rx_body, text="Output").grid(row=8, column=0, sticky="w")
         self.rx_file = SuggestEntry(rx_body, "rx_file")
         self.rx_file.insert(0, "rx_signal.bin")
-        self.rx_file.grid(row=9, column=1, sticky="ew")
+        self.rx_file.grid(row=8, column=1, sticky="ew")
 
-        ctk.CTkLabel(rx_body, text="View").grid(row=10, column=0, sticky="w")
+        ctk.CTkLabel(rx_body, text="View").grid(row=9, column=0, sticky="w")
         ctk.CTkComboBox(
             rx_body,
             variable=self.rx_view,
             values=["Signal", "Freq", "InstantFreq", "Crosscorr", "AoA (ESPRIT)"],
             width=140,
-        ).grid(row=10, column=1, sticky="w")
+        ).grid(row=9, column=1, sticky="w")
 
         ctk.CTkLabel(rx_body, text="Antennenabstand [m]").grid(
-            row=11, column=0, sticky="w"
+            row=10, column=0, sticky="w"
         )
         self.rx_ant_spacing = SuggestEntry(rx_body, "rx_ant_spacing")
         self.rx_ant_spacing.insert(0, "0.03")
-        self.rx_ant_spacing.grid(row=11, column=1, sticky="ew")
+        self.rx_ant_spacing.grid(row=10, column=1, sticky="ew")
 
         ctk.CTkLabel(rx_body, text="Wellenlänge [m]").grid(
-            row=14, column=0, sticky="w"
+            row=11, column=0, sticky="w"
         )
         self.rx_wavelength = SuggestEntry(rx_body, "rx_wavelength")
         self.rx_wavelength.insert(0, "3e8/5.18e9")
-        self.rx_wavelength.grid(row=14, column=1, sticky="ew")
+        self.rx_wavelength.grid(row=11, column=1, sticky="ew")
 
         self.rx_aoa_label = ctk.CTkLabel(rx_body, text="AoA (ESPRIT): --")
-        self.rx_aoa_label.grid(row=15, column=0, columnspan=2, sticky="w")
+        self.rx_aoa_label.grid(row=12, column=0, columnspan=2, sticky="w")
         self.rx_echo_aoa_label = ctk.CTkLabel(rx_body, text="Echo AoA: --")
-        self.rx_echo_aoa_label.grid(row=16, column=0, columnspan=2, sticky="w")
+        self.rx_echo_aoa_label.grid(row=13, column=0, columnspan=2, sticky="w")
 
         # --- Trim controls -------------------------------------------------
         self.trim_var = tk.BooleanVar(value=False)
@@ -2608,7 +2586,7 @@ class TransceiverUI(ctk.CTk):
         self.trim_dirty = False
 
         trim_frame = ctk.CTkFrame(rx_body)
-        trim_frame.grid(row=17, column=0, columnspan=2, sticky="ew")
+        trim_frame.grid(row=14, column=0, columnspan=2, sticky="ew")
         trim_frame.columnconfigure(1, weight=1)
 
         ctk.CTkCheckBox(
@@ -2640,7 +2618,7 @@ class TransceiverUI(ctk.CTk):
         self.trim_end_label.grid(row=1, column=2, sticky="e")
 
         rx_btn_frame = ctk.CTkFrame(rx_body)
-        rx_btn_frame.grid(row=18, column=0, columnspan=2, pady=5)
+        rx_btn_frame.grid(row=15, column=0, columnspan=2, pady=5)
         rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
         self.rx_button = ctk.CTkButton(rx_btn_frame, text="Receive", command=self.receive)
@@ -2658,7 +2636,7 @@ class TransceiverUI(ctk.CTk):
         )
 
         rx_scroll_container = ctk.CTkFrame(rx_body)
-        rx_scroll_container.grid(row=19, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.grid(row=16, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
@@ -2681,10 +2659,9 @@ class TransceiverUI(ctk.CTk):
                 scrollregion=self.rx_canvas.bbox("all")
             ),
         )
-        rx_body.rowconfigure(19, weight=1)
+        rx_body.rowconfigure(16, weight=1)
         self.rx_canvases = []
         self.update_waveform_fields()
-        self._update_rx_inv_rrc_availability()
         self.auto_update_tx_filename()
         self.auto_update_rx_filename()
         self.toggle_rate_sync(self.sync_var.get())
@@ -2736,7 +2713,6 @@ class TransceiverUI(ctk.CTk):
             self.f1_label.grid(row=3, column=0, sticky="w")
             self.f1_entry.grid(row=3, column=1, sticky="ew")
 
-        self._update_rx_inv_rrc_availability()
         self.auto_update_tx_filename()
 
     def _rrc_active(self) -> bool:
@@ -2762,7 +2738,6 @@ class TransceiverUI(ctk.CTk):
         self.rrc_beta_entry.entry.configure(state=state)
         self.rrc_span_entry.entry.configure(state=state)
         self.os_entry.entry.configure(state=state)
-        self._update_rx_inv_rrc_availability()
         self.auto_update_tx_filename()
         self._reset_manual_xcorr_lags("RRC/Oversampling geändert")
 
@@ -2793,11 +2768,6 @@ class TransceiverUI(ctk.CTk):
             self.zeros_combo.configure(state="disabled")
         self.auto_update_tx_filename()
 
-    def _on_rx_inv_rrc_toggle(self) -> None:
-        self._sync_rx_inv_rrc_params()
-        self._reset_manual_xcorr_lags("Oversampling geändert")
-        self.update_trim()
-
     def _on_rx_path_cancel_toggle(self) -> None:
         self._reset_manual_xcorr_lags("Pfad-Cancellation geändert")
         self.update_trim()
@@ -2824,28 +2794,6 @@ class TransceiverUI(ctk.CTk):
         """Placeholder to keep path cancellation controls in sync."""
         if hasattr(self, "rx_path_cancel_check"):
             self.rx_path_cancel_check.configure(state="normal")
-
-    def _update_rx_inv_rrc_availability(self) -> None:
-        has_filtered_signal = self._rrc_active()
-        state = "normal" if has_filtered_signal else "disabled"
-        self.rx_inv_rrc_check.configure(state=state)
-        if not has_filtered_signal:
-            self.rx_inv_rrc_enable.set(False)
-        self._sync_rx_inv_rrc_params()
-
-    def _sync_rx_inv_rrc_params(self) -> None:
-        beta = self.rrc_beta_entry.get() or "0.25"
-        span = self.rrc_span_entry.get() or "6"
-        oversampling = self.os_entry.get() or "1"
-        self.rx_inv_rrc_beta_entry.delete(0, tk.END)
-        self.rx_inv_rrc_beta_entry.insert(0, beta)
-        self.rx_inv_rrc_span_entry.delete(0, tk.END)
-        self.rx_inv_rrc_span_entry.insert(0, span)
-        self.rx_inv_os_entry.delete(0, tk.END)
-        self.rx_inv_os_entry.insert(0, oversampling)
-        self.rx_inv_rrc_beta_entry.entry.configure(state="disabled")
-        self.rx_inv_rrc_span_entry.entry.configure(state="disabled")
-        self.rx_inv_os_entry.entry.configure(state="disabled")
 
     def _reset_manual_xcorr_lags(self, reason: str | None = None) -> None:
         if self.manual_xcorr_lags.get("los") is None and self.manual_xcorr_lags.get(
@@ -3083,19 +3031,7 @@ class TransceiverUI(ctk.CTk):
 
     def _get_crosscorr_reference(self) -> tuple[np.ndarray, str]:
         """Return TX reference data and a label for cross-correlation."""
-        ref = getattr(self, "tx_data", np.array([], dtype=np.complex64))
-        label = "TX"
-        if self.rx_inv_rrc_enable.get():
-            unfiltered = getattr(
-                self, "tx_data_unfiltered", np.array([], dtype=np.complex64)
-            )
-            if unfiltered.size:
-                ref = _strip_trailing_zeros(unfiltered)
-                label = "TX ungefiltert"
-            else:
-                ref = np.array([], dtype=np.complex64)
-                label = ""
-        return ref, label
+        return getattr(self, "tx_data", np.array([], dtype=np.complex64)), "TX"
 
     def _display_rx_plots(
         self, data: np.ndarray, fs: float, reset_manual: bool = True
@@ -3120,11 +3056,6 @@ class TransceiverUI(ctk.CTk):
         if self.trim_var.get():
             data = self._trim_data(data)
 
-        rx_data = data
-        rx_fs = fs
-        rx_data_uncanceled = rx_data
-        data, fac = self._apply_inverse_rrc(data)
-        fs *= fac
         data_uncanceled = data
 
         def _load_tx_samples(path: str) -> np.ndarray:
@@ -3139,39 +3070,18 @@ class TransceiverUI(ctk.CTk):
             self.tx_data = _load_tx_samples(tx_reference_path)
         except Exception:
             self.tx_data = np.array([], dtype=np.complex64)
-        self.tx_data_unfiltered = np.array([], dtype=np.complex64)
-        if self.rx_inv_rrc_enable.get():
-            unfiltered_path = self.file_entry.get() or self.tx_file.get()
-            unfiltered_path = _strip_zeros_tx_filename(unfiltered_path)
-            if unfiltered_path == self.tx_file.get():
-                self.tx_data_unfiltered = self.tx_data
-            else:
-                try:
-                    self.tx_data_unfiltered = _load_tx_samples(unfiltered_path)
-                except Exception:
-                    self.tx_data_unfiltered = np.array([], dtype=np.complex64)
         ref_data, ref_label = self._get_crosscorr_reference()
-        rx_ref_data = getattr(self, "tx_data", np.array([], dtype=np.complex64))
-        rx_ref_label = "TX"
-        if self.rx_inv_rrc_enable.get() and rx_ref_data.size:
-            rx_ref_label = "TX (gefiltert)"
         aoa_text = "AoA (ESPRIT): --"
         echo_aoa_text = "Echo AoA: --"
         self.echo_aoa_results = []
         aoa_raw_data = None
         aoa_time = None
         aoa_series = None
-        aoa_time_unfiltered = None
-        aoa_series_unfiltered = None
         if self.raw_rx_data.ndim == 2 and self.raw_rx_data.shape[0] >= 2:
             aoa_raw_data = self.raw_rx_data[:2]
             if self.trim_var.get():
                 aoa_raw_data = self._trim_data_multichannel(aoa_raw_data)
             aoa_data = aoa_raw_data
-            if self.rx_inv_rrc_enable.get():
-                aoa_data = np.vstack(
-                    [self._apply_inverse_rrc(chan)[0] for chan in aoa_raw_data]
-                )
             try:
                 antenna_spacing = _parse_number_expr_or_error(
                     self.rx_ant_spacing.get()
@@ -3186,13 +3096,6 @@ class TransceiverUI(ctk.CTk):
                         aoa_time, aoa_series = doa_esprit.estimate_aoa_esprit_series(
                             aoa_data, antenna_spacing, wavelength
                         )
-                        if self.rx_inv_rrc_enable.get() and aoa_raw_data is not None:
-                            (
-                                aoa_time_unfiltered,
-                                aoa_series_unfiltered,
-                            ) = doa_esprit.estimate_aoa_esprit_series(
-                                aoa_raw_data, antenna_spacing, wavelength
-                            )
                 if ref_data.size > 0:
                     echo_data = aoa_data
                     echo_out = _correlate_and_estimate_echo_aoa(
@@ -3238,22 +3141,13 @@ class TransceiverUI(ctk.CTk):
         ):
             echo_aoa_text = "Echo AoA: TX-Daten erforderlich"
 
-        rx_cancel_note = None
         cancel_note = None
-        rx_cancel_info: dict[str, object] | None = None
         cancel_info: dict[str, object] | None = None
         if self.rx_path_cancel_enable.get():
-            rx_data, rx_cancel_info = self._apply_path_cancellation(
-                rx_data, rx_ref_data
-            )
             data, cancel_info = self._apply_path_cancellation(data, ref_data)
-            rx_cancel_note = self._path_cancellation_note(
-                rx_cancel_info, rx_ref_data
-            )
             cancel_note = self._path_cancellation_note(cancel_info, ref_data)
-            label = "inv. filter" if self.rx_inv_rrc_enable.get() else "RX"
             if cancel_info is not None:
-                self._log_path_cancellation(cancel_info, label)
+                self._log_path_cancellation(cancel_info, "RX")
             self._last_path_cancel_info = cancel_info
         else:
             self._last_path_cancel_info = None
@@ -3378,60 +3272,18 @@ class TransceiverUI(ctk.CTk):
                 widget.grid(row=len(modes) + 1, column=0, sticky="nsew", pady=2)
                 self.rx_canvases.append(canvas)
 
-        if self.rx_inv_rrc_enable.get():
-            notebook = ctk.CTkTabview(self.rx_plots_frame)
-            notebook.grid(row=0, column=0, sticky="nsew")
-            self.rx_plots_frame.columnconfigure(0, weight=1)
-
-            unfiltered_tab = notebook.add("RX")
-            unfiltered_tab.columnconfigure(0, weight=1)
-            filtered_tab = notebook.add("inv. filter")
-            filtered_tab.columnconfigure(0, weight=1)
-
-            notebook.set("inv. filter")
-            self.rx_canvases.append(notebook)
-
-            _render_rx_preview(
-                unfiltered_tab,
-                rx_data,
-                rx_fs,
-                rx_ref_data,
-                rx_ref_label,
-                aoa_time_unfiltered if aoa_time_unfiltered is not None else aoa_time,
-                (
-                    aoa_series_unfiltered
-                    if aoa_series_unfiltered is not None
-                    else aoa_series
-                ),
-                rx_cancel_note,
-                rx_cancel_info if rx_cancel_info and rx_cancel_info.get("applied") else None,
-                rx_data_uncanceled if self.rx_path_cancel_enable.get() else None,
-            )
-            _render_rx_preview(
-                filtered_tab,
-                data,
-                fs,
-                ref_data,
-                ref_label,
-                aoa_time,
-                aoa_series,
-                cancel_note,
-                cancel_info if cancel_info and cancel_info.get("applied") else None,
-                data_uncanceled if self.rx_path_cancel_enable.get() else None,
-            )
-        else:
-            _render_rx_preview(
-                self.rx_plots_frame,
-                data,
-                fs,
-                ref_data,
-                ref_label,
-                aoa_time,
-                aoa_series,
-                cancel_note,
-                cancel_info if cancel_info and cancel_info.get("applied") else None,
-                data_uncanceled if self.rx_path_cancel_enable.get() else None,
-            )
+        _render_rx_preview(
+            self.rx_plots_frame,
+            data,
+            fs,
+            ref_data,
+            ref_label,
+            aoa_time,
+            aoa_series,
+            cancel_note,
+            cancel_info if cancel_info and cancel_info.get("applied") else None,
+            data_uncanceled if self.rx_path_cancel_enable.get() else None,
+        )
 
         if hasattr(self, "rx_aoa_label"):
             self.rx_aoa_label.configure(text=aoa_text)
@@ -3464,36 +3316,6 @@ class TransceiverUI(ctk.CTk):
         e = max(s + 1, min(data.shape[1], e))
         return data[:, s:e]
 
-    def _apply_inverse_rrc(self, data: np.ndarray) -> tuple[np.ndarray, float]:
-        """Return *data* after inverse RRC filtering and downsampling."""
-        if not self.rx_inv_rrc_enable.get() or data.size == 0:
-            return data, 1.0
-        try:
-            factor = int(self.rx_inv_os_entry.get())
-        except Exception:
-            factor = 1
-        if factor < 1:
-            factor = 1
-        try:
-            beta = float(self.rrc_beta_entry.get())
-        except Exception:
-            beta = 0.25
-        try:
-            span = int(self.rrc_span_entry.get())
-        except Exception:
-            span = 6
-        filtered = data
-        if span > 0:
-            h = rrc_coeffs(beta, span, sps=factor).astype(np.complex64)
-            n = len(filtered)
-            H = np.fft.fft(h, n)
-            eps = 1e-6
-            filtered = np.fft.ifft(np.fft.fft(filtered, n) / (H + eps))
-        if factor > 1:
-            filtered = filtered[::factor]
-            return filtered, 1.0 / float(factor)
-        return filtered, 1.0
-
     def _on_trim_change(self, *_args, reset_manual: bool = True) -> None:
         state = "normal" if self.trim_var.get() else "disabled"
         self.range_slider.configure_state(state)
@@ -3520,13 +3342,7 @@ class TransceiverUI(ctk.CTk):
             has_rx_data
             and hasattr(self, "latest_data")
             and self.latest_data is not None
-            and (
-                self.trim_var.get()
-                or (
-                    self.rx_inv_rrc_enable.get()
-                    and int(self.rx_inv_os_entry.get() or 1) > 1
-                )
-            )
+            and self.trim_var.get()
         ):
             self.crosscorr_full()
         else:
@@ -3876,10 +3692,6 @@ class TransceiverUI(ctk.CTk):
             echo_data = self.raw_rx_data[:2]
             if self.trim_var.get():
                 echo_data = self._trim_data_multichannel(echo_data)
-            if self.rx_inv_rrc_enable.get():
-                echo_data = np.vstack(
-                    [self._apply_inverse_rrc(chan)[0] for chan in echo_data]
-                )
             try:
                 antenna_spacing = _parse_number_expr_or_error(
                     self.rx_ant_spacing.get()
@@ -3936,10 +3748,6 @@ class TransceiverUI(ctk.CTk):
             "rx_freq": self.rx_freq.get(),
             "rx_dur": self.rx_dur.get(),
             "rx_gain": self.rx_gain.get(),
-            "rx_inv_rrc_oversampling": self.os_entry.get(),
-            "rx_inv_rrc_beta": self.rrc_beta_entry.get(),
-            "rx_inv_rrc_span": self.rrc_span_entry.get(),
-            "rx_inv_rrc_enabled": self.rx_inv_rrc_enable.get(),
             "rx_path_cancellation_enabled": self.rx_path_cancel_enable.get(),
             "rx_channel_2": self.rx_channel_2.get(),
             "rx_channel_view": self.rx_channel_view.get(),
@@ -3975,12 +3783,7 @@ class TransceiverUI(ctk.CTk):
         self.os_entry.delete(0, tk.END)
         self.os_entry.insert(
             0,
-            params.get(
-                "rrc_oversampling",
-                params.get(
-                    "rx_inv_rrc_oversampling", params.get("oversampling", "1")
-                ),
-            ),
+            params.get("rrc_oversampling", params.get("oversampling", "1")),
         )
         self.repeat_entry.delete(0, tk.END)
         repeats_value = params.get("repeats", "1")
@@ -3993,13 +3796,9 @@ class TransceiverUI(ctk.CTk):
         self.repeat_enable.set(bool(repeat_enabled))
         self._on_repeat_toggle()
         self.rrc_beta_entry.delete(0, tk.END)
-        self.rrc_beta_entry.insert(
-            0, params.get("rrc_beta", params.get("rx_inv_rrc_beta", "0.25"))
-        )
+        self.rrc_beta_entry.insert(0, params.get("rrc_beta", "0.25"))
         self.rrc_span_entry.delete(0, tk.END)
-        self.rrc_span_entry.insert(
-            0, params.get("rrc_span", params.get("rx_inv_rrc_span", "6"))
-        )
+        self.rrc_span_entry.insert(0, params.get("rrc_span", "6"))
         self.rrc_enable.set(params.get("rrc_enabled", True))
         state = "normal" if self.rrc_enable.get() else "disabled"
         self.rrc_beta_entry.entry.configure(state=state)
@@ -4040,10 +3839,6 @@ class TransceiverUI(ctk.CTk):
         self.rx_dur.insert(0, params.get("rx_dur", ""))
         self.rx_gain.delete(0, tk.END)
         self.rx_gain.insert(0, params.get("rx_gain", ""))
-        self.rx_inv_rrc_enable.set(
-            params.get("rx_inv_rrc_enabled", params.get("rx_rrc_enabled", False))
-        )
-        self._update_rx_inv_rrc_availability()
         self.rx_path_cancel_enable.set(
             params.get("rx_path_cancellation_enabled", False)
         )
