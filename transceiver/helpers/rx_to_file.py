@@ -64,6 +64,16 @@ def parse_args():
     return args
 
 
+def ensure_uhd_frame_sizes(args_str, recv_frame_size=8000, send_frame_size=8000):
+    """Ensure recv/send frame sizes are present in UHD device args."""
+    components = [part for part in args_str.split(",") if part]
+    if not any(part.startswith("recv_frame_size=") for part in components):
+        components.append(f"recv_frame_size={recv_frame_size}")
+    if not any(part.startswith("send_frame_size=") for part in components):
+        components.append(f"send_frame_size={send_frame_size}")
+    return ",".join(components)
+
+
 def multi_usrp_rx(args):
     """
     multi_usrp based RX example
@@ -152,6 +162,7 @@ def rfnoc_dram_rx(args):
 def main():
     """RX samples and write to file"""
     args = parse_args()
+    args.args = ensure_uhd_frame_sizes(args.args)
 
     if args.dram:
         rfnoc_dram_rx(args)
