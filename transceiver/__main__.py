@@ -195,6 +195,14 @@ def _make_group(
     return frame, body, toggle
 
 
+def _resolve_theme_color(color: str | tuple[str, str]) -> str:
+    if isinstance(color, (tuple, list)):
+        if ctk.get_appearance_mode() == "Light":
+            return color[0]
+        return color[1]
+    return color
+
+
 def _make_bordered_group(
     parent: tk.Misc,
     title: str,
@@ -402,6 +410,7 @@ class RangeSlider(ctk.CTkFrame):
             width, 0, width, height, fill="red", width=2
         )
         self.active = None
+        self.range_offset = 0.0
         self.canvas.bind("<Button-1>", self._on_press)
         self.canvas.bind("<B1-Motion>", self._on_drag)
         start_var.trace_add("write", self._update_from_vars)
@@ -481,7 +490,14 @@ class RangeSlider(ctk.CTkFrame):
         x = max(0, min(self.width, event.x))
         x1 = self.canvas.coords(self.handle_start)[0]
         x2 = self.canvas.coords(self.handle_end)[0]
-        self.active = "start" if abs(x - x1) <= abs(x - x2) else "end"
+        handle_grab = 6
+        if abs(x - x1) <= handle_grab or abs(x - x2) <= handle_grab:
+            self.active = "start" if abs(x - x1) <= abs(x - x2) else "end"
+        elif x1 <= x <= x2:
+            self.active = "range"
+            self.range_offset = x - x1
+        else:
+            self.active = "start" if abs(x - x1) <= abs(x - x2) else "end"
         self._move(x)
 
     def _on_drag(self, event) -> None:
@@ -491,15 +507,25 @@ class RangeSlider(ctk.CTkFrame):
 
     def _move(self, x: float) -> None:
         x = max(0, min(self.width, x))
-        pct = 100 * x / self.width
-        if self.active == "start":
-            if pct > self.end_var.get():
-                self.end_var.set(pct)
-            self.start_var.set(pct)
+        if self.active == "range":
+            range_width = (self.end_var.get() - self.start_var.get()) / 100 * self.width
+            if range_width < 0:
+                range_width = 0
+            new_x1 = x - self.range_offset
+            new_x1 = max(0, min(self.width - range_width, new_x1))
+            new_x2 = new_x1 + range_width
+            self.start_var.set(100 * new_x1 / self.width)
+            self.end_var.set(100 * new_x2 / self.width)
         else:
-            if pct < self.start_var.get():
+            pct = 100 * x / self.width
+            if self.active == "start":
+                if pct > self.end_var.get():
+                    self.end_var.set(pct)
                 self.start_var.set(pct)
-            self.end_var.set(pct)
+            else:
+                if pct < self.start_var.get():
+                    self.start_var.set(pct)
+                self.end_var.set(pct)
         if self.command:
             self.command(None)
 
@@ -673,7 +699,7 @@ class SignalViewer(ctk.CTkToplevel):
             c.get_tk_widget().destroy()
         self.canvases.clear()
 
-        modes = ["Signal", "Freq", "InstantFreq", "Crosscorr"]
+        modes = ["Signal", "Freq", "Crosscorr"]
         for idx, mode in enumerate(modes):
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
@@ -918,7 +944,7 @@ class SignalColumn(ctk.CTkFrame):
             c.get_tk_widget().destroy()
         self.canvases.clear()
 
-        modes = ["Signal", "Freq", "InstantFreq", "Crosscorr"]
+        modes = ["Signal", "Freq", "Crosscorr"]
         for idx, mode in enumerate(modes):
             fig = Figure(figsize=(4, 2), dpi=100)
             ax = fig.add_subplot(111)
@@ -1922,15 +1948,6 @@ def _plot_on_pg(
         plot.setTitle(f"Spectrum: {title}")
         plot.setLabel("bottom", "Frequency [Hz]")
         plot.setLabel("left", "Magnitude [dB]")
-    elif mode == "InstantFreq":
-        phase = np.unwrap(np.angle(data))
-        inst = np.diff(phase)
-        fi = fs * inst / (2 * np.pi)
-        t = np.arange(len(fi)) / fs
-        plot.plot(t, fi, pen="b")
-        plot.setTitle(f"Instantaneous Frequency: {title}")
-        plot.setLabel("bottom", "Time [s]")
-        plot.setLabel("left", "Frequency [Hz]")
     elif mode == "Autocorr":
         ac = _autocorr_fft(data)
         lags = np.arange(-len(data) + 1, len(data))
@@ -2114,14 +2131,6 @@ def _plot_on_mpl(
         ax.plot(freqs, 20 * np.log10(np.abs(spec) + 1e-9), "b")
         ax.set_xlabel("Frequency [Hz]")
         ax.set_ylabel("Magnitude [dB]")
-    elif mode == "InstantFreq":
-        phase = np.unwrap(np.angle(data))
-        inst = np.diff(phase)
-        fi = fs * inst / (2 * np.pi)
-        t = np.arange(len(fi)) / fs
-        ax.plot(t, fi, "b")
-        ax.set_xlabel("Time [s]")
-        ax.set_ylabel("Frequency [Hz]")
     elif mode == "Autocorr":
         ac = _autocorr_fft(data)
         lags = np.arange(-len(data) + 1, len(data))
@@ -2268,6 +2277,9 @@ class TransceiverUI(ctk.CTk):
         self.columnconfigure(0, weight=1, uniform="cols")
         self.columnconfigure(1, weight=1, uniform="cols")
         self.columnconfigure(2, weight=1, uniform="cols")
+        terminal_container_fg = ctk.ThemeManager.theme["CTkFrame"]["fg_color"]
+        terminal_container_bg = _resolve_theme_color(terminal_container_fg)
+        terminal_container_corner = 10
 
         # ----- Column 1: Generation -----
         gen_frame, gen_body = _make_section(self, "Signal Generation")
@@ -2475,7 +2487,11 @@ class TransceiverUI(ctk.CTk):
         scroll_container.columnconfigure(0, weight=1)
         scroll_container.rowconfigure(0, weight=1)
 
-        self.gen_canvas = tk.Canvas(scroll_container)
+        self.gen_canvas = tk.Canvas(
+            scroll_container,
+            bg=terminal_container_bg,
+            highlightthickness=0,
+        )
         self.gen_canvas.grid(row=0, column=0, sticky="nsew")
         self.gen_scroll = ctk.CTkScrollbar(
             scroll_container, orientation="vertical", command=self.gen_canvas.yview
@@ -2487,7 +2503,11 @@ class TransceiverUI(ctk.CTk):
         self.gen_canvas.bind("<Enter>", self._bind_gen_mousewheel)
         self.gen_canvas.bind("<Leave>", self._unbind_gen_mousewheel)
 
-        self.gen_plots_frame = ctk.CTkFrame(self.gen_canvas)
+        self.gen_plots_frame = ctk.CTkFrame(
+            self.gen_canvas,
+            fg_color=terminal_container_fg,
+            corner_radius=terminal_container_corner,
+        )
         self.gen_plots_frame.columnconfigure(0, weight=1)
         self.gen_canvas.create_window((0, 0), window=self.gen_plots_frame, anchor="nw")
         self.gen_plots_frame.bind(
@@ -2567,7 +2587,11 @@ class TransceiverUI(ctk.CTk):
         )
         self.tx_stop.grid(row=0, column=2, padx=2)
 
-        log_frame = ctk.CTkFrame(tx_body)
+        log_frame = ctk.CTkFrame(
+            tx_body,
+            fg_color=terminal_container_fg,
+            corner_radius=terminal_container_corner,
+        )
         log_frame.grid(row=6, column=0, columnspan=2, sticky="nsew")
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
@@ -2650,7 +2674,7 @@ class TransceiverUI(ctk.CTk):
         ctk.CTkComboBox(
             rx_body,
             variable=self.rx_view,
-            values=["Signal", "Freq", "InstantFreq", "Crosscorr", "AoA (ESPRIT)"],
+            values=["Signal", "Freq", "Crosscorr", "AoA (ESPRIT)"],
             width=140,
         ).grid(row=9, column=1, sticky="w")
 
@@ -2729,12 +2753,20 @@ class TransceiverUI(ctk.CTk):
             row=0, column=3, padx=2
         )
 
-        rx_scroll_container = ctk.CTkFrame(rx_body)
+        rx_scroll_container = ctk.CTkFrame(
+            rx_body,
+            fg_color=terminal_container_fg,
+            corner_radius=terminal_container_corner,
+        )
         rx_scroll_container.grid(row=16, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
-        self.rx_canvas = tk.Canvas(rx_scroll_container)
+        self.rx_canvas = tk.Canvas(
+            rx_scroll_container,
+            bg=terminal_container_bg,
+            highlightthickness=0,
+        )
         self.rx_canvas.grid(row=0, column=0, sticky="nsew")
         self.rx_vscroll = ctk.CTkScrollbar(
             rx_scroll_container, orientation="vertical", command=self.rx_canvas.yview
@@ -2744,7 +2776,11 @@ class TransceiverUI(ctk.CTk):
         self.rx_canvas.bind("<Enter>", self._bind_rx_mousewheel)
         self.rx_canvas.bind("<Leave>", self._unbind_rx_mousewheel)
 
-        self.rx_plots_frame = ctk.CTkFrame(self.rx_canvas)
+        self.rx_plots_frame = ctk.CTkFrame(
+            self.rx_canvas,
+            fg_color=terminal_container_fg,
+            corner_radius=terminal_container_corner,
+        )
         self.rx_plots_frame.columnconfigure(0, weight=1)
         self.rx_canvas.create_window((0, 0), window=self.rx_plots_frame, anchor="nw")
         self.rx_plots_frame.bind(
@@ -2969,7 +3005,7 @@ class TransceiverUI(ctk.CTk):
         corr_mode: str = "Autocorr",
         corr_ref: np.ndarray | None = None,
     ) -> None:
-        modes = ["Signal", "Freq", "InstantFreq", corr_mode]
+        modes = ["Signal", "Freq", corr_mode]
         for idx, mode in enumerate(modes):
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
@@ -3256,7 +3292,7 @@ class TransceiverUI(ctk.CTk):
                 c.destroy()
         self.rx_canvases.clear()
 
-        modes = ["Signal", "Freq", "InstantFreq", "Crosscorr"]
+        modes = ["Signal", "Freq", "Crosscorr"]
         title_suffix = f" ({channel_label})" if channel_label else ""
 
         def _render_rx_preview(
