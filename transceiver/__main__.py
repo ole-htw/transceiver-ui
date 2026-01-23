@@ -2509,11 +2509,19 @@ class TransceiverUI(ctk.CTk):
             corner_radius=terminal_container_corner,
         )
         self.gen_plots_frame.columnconfigure(0, weight=1)
-        self.gen_canvas.create_window((0, 0), window=self.gen_plots_frame, anchor="nw")
+        self.gen_plots_window = self.gen_canvas.create_window(
+            (0, 0), window=self.gen_plots_frame, anchor="n"
+        )
         self.gen_plots_frame.bind(
             "<Configure>",
             lambda _e: self.gen_canvas.configure(
                 scrollregion=self.gen_canvas.bbox("all")
+            ),
+        )
+        self.gen_canvas.bind(
+            "<Configure>",
+            lambda _e: self._center_canvas_window(
+                self.gen_canvas, self.gen_plots_window
             ),
         )
         gen_body.rowconfigure(6, weight=1)
@@ -2782,11 +2790,19 @@ class TransceiverUI(ctk.CTk):
             corner_radius=terminal_container_corner,
         )
         self.rx_plots_frame.columnconfigure(0, weight=1)
-        self.rx_canvas.create_window((0, 0), window=self.rx_plots_frame, anchor="nw")
+        self.rx_plots_window = self.rx_canvas.create_window(
+            (0, 0), window=self.rx_plots_frame, anchor="n"
+        )
         self.rx_plots_frame.bind(
             "<Configure>",
             lambda _e: self.rx_canvas.configure(
                 scrollregion=self.rx_canvas.bbox("all")
+            ),
+        )
+        self.rx_canvas.bind(
+            "<Configure>",
+            lambda _e: self._center_canvas_window(
+                self.rx_canvas, self.rx_plots_window
             ),
         )
         rx_body.rowconfigure(16, weight=1)
@@ -3013,7 +3029,7 @@ class TransceiverUI(ctk.CTk):
             canvas = FigureCanvasTkAgg(fig, master=frame)
             canvas.draw()
             widget = canvas.get_tk_widget()
-            widget.grid(row=idx, column=0, sticky="nsew", pady=2)
+            widget.grid(row=idx, column=0, sticky="n", pady=2)
             widget.bind(
                 "<Button-1>",
                 lambda _e, m=mode, d=data, s=fs: self._show_fullscreen(
@@ -3330,7 +3346,7 @@ class TransceiverUI(ctk.CTk):
                 canvas = FigureCanvasTkAgg(fig, master=target_frame)
                 canvas.draw()
                 widget = canvas.get_tk_widget()
-                widget.grid(row=idx, column=0, sticky="nsew", pady=2)
+                widget.grid(row=idx, column=0, sticky="n", pady=2)
                 if mode == "Crosscorr":
                     handler = (
                         lambda _e,
@@ -3399,7 +3415,7 @@ class TransceiverUI(ctk.CTk):
                 canvas = FigureCanvasTkAgg(fig, master=target_frame)
                 canvas.draw()
                 widget = canvas.get_tk_widget()
-                widget.grid(row=len(modes) + 1, column=0, sticky="nsew", pady=2)
+                widget.grid(row=len(modes) + 1, column=0, sticky="n", pady=2)
                 self.rx_canvases.append(canvas)
 
         _render_rx_preview(
@@ -3563,6 +3579,11 @@ class TransceiverUI(ctk.CTk):
             self.console.text.delete("1.0", tk.END)
         while not self._out_queue.empty():
             self._out_queue.get_nowait()
+
+    def _center_canvas_window(self, canvas: tk.Canvas, window_id: int) -> None:
+        canvas_width = max(1, canvas.winfo_width())
+        canvas.itemconfigure(window_id, width=canvas_width)
+        canvas.coords(window_id, canvas_width / 2, 0)
 
     # ----- Mousewheel helpers -----
     def _bind_gen_mousewheel(self, _event) -> None:
