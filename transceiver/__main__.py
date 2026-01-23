@@ -123,8 +123,6 @@ class _QueueLogHandler(logging.Handler):
         self._output_queue = output_queue
 
     def emit(self, record: logging.LogRecord) -> None:
-        if getattr(record, "ui_forwarded", False):
-            return
         message = self.format(record)
         if not message.endswith("\n"):
             message += "\n"
