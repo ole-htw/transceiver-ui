@@ -2270,6 +2270,7 @@ def _plot_on_mpl(
         ax.set_ylabel("Magnitude")
     ax.set_title(title)
     ax.grid(True)
+    ax.figure.tight_layout(pad=1.0)
 
 
 class TransceiverUI(ctk.CTk):
