@@ -648,7 +648,7 @@ class SignalViewer(ctk.CTkToplevel):
             c.get_tk_widget().destroy()
         self.canvases.clear()
 
-        modes = ["Signal", "Freq", "InstantFreq", "Crosscorr"]
+        modes = ["Signal", "Freq", "Crosscorr"]
         for idx, mode in enumerate(modes):
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
@@ -893,7 +893,7 @@ class SignalColumn(ctk.CTkFrame):
             c.get_tk_widget().destroy()
         self.canvases.clear()
 
-        modes = ["Signal", "Freq", "InstantFreq", "Crosscorr"]
+        modes = ["Signal", "Freq", "Crosscorr"]
         for idx, mode in enumerate(modes):
             fig = Figure(figsize=(4, 2), dpi=100)
             ax = fig.add_subplot(111)
@@ -1897,15 +1897,6 @@ def _plot_on_pg(
         plot.setTitle(f"Spectrum: {title}")
         plot.setLabel("bottom", "Frequency [Hz]")
         plot.setLabel("left", "Magnitude [dB]")
-    elif mode == "InstantFreq":
-        phase = np.unwrap(np.angle(data))
-        inst = np.diff(phase)
-        fi = fs * inst / (2 * np.pi)
-        t = np.arange(len(fi)) / fs
-        plot.plot(t, fi, pen="b")
-        plot.setTitle(f"Instantaneous Frequency: {title}")
-        plot.setLabel("bottom", "Time [s]")
-        plot.setLabel("left", "Frequency [Hz]")
     elif mode == "Autocorr":
         ac = _autocorr_fft(data)
         lags = np.arange(-len(data) + 1, len(data))
@@ -2089,14 +2080,6 @@ def _plot_on_mpl(
         ax.plot(freqs, 20 * np.log10(np.abs(spec) + 1e-9), "b")
         ax.set_xlabel("Frequency [Hz]")
         ax.set_ylabel("Magnitude [dB]")
-    elif mode == "InstantFreq":
-        phase = np.unwrap(np.angle(data))
-        inst = np.diff(phase)
-        fi = fs * inst / (2 * np.pi)
-        t = np.arange(len(fi)) / fs
-        ax.plot(t, fi, "b")
-        ax.set_xlabel("Time [s]")
-        ax.set_ylabel("Frequency [Hz]")
     elif mode == "Autocorr":
         ac = _autocorr_fft(data)
         lags = np.arange(-len(data) + 1, len(data))
@@ -2604,7 +2587,7 @@ class TransceiverUI(ctk.CTk):
         ctk.CTkComboBox(
             rx_body,
             variable=self.rx_view,
-            values=["Signal", "Freq", "InstantFreq", "Crosscorr", "AoA (ESPRIT)"],
+            values=["Signal", "Freq", "Crosscorr", "AoA (ESPRIT)"],
             width=140,
         ).grid(row=9, column=1, sticky="w")
 
@@ -2923,7 +2906,7 @@ class TransceiverUI(ctk.CTk):
         corr_mode: str = "Autocorr",
         corr_ref: np.ndarray | None = None,
     ) -> None:
-        modes = ["Signal", "Freq", "InstantFreq", corr_mode]
+        modes = ["Signal", "Freq", corr_mode]
         for idx, mode in enumerate(modes):
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
@@ -3210,7 +3193,7 @@ class TransceiverUI(ctk.CTk):
                 c.destroy()
         self.rx_canvases.clear()
 
-        modes = ["Signal", "Freq", "InstantFreq", "Crosscorr"]
+        modes = ["Signal", "Freq", "Crosscorr"]
         title_suffix = f" ({channel_label})" if channel_label else ""
 
         def _render_rx_preview(
