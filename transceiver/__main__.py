@@ -3283,7 +3283,7 @@ class TransceiverUI(tk.Tk):
             if hasattr(self, "tx_log") and self.tx_log.winfo_exists():
                 self.tx_log.insert(tk.END, line)
                 self.tx_log.see(tk.END)
-        if self._cmd_running:
+        if self._cmd_running or not self._out_queue.empty():
             self.after(100, self._process_queue)
 
     def _ui(self, callback) -> None:
@@ -4047,6 +4047,7 @@ class TransceiverUI(tk.Tk):
         )
         if not started:
             self._out_queue.put("TX already running; start request ignored.\n")
+            self._process_queue()
             return
         self._process_queue()
         self._monitor_tx_state()
