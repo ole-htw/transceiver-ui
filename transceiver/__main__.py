@@ -7,6 +7,7 @@ import queue
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, filedialog
 import time
+import multiprocessing
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
@@ -104,13 +105,45 @@ AUTOSAVE_INTERVAL = 5  # seconds
 SHM_SIZE_THRESHOLD_BYTES = 25 * 1024 * 1024  # 25 MB
 
 
+_SHM_REGISTRY: set[str] = set()
+
+
 def _create_shared_memory(size: int) -> shared_memory.SharedMemory:
     """Create shared memory with tracking disabled when available."""
     # Ownership rule: the creator unlinks shared memory; consumers only close it.
     try:
-        return shared_memory.SharedMemory(create=True, size=size, track=False)  # type: ignore[call-arg]
+        shm = shared_memory.SharedMemory(create=True, size=size, track=False)  # type: ignore[call-arg]
     except TypeError:
-        return shared_memory.SharedMemory(create=True, size=size)
+        shm = shared_memory.SharedMemory(create=True, size=size)
+    _SHM_REGISTRY.add(shm.name)
+    return shm
+
+
+def _cleanup_shared_memory() -> None:
+    """Unlink any shared memory segments we created."""
+    if not _SHM_REGISTRY:
+        return
+    for shm_name in sorted(_SHM_REGISTRY):
+        try:
+            shm = shared_memory.SharedMemory(name=shm_name)
+        except (FileNotFoundError, OSError, ValueError):
+            continue
+        try:
+            shm.unlink()
+        except FileNotFoundError:
+            pass
+        finally:
+            with contextlib.suppress(Exception):
+                shm.close()
+    _SHM_REGISTRY.clear()
+
+
+def _configure_multiprocessing() -> None:
+    """Prefer spawn to avoid resource tracker issues with shared memory."""
+    try:
+        multiprocessing.set_start_method("spawn")
+    except RuntimeError:
+        pass
 
 
 class _QueueLogHandler(logging.Handler):
@@ -4376,12 +4409,14 @@ class TransceiverUI(tk.Tk):
         if hasattr(self, "_tx_logger") and hasattr(self, "_tx_log_handler"):
             self._tx_logger.removeHandler(self._tx_log_handler)
         self._cmd_running = False
+        _cleanup_shared_memory()
         _save_state(self._get_current_params())
         self.quit()
         self.destroy()
 
 
 def main() -> None:
+    _configure_multiprocessing()
     app = TransceiverUI()
     app.mainloop()
 
