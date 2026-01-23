@@ -1647,22 +1647,29 @@ def _calc_stats(
     return stats
 
 
-def _format_stats_text(stats: dict) -> str:
-    """Return a formatted multi-line string for signal statistics."""
-    lines = [
-        f"fmin: {_format_hz(stats['f_low'])}",
-        f"fmax: {_format_hz(stats['f_high'])}",
-        f"max Amp: {stats['amp']:.1f}",
-        f"BW (3dB): {_format_hz(stats['bw'])}",
+def _format_stats_rows(stats: dict, *, include_bw_extras: bool = True) -> list[tuple[str, str]]:
+    """Return rows of labels/values for signal statistics."""
+    rows = [
+        ("fmin", _format_hz(stats["f_low"])),
+        ("fmax", _format_hz(stats["f_high"])),
+        ("max Amp", f"{stats['amp']:.1f}"),
+        ("BW (3dB)", _format_hz(stats["bw"])),
     ]
-    if stats.get("bw_norm_nyq") is not None:
-        lines.append(f"BW (Nyq): {stats['bw_norm_nyq']:.3f}")
-    if stats.get("bw_rs") is not None:
-        lines.append(f"BW (Rs): {stats['bw_rs']:.3f}×Rs")
+    if include_bw_extras:
+        if stats.get("bw_norm_nyq") is not None:
+            rows.append(("BW (Nyq)", f"{stats['bw_norm_nyq']:.3f}"))
+        if stats.get("bw_rs") is not None:
+            rows.append(("BW (Rs)", f"{stats['bw_rs']:.3f}×Rs"))
     if stats.get("echo_delay") is not None:
         meters = stats["echo_delay"] * 1.5
-        lines.append(f"LOS-Echo: {stats['echo_delay']} samp ({meters:.1f} m)")
-    return "\n".join(lines)
+        rows.append(("LOS-Echo", f"{stats['echo_delay']} samp ({meters:.1f} m)"))
+    return rows
+
+
+def _format_stats_text(stats: dict) -> str:
+    """Return a formatted multi-line string for signal statistics."""
+    rows = _format_stats_rows(stats, include_bw_extras=True)
+    return "\n".join(f"{label}: {value}" for label, value in rows)
 
 
 class PlotWorkerManager:
@@ -3037,10 +3044,17 @@ class TransceiverUI(ctk.CTk):
             self.gen_canvases.append(canvas)
 
         stats = _calc_stats(data, fs, symbol_rate=symbol_rate)
-        text = _format_stats_text(stats)
-        stats_label = ctk.CTkLabel(frame, justify="left", anchor="w", text="")
-        stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
-        stats_label.configure(text=text)
+        stats_rows = _format_stats_rows(stats, include_bw_extras=False)
+        stats_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        stats_frame.grid(row=len(modes), column=0, sticky="ew", pady=2)
+        stats_frame.columnconfigure(1, weight=1)
+        for idx, (label, value) in enumerate(stats_rows):
+            ctk.CTkLabel(stats_frame, justify="left", anchor="w", text=f"{label}:").grid(
+                row=idx, column=0, sticky="w", padx=(0, 6)
+            )
+            ctk.CTkLabel(stats_frame, justify="left", anchor="w", text=value).grid(
+                row=idx, column=1, sticky="w"
+            )
 
     def _display_gen_plots(
         self,
