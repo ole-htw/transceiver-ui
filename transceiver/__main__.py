@@ -2563,6 +2563,7 @@ class TransceiverUI(ctk.CTk):
         repeat_frame.grid(row=0, column=0, sticky="ew", padx=(0, 6))
         self.repeat_entry = SuggestEntry(repeat_body, "repeat_entry")
         self.repeat_entry.insert(0, "1")
+        self.repeat_entry.sugg_frame.grid_remove()
         self.repeat_entry.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=6)
 
         self.zeros_enable = tk.BooleanVar(value=False)
