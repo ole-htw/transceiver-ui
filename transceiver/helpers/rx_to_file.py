@@ -11,6 +11,7 @@ RX samples to file using Python API
 import argparse
 from datetime import datetime
 from pathlib import Path
+import sys
 import numpy as np
 import uhd
 from uhd.usrp import dram_utils
@@ -118,6 +119,17 @@ def rfnoc_dram_rx(args):
             radio.set_rate(args.rate)
     # Overwrite default memory regions to maximize available memory
     mem_per_ch = int(replay.get_mem_size() / len(args.channels))
+    bytes_per_sample = 8  # fc32: complex64 = 8 bytes per sample
+    max_samps_per_ch = mem_per_ch // bytes_per_sample
+    if num_samps > max_samps_per_ch:
+        requested_samps = args.duration * args.rate
+        print(
+            "WARNING: Requested samples exceed DRAM capacity per channel "
+            f"({requested_samps:.0f} > {max_samps_per_ch}). "
+            "Clamping to available DRAM capacity.",
+            file=sys.stderr,
+        )
+        num_samps = max_samps_per_ch
     mem_regions = [
         (idx * mem_per_ch, mem_per_ch) for idx, _ in enumerate(args.channels)
     ]
