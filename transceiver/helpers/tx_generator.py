@@ -2,8 +2,9 @@
 """
 Erweitertes Waveform-Generator-Skript
 ------------------------------------
-Unterstützt jetzt drei Wellenformen:
+Unterstützt jetzt vier Wellenformen:
     • sinus      – Reiner Sinus-Ton
+    • doppelsinus – Zwei halbe Sinustöne (f1 + f2)
     • zadoffchu  – Zadoff–Chu-Sequenz (komplex, zykloideiphase)
     • chirp      – Linear aufsteigender Up-Chirp (f0 → f1)
 
@@ -90,6 +91,8 @@ def generate_filename(args) -> Path:
     parts = [args.waveform]
     if args.waveform == "sinus":
         parts.append(f"f{_pretty(args.f)}")
+    elif args.waveform == "doppelsinus":
+        parts.append(f"{_pretty(args.f)}_{_pretty(args.f2)}")
     elif args.waveform == "zadoffchu":
         parts.append(f"q{args.q}")
         if args.oversampling != 1:
@@ -209,6 +212,21 @@ def generate_waveform(
             sig = np.convolve(sig, h, mode="same").astype(np.complex64)
         return sig
 
+    # ---------- Doppelsinus ---------------------------------------------------
+    if w == "doppelsinus":
+        if f1 is None:
+            raise ValueError("Für Doppelsinus müssen f und f2 gesetzt sein.")
+        n = np.arange(N)
+        sig = (
+            0.5 * np.exp(2j * np.pi * f * n / fs)
+            + 0.5 * np.exp(2j * np.pi * f1 * n / fs)
+        ).astype(np.complex64)
+
+        if rrc_span > 0:
+            h = rrc_coeffs(rrc_beta, rrc_span, sps=1).astype(np.float32)
+            sig = np.convolve(sig, h, mode="same").astype(np.complex64)
+        return sig
+
     # ---------- Chirp ---------------------------------------------------------
     if w == "chirp":
         if f0 is None or f1 is None:
@@ -276,7 +294,7 @@ def generate_waveform(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Erzeugt eine Wellen­folge (sinus, zadoffchu oder chirp) "
+            "Erzeugt eine Wellen­folge (sinus, doppelsinus, zadoffchu oder chirp) "
             "gefolgt optional von einer gleichen Anzahl Null-Samples und speichert "
             "sie als interleaved int16 (IQIQ…) in eine Datei."
         )
@@ -296,7 +314,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--waveform",
-        choices=["sinus", "zadoffchu", "chirp"],
+        choices=["sinus", "doppelsinus", "zadoffchu", "chirp"],
         default="sinus",
         help="Wellenform (Standard: sinus)",
     )
@@ -312,7 +330,13 @@ def main() -> None:
         "--f",
         type=float,
         default=1e6,
-        help="Frequenz in Hz – nur für sinus (Standard: 1e6)",
+        help="Frequenz in Hz – für sinus/doppelsinus (Standard: 1e6)",
+    )
+    parser.add_argument(
+        "--f2",
+        type=float,
+        default=None,
+        help="Zweite Frequenz in Hz – nur für doppelsinus (Standard: None)",
     )
 
     # Zadoff–Chu-spezifisch + RRC
@@ -384,6 +408,8 @@ def main() -> None:
     # ------------------------------------------------------------------
     if args.waveform == "chirp" and args.f1 is None:
         args.f1 = args.fs / 2 - 1
+    if args.waveform == "doppelsinus" and args.f2 is None:
+        raise ValueError("Für Doppelsinus muss --f2 gesetzt sein.")
 
     N_waveform = args.samples
     N_output = N_waveform
@@ -412,6 +438,7 @@ def main() -> None:
         print(f"  Chirp: {args.f0/1e6:.3f} MHz → {args.f1/1e6:.3f} MHz")
 
     # Wellenform generieren
+    f1_value = args.f1 if args.waveform != "doppelsinus" else args.f2
     waveform_signal = generate_waveform(
         args.waveform,
         args.fs,
@@ -419,7 +446,7 @@ def main() -> None:
         N_waveform,
         args.q,
         f0=args.f0,
-        f1=args.f1,
+        f1=f1_value,
         rrc_beta=args.rrc_beta,
         rrc_span=args.rrc_span,
         oversampling=args.oversampling,
