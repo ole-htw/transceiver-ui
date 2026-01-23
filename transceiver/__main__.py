@@ -2529,39 +2529,26 @@ class TransceiverUI(ctk.CTk):
             command=self._on_rx_path_cancel_toggle,
         )
         self.rx_path_cancel_check.grid(row=8, column=0, columnspan=2, sticky="w")
-        self.rx_path_cancel_help = ctk.CTkLabel(
-            rx_body,
-            text=(
-                "Schätzt den dominanten Pfad (LOS) aus der Referenzsequenz und "
-                "subtrahiert ihn aus dem Empfangssignal. Danach wird die "
-                "Kreuzkorrelation erneut berechnet."
-            ),
-            wraplength=260,
-            justify="left",
-        )
-        self.rx_path_cancel_help.grid(row=9, column=0, columnspan=2, sticky="w")
-        self.rx_path_cancel_status = ctk.CTkLabel(rx_body, text="")
-        self.rx_path_cancel_status.grid(row=10, column=0, columnspan=2, sticky="w")
 
-        ctk.CTkLabel(rx_body, text="Output").grid(row=11, column=0, sticky="w")
+        ctk.CTkLabel(rx_body, text="Output").grid(row=9, column=0, sticky="w")
         self.rx_file = SuggestEntry(rx_body, "rx_file")
         self.rx_file.insert(0, "rx_signal.bin")
-        self.rx_file.grid(row=11, column=1, sticky="ew")
+        self.rx_file.grid(row=9, column=1, sticky="ew")
 
-        ctk.CTkLabel(rx_body, text="View").grid(row=12, column=0, sticky="w")
+        ctk.CTkLabel(rx_body, text="View").grid(row=10, column=0, sticky="w")
         ctk.CTkComboBox(
             rx_body,
             variable=self.rx_view,
             values=["Signal", "Freq", "InstantFreq", "Crosscorr", "AoA (ESPRIT)"],
             width=140,
-        ).grid(row=12, column=1, sticky="w")
+        ).grid(row=10, column=1, sticky="w")
 
         ctk.CTkLabel(rx_body, text="Antennenabstand [m]").grid(
-            row=13, column=0, sticky="w"
+            row=11, column=0, sticky="w"
         )
         self.rx_ant_spacing = SuggestEntry(rx_body, "rx_ant_spacing")
         self.rx_ant_spacing.insert(0, "0.03")
-        self.rx_ant_spacing.grid(row=13, column=1, sticky="ew")
+        self.rx_ant_spacing.grid(row=11, column=1, sticky="ew")
 
         ctk.CTkLabel(rx_body, text="Wellenlänge [m]").grid(
             row=14, column=0, sticky="w"
@@ -2773,15 +2760,8 @@ class TransceiverUI(ctk.CTk):
         self.update_trim()
 
     def _on_rx_path_cancel_toggle(self) -> None:
-        self._update_path_cancellation_status()
         self._reset_manual_xcorr_lags("Pfad-Cancellation geändert")
         self.update_trim()
-
-    def _update_path_cancellation_status(self) -> None:
-        if self.rx_path_cancel_enable.get():
-            self.rx_path_cancel_status.configure(text="Pfad-Cancellation: aktiv")
-        else:
-            self.rx_path_cancel_status.configure(text="")
 
     def _apply_path_cancellation(
         self, data: np.ndarray, ref_data: np.ndarray
