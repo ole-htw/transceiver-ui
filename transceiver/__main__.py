@@ -1188,6 +1188,10 @@ def _gen_tx_filename(app) -> str:
     if w == "sinus":
         f = _try_parse_number_expr(app.f_entry.get(), default=0.0)
         parts.append(f"f{_pretty(f)}")
+    elif w == "doppelsinus":
+        f = _try_parse_number_expr(app.f_entry.get(), default=0.0)
+        f2 = _try_parse_number_expr(app.f1_entry.get(), default=0.0)
+        parts.append(f"{_pretty(f)}_{_pretty(f2)}")
     elif w == "zadoffchu":
         q = app.q_entry.get() or "1"
         parts.append(f"q{q}")
@@ -1842,7 +1846,7 @@ class TransceiverUI(tk.Tk):
         wave_box = ttk.Combobox(
             gen_frame,
             textvariable=self.wave_var,
-            values=["sinus", "zadoffchu", "chirp"],
+            values=["sinus", "doppelsinus", "zadoffchu", "chirp"],
             width=10,
             state="readonly",
         )
@@ -2333,6 +2337,13 @@ class TransceiverUI(tk.Tk):
             self.f_label.configure(text="f")
             self.f_label.grid(row=2, column=0, sticky="w")
             self.f_entry.grid(row=2, column=1, sticky="ew")
+        elif w == "doppelsinus":
+            self.f_label.configure(text="f1")
+            self.f_label.grid(row=2, column=0, sticky="w")
+            self.f_entry.grid(row=2, column=1, sticky="ew")
+            self.f1_label.configure(text="f2")
+            self.f1_label.grid(row=3, column=0, sticky="w")
+            self.f1_entry.grid(row=3, column=1, sticky="ew")
         elif w == "zadoffchu":
             self.q_label.grid(row=2, column=0, sticky="w")
             self.q_entry.grid(row=2, column=1, sticky="ew")
@@ -3675,6 +3686,19 @@ class TransceiverUI(tk.Tk):
                 )
                 data = generate_waveform(
                     waveform, fs, freq, samples, oversampling=1
+                )
+            elif waveform == "doppelsinus":
+                f1 = _parse_number_expr_or_error(
+                    self.f_entry.get(), allow_empty=True, empty_value=0.0
+                )
+                f2 = _parse_number_expr_or_error(self.f1_entry.get())
+                data = generate_waveform(
+                    waveform,
+                    fs,
+                    f1,
+                    samples,
+                    f1=f2,
+                    oversampling=1,
                 )
             elif waveform == "zadoffchu":
                 q = int(self.q_entry.get()) if self.q_entry.get() else 1
