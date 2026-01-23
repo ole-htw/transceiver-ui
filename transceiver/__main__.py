@@ -15,7 +15,7 @@ import math
 import contextlib
 import tempfile
 import os
-from multiprocessing import shared_memory, Pipe, Process, resource_tracker
+from multiprocessing import shared_memory, Pipe, Process
 from pathlib import Path
 from datetime import datetime
 
@@ -104,18 +104,13 @@ AUTOSAVE_INTERVAL = 5  # seconds
 SHM_SIZE_THRESHOLD_BYTES = 25 * 1024 * 1024  # 25 MB
 
 
-def _maybe_untrack_shared_memory(name: str) -> None:
+def _create_shared_memory(size: int) -> shared_memory.SharedMemory:
+    """Create shared memory with tracking disabled when available."""
+    # Ownership rule: the creator unlinks shared memory; consumers only close it.
     try:
-        tracker = resource_tracker._resource_tracker  # type: ignore[attr-defined]
-        cache = getattr(tracker, "_cache", None) or getattr(tracker, "cache", None)
-        if isinstance(cache, dict):
-            names = cache.get("shared_memory")
-            if isinstance(names, (set, list, tuple)) and name not in names:
-                return
-    except Exception:
-        pass
-    with contextlib.suppress(Exception):
-        resource_tracker.unregister(name, "shared_memory")
+        return shared_memory.SharedMemory(create=True, size=size, track=False)  # type: ignore[call-arg]
+    except TypeError:
+        return shared_memory.SharedMemory(create=True, size=size)
 
 
 class _QueueLogHandler(logging.Handler):
@@ -1600,9 +1595,7 @@ def _spawn_plot_worker(
         np.save(data_path, data_contiguous)
     else:
         try:
-            shm = shared_memory.SharedMemory(
-                create=True, size=data_contiguous.nbytes
-            )
+            shm = _create_shared_memory(data_contiguous.nbytes)
             shm_view = np.ndarray(
                 data_contiguous.shape, dtype=data_contiguous.dtype, buffer=shm.buf
             )
@@ -1610,7 +1603,6 @@ def _spawn_plot_worker(
             shm_name = shm.name
             shm_shape = list(data_contiguous.shape)
             shm_dtype = data_contiguous.dtype.str
-            _maybe_untrack_shared_memory(shm.name)
             shm.close()
 
         except (BufferError, FileNotFoundError, OSError, ValueError):
@@ -1639,9 +1631,7 @@ def _spawn_plot_worker(
             np.save(ref_path, ref_contiguous)
         else:
             try:
-                ref_shm = shared_memory.SharedMemory(
-                    create=True, size=ref_contiguous.nbytes
-                )
+                ref_shm = _create_shared_memory(ref_contiguous.nbytes)
                 ref_view = np.ndarray(
                     ref_contiguous.shape,
                     dtype=ref_contiguous.dtype,
@@ -1651,7 +1641,6 @@ def _spawn_plot_worker(
                 ref_shm_name = ref_shm.name
                 ref_shm_shape = list(ref_contiguous.shape)
                 ref_shm_dtype = ref_contiguous.dtype.str
-                _maybe_untrack_shared_memory(ref_shm.name)
                 ref_shm.close()
 
             except (BufferError, FileNotFoundError, OSError, ValueError):

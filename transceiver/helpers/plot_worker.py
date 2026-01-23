@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from multiprocessing import shared_memory, Pipe, resource_tracker
+from multiprocessing import shared_memory, Pipe
 
 import numpy as np
 import pyqtgraph as pg
@@ -46,6 +46,7 @@ def _parse_payload(path: Path) -> dict:
 def _cleanup_shm(shm: shared_memory.SharedMemory | None) -> None:
     if shm is None:
         return
+    # Ownership rule: the creator unlinks shared memory; consumers only close it.
     shm.close()
 
 
