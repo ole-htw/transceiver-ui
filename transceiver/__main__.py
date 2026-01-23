@@ -434,6 +434,7 @@ class SignalViewer(tk.Toplevel):
             fs,
             self.tx_data,
             manual_lags=getattr(self.parent, "manual_xcorr_lags", None),
+            xcorr_reduce=True,
         )
         text = _format_stats_text(stats)
         self.stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
@@ -665,7 +666,7 @@ class SignalColumn(ttk.Frame):
             )
             self.canvases.append(canvas)
 
-        stats = _calc_stats(data, fs, tx_data)
+        stats = _calc_stats(data, fs, tx_data, xcorr_reduce=True)
         text = _format_stats_text(stats)
         self.stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
         self.stats_label.configure(text=text)
@@ -1273,6 +1274,7 @@ def _calc_stats(
     ref_data: np.ndarray | None = None,
     manual_lags: dict[str, int | None] | None = None,
     symbol_rate: float | None = None,
+    xcorr_reduce: bool = False,
 ) -> dict:
     """Return basic signal statistics for display.
 
@@ -1320,9 +1322,16 @@ def _calc_stats(
             stats["bw_rs"] = stats["bw"] / symbol_rate
 
     if ref_data is not None and ref_data.size and data.size:
-        n = min(len(data), len(ref_data))
-        cc = _xcorr_fft(data[:n], ref_data[:n])
-        lags = np.arange(-n + 1, n)
+        xcorr_data = data
+        xcorr_ref = ref_data
+        xcorr_step = 1
+        if xcorr_reduce:
+            xcorr_data, xcorr_ref, xcorr_step = _reduce_pair(
+                xcorr_data, xcorr_ref
+            )
+        n = min(len(xcorr_data), len(xcorr_ref))
+        cc = _xcorr_fft(xcorr_data[:n], xcorr_ref[:n])
+        lags = np.arange(-n + 1, n) * xcorr_step
         los_idx, echo_idx = _find_los_echo(cc)
         los_idx, echo_idx = _apply_manual_lags(
             lags, los_idx, echo_idx, manual_lags
@@ -2905,6 +2914,7 @@ class TransceiverUI(tk.Tk):
                 plot_fs,
                 plot_ref_data,
                 manual_lags=self.manual_xcorr_lags,
+                xcorr_reduce=True,
             )
             text = _format_stats_text(stats)
             stats_label = ttk.Label(target_frame, justify="left", anchor="w")
@@ -3367,6 +3377,7 @@ class TransceiverUI(tk.Tk):
             self.latest_fs,
             ref_data,
             manual_lags=self.manual_xcorr_lags,
+            xcorr_reduce=True,
         )
         self.rx_stats_label.configure(text=_format_stats_text(stats))
 
