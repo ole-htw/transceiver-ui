@@ -2428,15 +2428,19 @@ class TransceiverUI(ctk.CTk):
         else:
             self.os_entry.entry.configure(state="normal")
 
+        repeat_zero_row = ctk.CTkFrame(gen_body, fg_color="transparent")
+        repeat_zero_row.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        repeat_zero_row.columnconfigure((0, 1), weight=1, uniform="repeat-zeros")
+
         self.repeat_enable = tk.BooleanVar(value=True)
         self._repeat_last_value = "1"
         repeat_frame, repeat_body, _ = _make_side_bordered_group(
-            gen_body,
+            repeat_zero_row,
             "Repeats",
             toggle_var=self.repeat_enable,
             toggle_command=self._on_repeat_toggle,
         )
-        repeat_frame.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        repeat_frame.grid(row=0, column=0, sticky="ew", padx=(0, 6))
         self.repeat_entry = SuggestEntry(repeat_body, "repeat_entry")
         self.repeat_entry.insert(0, "1")
         self.repeat_entry.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=6)
@@ -2444,12 +2448,12 @@ class TransceiverUI(ctk.CTk):
         self.zeros_enable = tk.BooleanVar(value=False)
         self._zeros_last_value = "same"
         zeros_frame, zeros_body, _ = _make_side_bordered_group(
-            gen_body,
+            repeat_zero_row,
             "Zeros",
             toggle_var=self.zeros_enable,
             toggle_command=self._on_zeros_toggle,
         )
-        zeros_frame.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        zeros_frame.grid(row=0, column=1, sticky="ew", padx=(6, 0))
         self.zeros_var = tk.StringVar(value="same")
         self.zeros_values = [
             "same",
@@ -2467,23 +2471,33 @@ class TransceiverUI(ctk.CTk):
         self.zeros_combo.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=6)
         self.zeros_combo.configure(state="disabled")
 
-        file_row = ctk.CTkFrame(gen_body, fg_color="transparent")
-        file_row.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(6, 0))
-        file_row.columnconfigure(1, weight=1)
-        file_row.columnconfigure(2, weight=1)
-        ctk.CTkLabel(file_row, text="File").grid(
-            row=0, column=0, sticky="w", padx=label_padx
-        )
-        self.file_entry = SuggestEntry(file_row, "file_entry")
+        file_frame, file_body, _ = _make_side_bordered_group(gen_body, "File")
+        file_frame.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        self.file_entry = SuggestEntry(file_body, "file_entry")
         self.file_entry.insert(0, "tx_signal.bin")
-        self.file_entry.grid(row=0, column=1, columnspan=2, sticky="ew")
+        self.file_entry.grid(row=0, column=1, columnspan=2, sticky="ew", padx=(0, 10))
 
-        ctk.CTkButton(gen_body, text="Generate", command=self.generate).grid(
-            row=5, column=0, columnspan=3, pady=5
+        gen_buttons = ctk.CTkFrame(gen_body, fg_color="transparent")
+        gen_buttons.grid(row=4, column=0, columnspan=3, sticky="ew", pady=5)
+        gen_buttons.columnconfigure((0, 1, 2, 3), weight=1)
+        ctk.CTkButton(gen_buttons, text="Generate", command=self.generate).grid(
+            row=0, column=0, padx=3, sticky="ew"
         )
+        ctk.CTkButton(
+            gen_buttons, text="Load Preset", command=self.open_load_preset_window
+        ).grid(row=0, column=1, padx=3, sticky="ew")
+        ctk.CTkButton(
+            gen_buttons, text="Save Preset", command=self.open_save_preset_window
+        ).grid(row=0, column=2, padx=3, sticky="ew")
+        ctk.CTkCheckBox(
+            gen_buttons,
+            text="Sync Sample Rates",
+            variable=self.sync_var,
+            command=lambda: self.toggle_rate_sync(self.sync_var.get()),
+        ).grid(row=0, column=3, padx=3, sticky="ew")
 
         scroll_container = ctk.CTkFrame(gen_body)
-        scroll_container.grid(row=6, column=0, columnspan=3, sticky="nsew")
+        scroll_container.grid(row=5, column=0, columnspan=3, sticky="nsew")
         scroll_container.columnconfigure(0, weight=1)
         scroll_container.rowconfigure(0, weight=1)
 
@@ -2516,26 +2530,10 @@ class TransceiverUI(ctk.CTk):
                 scrollregion=self.gen_canvas.bbox("all")
             ),
         )
-        gen_body.rowconfigure(6, weight=1)
+        gen_body.rowconfigure(5, weight=1)
         self.gen_canvases = []
         self.latest_data = None
         self.latest_fs = 0.0
-
-        # ----- Presets -----
-        preset_frame, preset_body = _make_section(self, "Presets")
-        preset_frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
-        ctk.CTkButton(
-            preset_body, text="Load Preset", command=self.open_load_preset_window
-        ).grid(row=0, column=0, padx=5)
-        ctk.CTkButton(
-            preset_body, text="Save Preset", command=self.open_save_preset_window
-        ).grid(row=0, column=1, padx=5)
-        ctk.CTkCheckBox(
-            preset_body,
-            text="Sync Sample Rates",
-            variable=self.sync_var,
-            command=lambda: self.toggle_rate_sync(self.sync_var.get()),
-        ).grid(row=0, column=2, padx=5)
 
         # ----- Column 2: Transmit -----
         tx_frame, tx_body = _make_section(self, "Transmit")
