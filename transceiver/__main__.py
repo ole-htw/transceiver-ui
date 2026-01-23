@@ -2138,14 +2138,14 @@ def _plot_on_mpl(
 ) -> None:
     """Helper to draw a small matplotlib preview plot."""
     mpl_colors = {
-        "real": "#4FC3F7",
-        "imag": "#FF8A65",
-        "freq": "#81C784",
-        "autocorr": "#BA68C8",
-        "crosscorr": "#64B5F6",
-        "compare": "#F06292",
-        "los": "#FF5252",
-        "echo": "#69F0AE",
+        "real": "#0288D1",
+        "imag": "#F4511E",
+        "freq": "#388E3C",
+        "autocorr": "#7B1FA2",
+        "crosscorr": "#1976D2",
+        "compare": "#C2185B",
+        "los": "#D32F2F",
+        "echo": "#00796B",
     }
     if data.ndim != 1:
         data = np.asarray(data)
