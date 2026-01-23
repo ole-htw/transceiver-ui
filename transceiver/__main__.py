@@ -862,12 +862,14 @@ class DraggableLagMarker(pg.ScatterPlotItem):
         index: int,
         color: str,
         size: int = 10,
+        on_drag=None,
         on_drag_end=None,
     ) -> None:
         self._view_box = view_box
         self._lags = np.asarray(lags)
         self._magnitudes = np.asarray(magnitudes)
         self._index = int(index)
+        self._on_drag = on_drag
         self._on_drag_end = on_drag_end
         self._dragging = False
         pen = pg.mkPen(color)
@@ -897,6 +899,8 @@ class DraggableLagMarker(pg.ScatterPlotItem):
         pos = self._view_box.mapSceneToView(ev.scenePos())
         idx = int(np.abs(self._lags - pos.x()).argmin())
         self._update_position(idx)
+        if self._on_drag is not None:
+            self._on_drag(self._index, float(self._lags[self._index]))
         if ev.isFinish():
             self._dragging = False
             if self._on_drag_end is not None:
@@ -910,6 +914,8 @@ def _add_draggable_markers(
     magnitudes: np.ndarray,
     los_idx: int | None,
     echo_idx: int | None,
+    on_los_drag=None,
+    on_echo_drag=None,
     on_los_drag_end=None,
     on_echo_drag_end=None,
 ) -> tuple[DraggableLagMarker | None, DraggableLagMarker | None]:
@@ -924,6 +930,7 @@ def _add_draggable_markers(
             magnitudes,
             los_idx,
             "r",
+            on_drag=on_los_drag,
             on_drag_end=on_los_drag_end,
         )
         plot.addItem(los_marker)
@@ -934,6 +941,7 @@ def _add_draggable_markers(
             magnitudes,
             echo_idx,
             "g",
+            on_drag=on_echo_drag,
             on_drag_end=on_echo_drag_end,
         )
         plot.addItem(echo_marker)
@@ -1474,7 +1482,7 @@ def _spawn_plot_worker(
     ref_data: np.ndarray | None = None,
     manual_lags: dict[str, int | None] | None = None,
     fullscreen: bool = False,
-) -> None:
+) -> str | None:
     """Launch the PyQtGraph plot worker in a separate process."""
     temp_dir = Path(tempfile.mkdtemp(prefix="transceiver_plot_"))
     data_path = None
@@ -1590,13 +1598,16 @@ def _spawn_plot_worker(
             payload["ref_dtype"] = ref_shm_dtype
         if ref_path is not None:
             payload["ref_file"] = str(ref_path)
+    output_path = None
     if manual_lags is not None:
         payload["manual_lags"] = {
             key: (int(val) if val is not None else None)
             for key, val in manual_lags.items()
         }
-        payload["output_path"] = str(temp_dir / "manual_lags.json")
+        output_path = temp_dir / "manual_lags.json"
+        payload["output_path"] = str(output_path)
     _get_plot_worker_manager().send_payload(payload)
+    return str(output_path) if output_path is not None else None
 
 
 def _plot_on_pg(
@@ -1607,6 +1618,8 @@ def _plot_on_pg(
     title: str,
     ref_data: np.ndarray | None = None,
     manual_lags: dict[str, int | None] | None = None,
+    on_los_drag=None,
+    on_echo_drag=None,
     on_los_drag_end=None,
     on_echo_drag_end=None,
     *,
@@ -1720,16 +1733,20 @@ def _plot_on_pg(
         legend.addItem(los_legend, "LOS")
         legend.addItem(echo_legend, "Echo")
 
-        los_callback = _wrap_drag(on_los_drag_end)
-        echo_callback = _wrap_drag(on_echo_drag_end)
+        los_drag_callback = _wrap_drag(on_los_drag)
+        echo_drag_callback = _wrap_drag(on_echo_drag)
+        los_end_callback = _wrap_drag(on_los_drag_end)
+        echo_end_callback = _wrap_drag(on_echo_drag_end)
         los_marker, echo_marker = _add_draggable_markers(
             plot,
             lags,
             mag,
             los_idx,
             echo_idx,
-            on_los_drag_end=los_callback,
-            on_echo_drag_end=echo_callback,
+            on_los_drag=los_drag_callback,
+            on_echo_drag=echo_drag_callback,
+            on_los_drag_end=los_end_callback,
+            on_echo_drag_end=echo_end_callback,
         )
         if scene is not None and manual_lags is not None:
             def _handle_click(ev) -> None:
@@ -1748,14 +1765,16 @@ def _plot_on_pg(
                     manual_lags["los"] = int(round(lag_value))
                     if los_marker is not None:
                         los_marker.set_index(idx)
-                    if los_callback is not None:
-                        los_callback(idx, lag_value)
+                    callback = los_drag_callback or los_end_callback
+                    if callback is not None:
+                        callback(idx, lag_value)
                 if modifiers & QtCore.Qt.AltModifier:
                     manual_lags["echo"] = int(round(lag_value))
                     if echo_marker is not None:
                         echo_marker.set_index(idx)
-                    if echo_callback is not None:
-                        echo_callback(idx, lag_value)
+                    callback = echo_drag_callback or echo_end_callback
+                    if callback is not None:
+                        callback(idx, lag_value)
 
             plot._xcorr_click_handler = _handle_click
             scene.sigMouseClicked.connect(_handle_click)
@@ -1884,6 +1903,8 @@ class TransceiverUI(tk.Tk):
         self._closing = False
         self._plot_worker_manager = _get_plot_worker_manager()
         self._plot_worker_manager.start()
+        self._xcorr_manual_file: Path | None = None
+        self._xcorr_polling = False
         self.create_widgets()
         try:
             self.state("zoomed")
@@ -2520,6 +2541,7 @@ class TransceiverUI(tk.Tk):
         ) is None:
             return
         self.manual_xcorr_lags = {"los": None, "echo": None}
+        self._xcorr_manual_file = None
         if reason:
             text = f"Manuelle Marker zurückgesetzt ({reason})"
         else:
@@ -3441,6 +3463,44 @@ class TransceiverUI(tk.Tk):
         )
         self.rx_stats_label.configure(text=_format_stats_text(stats))
 
+    def _start_manual_xcorr_polling(self, output_path: str | None) -> None:
+        if not output_path:
+            return
+        self._xcorr_manual_file = Path(output_path)
+        if not self._xcorr_polling:
+            self._xcorr_polling = True
+            self._poll_manual_xcorr_updates()
+
+    def _poll_manual_xcorr_updates(self) -> None:
+        if self._closing:
+            self._xcorr_polling = False
+            return
+        manual_file = self._xcorr_manual_file
+        if manual_file is not None:
+            updates = None
+            try:
+                with manual_file.open("r", encoding="utf-8") as handle:
+                    data = json.load(handle)
+                if isinstance(data, dict):
+                    updates = {
+                        "los": data.get("los"),
+                        "echo": data.get("echo"),
+                    }
+            except Exception:
+                updates = None
+            if updates is not None:
+                changed = False
+                for key in ("los", "echo"):
+                    value = updates.get(key)
+                    if value is not None:
+                        value = int(value)
+                    if self.manual_xcorr_lags.get(key) != value:
+                        self.manual_xcorr_lags[key] = value
+                        changed = True
+                if changed:
+                    self._refresh_rx_stats()
+        self.after(200, self._poll_manual_xcorr_updates)
+
     def _show_fullscreen(
         self,
         data: np.ndarray,
@@ -3453,7 +3513,7 @@ class TransceiverUI(tk.Tk):
             return
         if mode == "Crosscorr" and ref_data is None:
             ref_data, _ref_label = self._get_crosscorr_reference()
-        _spawn_plot_worker(
+        output_path = _spawn_plot_worker(
             data,
             fs,
             mode,
@@ -3462,6 +3522,8 @@ class TransceiverUI(tk.Tk):
             manual_lags=self.manual_xcorr_lags,
             fullscreen=True,
         )
+        if mode == "Crosscorr":
+            self._start_manual_xcorr_polling(output_path)
 
     def _show_toast(self, text: str, duration: int = 2000) -> None:
         """Show a temporary notification on top of the main window."""
