@@ -58,12 +58,13 @@ def main():
     win.setLabel('left', 'Amplitude')
     win.addLegend()
 
-    win.plot(np.real(rx_sig), pen=pg.mkPen('b'), name='Realteil')
-    win.plot(np.imag(rx_sig), pen=pg.mkPen('r', style=QtCore.Qt.DashLine),
-             name='Imaginärteil')
+    win.plot(np.real(rx_sig), pen=pg.mkPen("#1D4ED8"), name="Realteil")
+    win.plot(
+        np.imag(rx_sig),
+        pen=pg.mkPen("#C2410C", style=QtCore.Qt.DashLine),
+        name='Imaginärteil')
 
     pg.exec()
 
 if __name__ == '__main__':
     main()
-

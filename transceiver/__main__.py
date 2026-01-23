@@ -2054,14 +2054,14 @@ def _plot_on_pg(
 ) -> None:
     """Helper to draw the selected visualization on a PyQtGraph PlotItem."""
     colors = {
-        "real": "#4FC3F7",
-        "imag": "#FF8A65",
-        "freq": "#4DB6AC",
-        "autocorr": "#BA68C8",
-        "crosscorr": "#81D4FA",
-        "compare": "#F06292",
-        "los": "#EF5350",
-        "echo": "#66BB6A",
+        "real": "#1D4ED8",
+        "imag": "#C2410C",
+        "freq": "#0F766E",
+        "autocorr": "#6B21A8",
+        "crosscorr": "#1E3A8A",
+        "compare": "#9D174D",
+        "los": "#991B1B",
+        "echo": "#166534",
         "text": "#E0E0E0",
     }
     step = max(1, int(reduction_step))
