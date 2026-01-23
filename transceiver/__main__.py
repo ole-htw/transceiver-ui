@@ -327,7 +327,14 @@ class RangeSlider(ctk.CTkFrame):
         self.enabled = True
         self.width = width
         self.height = height
-        self.canvas = tk.Canvas(self, width=width, height=height, highlightthickness=0)
+        self.signal_color = "#cbd5f5"
+        self.canvas = tk.Canvas(
+            self,
+            width=width,
+            height=height,
+            highlightthickness=0,
+            bg=self._get_canvas_bg_color(),
+        )
         self.canvas.grid(row=0, column=0, sticky="ew")
         self.columnconfigure(0, weight=1)
         self.canvas.bind("<Configure>", self._on_resize)
@@ -356,6 +363,24 @@ class RangeSlider(ctk.CTkFrame):
         self.enabled = state == "normal"
 
     # Internal helpers -------------------------------------------------
+    def _get_canvas_bg_color(self) -> str:
+        fg_color = self.cget("fg_color")
+        resolved = self._resolve_color(fg_color)
+        if resolved == "transparent":
+            parent = self.master
+            if isinstance(parent, ctk.CTkBaseClass):
+                resolved = self._resolve_color(parent.cget("fg_color"))
+            if resolved == "transparent":
+                resolved = self._resolve_color(
+                    ctk.ThemeManager.theme["CTkFrame"]["fg_color"]
+                )
+        return resolved
+
+    def _resolve_color(self, color) -> str:
+        if isinstance(color, (tuple, list)):
+            return color[0] if ctk.get_appearance_mode() == "Light" else color[1]
+        return color
+
     def _draw_signal(self) -> None:
         self.canvas.delete("signal")
         if self.data.size:
@@ -370,7 +395,7 @@ class RangeSlider(ctk.CTkFrame):
                 x = int(i * self.width / (len(y) - 1)) if len(y) > 1 else 0
                 yv = self.height / 2 - val * (self.height / 2 - 2)
                 self.canvas.create_line(
-                    prev_x, prev_y, x, yv, fill="gray", tags="signal"
+                    prev_x, prev_y, x, yv, fill=self.signal_color, tags="signal"
                 )
                 prev_x, prev_y = x, yv
         self._update_from_vars()
