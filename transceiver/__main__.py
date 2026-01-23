@@ -936,7 +936,12 @@ class SuggestEntry(ctk.CTkFrame):
     ) -> None:
         super().__init__(parent)
         self.name = name
-        self.entry = ctk.CTkEntry(self, width=width, textvariable=textvariable)
+        if width is None:
+            self.entry = ctk.CTkEntry(self, textvariable=textvariable)
+        else:
+            self.entry = ctk.CTkEntry(
+                self, width=width, textvariable=textvariable
+            )
         self.var = textvariable
         self.entry.grid(row=0, column=0, sticky="ew")
         self.sugg_frame = ctk.CTkFrame(self, fg_color="transparent")
