@@ -327,7 +327,7 @@ class RangeSlider(ctk.CTkFrame):
         self.enabled = True
         self.width = width
         self.height = height
-        self.signal_color = "#cbd5f5"
+        self.signal_color = "#e3e7ff"
         self.canvas = tk.Canvas(
             self,
             width=width,
@@ -340,7 +340,7 @@ class RangeSlider(ctk.CTkFrame):
         self.canvas.bind("<Configure>", self._on_resize)
         self.data = np.array([], dtype=np.float32)
         self.region = self.canvas.create_rectangle(
-            0, 0, 0, height, fill="#ccf", outline=""
+            0, 0, 0, height, fill="#4b5fbf", outline=""
         )
         self.handle_start = self.canvas.create_line(
             0, 0, 0, height, fill="red", width=2
