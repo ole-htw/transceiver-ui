@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Simple GUI to generate, transmit and receive signals."""
 import subprocess
+import logging
 import threading
 import queue
 import tkinter as tk
@@ -114,6 +115,23 @@ def _maybe_untrack_shared_memory(name: str) -> None:
         pass
     with contextlib.suppress(Exception):
         resource_tracker.unregister(name, "shared_memory")
+
+
+class _QueueLogHandler(logging.Handler):
+    def __init__(self, output_queue: "queue.Queue[str]") -> None:
+        super().__init__(level=logging.INFO)
+        self._output_queue = output_queue
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if getattr(record, "ui_forwarded", False):
+            return
+        message = self.format(record)
+        if not message.endswith("\n"):
+            message += "\n"
+        try:
+            self._output_queue.put(message)
+        except Exception:
+            pass
 
 
 class RangeSlider(ttk.Frame):
@@ -1887,6 +1905,12 @@ class TransceiverUI(tk.Tk):
         self.rx_rate_var = self.rate_var
         self.console = None
         self._out_queue = queue.Queue()
+        self._tx_log_handler = _QueueLogHandler(self._out_queue)
+        self._tx_log_handler.setFormatter(logging.Formatter("%(message)s"))
+        self._tx_logger = logging.getLogger("transceiver.tx_controller")
+        self._tx_logger.addHandler(self._tx_log_handler)
+        self._tx_logger.setLevel(logging.INFO)
+        self._tx_logger.propagate = False
         self._cmd_running = False
         self._proc = None
         self._stop_requested = False
@@ -4125,6 +4149,8 @@ class TransceiverUI(tk.Tk):
         self.stop_receive()
         if getattr(self, "_plot_worker_manager", None) is not None:
             self._plot_worker_manager.stop()
+        if hasattr(self, "_tx_logger") and hasattr(self, "_tx_log_handler"):
+            self._tx_logger.removeHandler(self._tx_log_handler)
         self._cmd_running = False
         _save_state(self._get_current_params())
         self.quit()

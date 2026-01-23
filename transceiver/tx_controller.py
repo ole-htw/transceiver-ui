@@ -128,7 +128,7 @@ class TxController:
         return True
 
     def _log(self, message: str) -> None:
-        _LOG.info(message.rstrip())
+        _LOG.info(message.rstrip(), extra={"ui_forwarded": True})
         if self._log_callback is not None:
             self._log_callback(message)
 
