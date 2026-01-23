@@ -195,6 +195,14 @@ def _make_group(
     return frame, body, toggle
 
 
+def _resolve_theme_color(color: str | tuple[str, str]) -> str:
+    if isinstance(color, (tuple, list)):
+        if ctk.get_appearance_mode() == "Light":
+            return color[0]
+        return color[1]
+    return color
+
+
 def _make_bordered_group(
     parent: tk.Misc,
     title: str,
@@ -2244,6 +2252,9 @@ class TransceiverUI(ctk.CTk):
         self.columnconfigure(0, weight=1, uniform="cols")
         self.columnconfigure(1, weight=1, uniform="cols")
         self.columnconfigure(2, weight=1, uniform="cols")
+        terminal_container_fg = ctk.ThemeManager.theme["CTkFrame"]["fg_color"]
+        terminal_container_bg = _resolve_theme_color(terminal_container_fg)
+        terminal_container_corner = 10
 
         # ----- Column 1: Generation -----
         gen_frame, gen_body = _make_section(self, "Signal Generation")
@@ -2425,12 +2436,20 @@ class TransceiverUI(ctk.CTk):
             row=5, column=0, columnspan=2, pady=5
         )
 
-        scroll_container = ctk.CTkFrame(gen_body)
+        scroll_container = ctk.CTkFrame(
+            gen_body,
+            fg_color=terminal_container_fg,
+            corner_radius=terminal_container_corner,
+        )
         scroll_container.grid(row=6, column=0, columnspan=2, sticky="nsew")
         scroll_container.columnconfigure(0, weight=1)
         scroll_container.rowconfigure(0, weight=1)
 
-        self.gen_canvas = tk.Canvas(scroll_container)
+        self.gen_canvas = tk.Canvas(
+            scroll_container,
+            bg=terminal_container_bg,
+            highlightthickness=0,
+        )
         self.gen_canvas.grid(row=0, column=0, sticky="nsew")
         self.gen_scroll = ctk.CTkScrollbar(
             scroll_container, orientation="vertical", command=self.gen_canvas.yview
@@ -2442,7 +2461,11 @@ class TransceiverUI(ctk.CTk):
         self.gen_canvas.bind("<Enter>", self._bind_gen_mousewheel)
         self.gen_canvas.bind("<Leave>", self._unbind_gen_mousewheel)
 
-        self.gen_plots_frame = ctk.CTkFrame(self.gen_canvas)
+        self.gen_plots_frame = ctk.CTkFrame(
+            self.gen_canvas,
+            fg_color=terminal_container_fg,
+            corner_radius=terminal_container_corner,
+        )
         self.gen_plots_frame.columnconfigure(0, weight=1)
         self.gen_canvas.create_window((0, 0), window=self.gen_plots_frame, anchor="nw")
         self.gen_plots_frame.bind(
@@ -2522,7 +2545,11 @@ class TransceiverUI(ctk.CTk):
         )
         self.tx_stop.grid(row=0, column=2, padx=2)
 
-        log_frame = ctk.CTkFrame(tx_body)
+        log_frame = ctk.CTkFrame(
+            tx_body,
+            fg_color=terminal_container_fg,
+            corner_radius=terminal_container_corner,
+        )
         log_frame.grid(row=6, column=0, columnspan=2, sticky="nsew")
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
@@ -2684,12 +2711,20 @@ class TransceiverUI(ctk.CTk):
             row=0, column=3, padx=2
         )
 
-        rx_scroll_container = ctk.CTkFrame(rx_body)
+        rx_scroll_container = ctk.CTkFrame(
+            rx_body,
+            fg_color=terminal_container_fg,
+            corner_radius=terminal_container_corner,
+        )
         rx_scroll_container.grid(row=16, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
-        self.rx_canvas = tk.Canvas(rx_scroll_container)
+        self.rx_canvas = tk.Canvas(
+            rx_scroll_container,
+            bg=terminal_container_bg,
+            highlightthickness=0,
+        )
         self.rx_canvas.grid(row=0, column=0, sticky="nsew")
         self.rx_vscroll = ctk.CTkScrollbar(
             rx_scroll_container, orientation="vertical", command=self.rx_canvas.yview
@@ -2699,7 +2734,11 @@ class TransceiverUI(ctk.CTk):
         self.rx_canvas.bind("<Enter>", self._bind_rx_mousewheel)
         self.rx_canvas.bind("<Leave>", self._unbind_rx_mousewheel)
 
-        self.rx_plots_frame = ctk.CTkFrame(self.rx_canvas)
+        self.rx_plots_frame = ctk.CTkFrame(
+            self.rx_canvas,
+            fg_color=terminal_container_fg,
+            corner_radius=terminal_container_corner,
+        )
         self.rx_plots_frame.columnconfigure(0, weight=1)
         self.rx_canvas.create_window((0, 0), window=self.rx_plots_frame, anchor="nw")
         self.rx_plots_frame.bind(
