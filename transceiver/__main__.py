@@ -179,19 +179,35 @@ def _make_group(
     frame.columnconfigure(0, weight=1)
     header = ctk.CTkFrame(frame, fg_color="transparent")
     header.grid(row=0, column=0, sticky="w", padx=10, pady=(8, 0))
-    label = ctk.CTkLabel(header, text=title)
-    label.grid(row=0, column=0, sticky="w")
     toggle = None
     if toggle_var is not None:
         toggle = ctk.CTkCheckBox(
-            header, text="", variable=toggle_var, command=toggle_command, width=24
+            header, text=title, variable=toggle_var, command=toggle_command, width=24
         )
-        toggle.grid(row=0, column=1, sticky="w", padx=(6, 0))
+        toggle.grid(row=0, column=0, sticky="w")
+    else:
+        label = ctk.CTkLabel(header, text=title)
+        label.grid(row=0, column=0, sticky="w")
     body = ctk.CTkFrame(frame, fg_color="transparent")
     body.grid(row=1, column=0, sticky="nsew", padx=10, pady=(4, 8))
     body.columnconfigure(1, weight=1)
     frame.rowconfigure(1, weight=1)
     return frame, body, toggle
+
+
+def _make_inline_toggle_row(
+    parent: tk.Misc,
+    title: str,
+    toggle_var: tk.BooleanVar,
+    toggle_command=None,
+) -> tuple[ctk.CTkFrame, ctk.CTkCheckBox]:
+    frame = ctk.CTkFrame(parent, corner_radius=10)
+    frame.columnconfigure(1, weight=1)
+    toggle = ctk.CTkCheckBox(
+        frame, text=title, variable=toggle_var, command=toggle_command
+    )
+    toggle.grid(row=0, column=0, sticky="w", padx=(10, 6), pady=6)
+    return frame, toggle
 
 
 class _QueueLogHandler(logging.Handler):
@@ -2184,9 +2200,10 @@ class TransceiverUI(ctk.CTk):
             gen_body,
             variable=self.wave_var,
             values=["sinus", "doppelsinus", "zadoffchu", "chirp"],
-            width=10,
+            text_color="#f5f5f5",
+            dropdown_text_color="#f5f5f5",
         )
-        wave_box.grid(row=0, column=1)
+        wave_box.grid(row=0, column=1, sticky="ew")
         wave_box.configure(
             command=lambda _value: (
                 self.update_waveform_fields(),
@@ -2284,28 +2301,26 @@ class TransceiverUI(ctk.CTk):
 
         self.repeat_enable = tk.BooleanVar(value=True)
         self._repeat_last_value = "1"
-        repeat_frame, repeat_body, _ = _make_group(
+        repeat_frame, _ = _make_inline_toggle_row(
             gen_body,
             "Repeats",
             toggle_var=self.repeat_enable,
             toggle_command=self._on_repeat_toggle,
         )
         repeat_frame.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(4, 0))
-        repeat_body.columnconfigure(0, weight=1)
-        self.repeat_entry = SuggestEntry(repeat_body, "repeat_entry")
+        self.repeat_entry = SuggestEntry(repeat_frame, "repeat_entry")
         self.repeat_entry.insert(0, "1")
-        self.repeat_entry.grid(row=0, column=0, sticky="ew")
+        self.repeat_entry.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=6)
 
         self.zeros_enable = tk.BooleanVar(value=False)
         self._zeros_last_value = "same"
-        zeros_frame, zeros_body, _ = _make_group(
+        zeros_frame, _ = _make_inline_toggle_row(
             gen_body,
             "Zeros",
             toggle_var=self.zeros_enable,
             toggle_command=self._on_zeros_toggle,
         )
         zeros_frame.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(4, 0))
-        zeros_body.columnconfigure(0, weight=1)
         self.zeros_var = tk.StringVar(value="same")
         self.zeros_values = [
             "same",
@@ -2316,12 +2331,11 @@ class TransceiverUI(ctk.CTk):
             "octuple",
         ]
         self.zeros_combo = ctk.CTkComboBox(
-            zeros_body,
+            zeros_frame,
             variable=self.zeros_var,
             values=self.zeros_values,
-            width=10,
         )
-        self.zeros_combo.grid(row=0, column=0, sticky="ew")
+        self.zeros_combo.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=6)
         self.zeros_combo.configure(state="disabled")
 
         ctk.CTkLabel(gen_body, text="Amplitude").grid(row=8, column=0, sticky="w")
