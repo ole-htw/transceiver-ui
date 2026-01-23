@@ -2752,32 +2752,24 @@ class TransceiverUI(ctk.CTk):
         self.rx_file.insert(0, "rx_signal.bin")
         self.rx_file.grid(row=8, column=1, sticky="ew")
 
-        ctk.CTkLabel(rx_body, text="View").grid(row=9, column=0, sticky="w")
-        ctk.CTkComboBox(
-            rx_body,
-            variable=self.rx_view,
-            values=["Signal", "Freq", "Crosscorr", "AoA (ESPRIT)"],
-            width=140,
-        ).grid(row=9, column=1, sticky="w")
-
         ctk.CTkLabel(rx_body, text="Antennenabstand [m]").grid(
-            row=10, column=0, sticky="w"
+            row=9, column=0, sticky="w"
         )
         self.rx_ant_spacing = SuggestEntry(rx_body, "rx_ant_spacing")
         self.rx_ant_spacing.insert(0, "0.03")
-        self.rx_ant_spacing.grid(row=10, column=1, sticky="ew")
+        self.rx_ant_spacing.grid(row=9, column=1, sticky="ew")
 
         ctk.CTkLabel(rx_body, text="Wellenlänge [m]").grid(
-            row=11, column=0, sticky="w"
+            row=10, column=0, sticky="w"
         )
         self.rx_wavelength = SuggestEntry(rx_body, "rx_wavelength")
         self.rx_wavelength.insert(0, "3e8/5.18e9")
-        self.rx_wavelength.grid(row=11, column=1, sticky="ew")
+        self.rx_wavelength.grid(row=10, column=1, sticky="ew")
 
         self.rx_aoa_label = ctk.CTkLabel(rx_body, text="AoA (ESPRIT): --")
-        self.rx_aoa_label.grid(row=12, column=0, columnspan=2, sticky="w")
+        self.rx_aoa_label.grid(row=11, column=0, columnspan=2, sticky="w")
         self.rx_echo_aoa_label = ctk.CTkLabel(rx_body, text="Echo AoA: --")
-        self.rx_echo_aoa_label.grid(row=13, column=0, columnspan=2, sticky="w")
+        self.rx_echo_aoa_label.grid(row=12, column=0, columnspan=2, sticky="w")
 
         # --- Trim controls -------------------------------------------------
         self.trim_var = tk.BooleanVar(value=False)
