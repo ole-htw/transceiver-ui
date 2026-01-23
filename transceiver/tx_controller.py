@@ -172,9 +172,20 @@ class TxController:
         auto_cpu_format: bool = True,  # kept for compatibility (ignored in replay default)
         input_file_format: str = "sc16_i16_interleaved",
     ) -> bool:
+        restart_requested = False
         with self._lock:
             if self._running:
-                self._log("TX start requested but already running.\n")
+                restart_requested = True
+                self._log("TX start requested while running; stopping current TX before restart.\n")
+
+        if restart_requested:
+            if not self.stop_tx(timeout=5.0):
+                self._log("TX restart failed; controller still running.\n")
+                return False
+
+        with self._lock:
+            if self._running:
+                self._log("TX restart failed; controller still running.\n")
                 return False
 
             self._stop_event.clear()
@@ -839,4 +850,3 @@ class TxController:
                 self._thread = None
                 self.last_end_monotonic = time.monotonic()
             self._log("TX worker (Replay) exit.\n")
-

@@ -4141,7 +4141,7 @@ class TransceiverUI(tk.Tk):
             if not started:
                 self._stop_tx_output_capture()
         if not started:
-            self._out_queue.put("TX already running; start request ignored.\n")
+            self._out_queue.put("TX start failed; controller still running.\n")
             self._process_queue()
             return
         self._process_queue()
