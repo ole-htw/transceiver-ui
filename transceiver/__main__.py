@@ -1613,21 +1613,6 @@ def _spawn_plot_worker(
             _maybe_untrack_shared_memory(shm.name)
             shm.close()
 
-            def _unlink_shared_memory(name: str) -> None:
-                try:
-                    shm_cleanup = shared_memory.SharedMemory(name=name)
-                except (FileNotFoundError, OSError):
-                    return
-                _maybe_untrack_shared_memory(shm_cleanup.name)
-                with contextlib.suppress(FileNotFoundError):
-                    shm_cleanup.unlink()
-                shm_cleanup.close()
-
-            cleanup_timer = threading.Timer(
-                30.0, _unlink_shared_memory, args=(shm_name,)
-            )
-            cleanup_timer.daemon = True
-            cleanup_timer.start()
         except (BufferError, FileNotFoundError, OSError, ValueError):
             data_path = temp_dir / "data.npy"
             np.save(data_path, data_contiguous)
@@ -1669,21 +1654,6 @@ def _spawn_plot_worker(
                 _maybe_untrack_shared_memory(ref_shm.name)
                 ref_shm.close()
 
-                def _unlink_ref_shared_memory(name: str) -> None:
-                    try:
-                        ref_cleanup = shared_memory.SharedMemory(name=name)
-                    except (FileNotFoundError, OSError):
-                        return
-                    _maybe_untrack_shared_memory(ref_cleanup.name)
-                    with contextlib.suppress(FileNotFoundError):
-                        ref_cleanup.unlink()
-                    ref_cleanup.close()
-
-                ref_timer = threading.Timer(
-                    30.0, _unlink_ref_shared_memory, args=(ref_shm_name,)
-                )
-                ref_timer.daemon = True
-                ref_timer.start()
             except (BufferError, FileNotFoundError, OSError, ValueError):
                 ref_path = temp_dir / "ref.npy"
                 np.save(ref_path, ref_contiguous)
