@@ -137,7 +137,7 @@ class _FDCapture:
     def __init__(self, output_queue: "queue.Queue[str]") -> None:
         self._output_queue = output_queue
         self._reader_thread: threading.Thread | None = None
-        self._reader: contextlib.AbstractContextManager | None = None
+        self._read_fd: int | None = None
         self._orig_stdout_fd: int | None = None
         self._orig_stderr_fd: int | None = None
 
@@ -147,9 +147,7 @@ class _FDCapture:
         self._orig_stdout_fd = os.dup(1)
         self._orig_stderr_fd = os.dup(2)
         read_fd, write_fd = os.pipe()
-        self._reader = os.fdopen(
-            read_fd, "r", encoding="utf-8", errors="replace", buffering=1
-        )
+        self._read_fd = read_fd
         os.dup2(write_fd, 1)
         os.dup2(write_fd, 2)
         os.close(write_fd)
@@ -164,16 +162,32 @@ class _FDCapture:
         return None
 
     def _reader_loop(self) -> None:
+        import codecs
+
+        if self._read_fd is None:
+            return
+        decoder = codecs.getincrementaldecoder("utf-8")("replace")
         try:
-            for line in self._reader:  # type: ignore[union-attr]
-                if line:
-                    self._output_queue.put(line)
+            while True:
+                try:
+                    chunk = os.read(self._read_fd, 4096)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                text = decoder.decode(chunk)
+                if text:
+                    self._output_queue.put(text)
+            tail = decoder.decode(b"", final=True)
+            if tail:
+                self._output_queue.put(tail)
         except Exception:
             pass
         finally:
             with contextlib.suppress(Exception):
-                if self._reader is not None:
-                    self._reader.close()
+                if self._read_fd is not None:
+                    os.close(self._read_fd)
+                    self._read_fd = None
 
     def _restore_fds(self) -> None:
         if self._orig_stdout_fd is None and self._orig_stderr_fd is None:
@@ -193,9 +207,10 @@ class _FDCapture:
             with contextlib.suppress(Exception):
                 os.close(self._orig_stderr_fd)
             self._orig_stderr_fd = None
-        if self._reader is not None:
+        if self._read_fd is not None:
             with contextlib.suppress(Exception):
-                self._reader.close()
+                os.close(self._read_fd)
+            self._read_fd = None
         if self._reader_thread is not None:
             self._reader_thread.join(timeout=1.0)
             self._reader_thread = None
@@ -3368,15 +3383,28 @@ class TransceiverUI(tk.Tk):
             self.rx_canvas.yview_scroll(delta, "units")
 
     def _process_queue(self) -> None:
-        while not self._out_queue.empty():
+        chunks: list[str] = []
+        processed = 0
+        max_items = 200
+        max_chars = 20000
+        total_chars = 0
+        while not self._out_queue.empty() and processed < max_items:
             line = self._out_queue.get_nowait()
+            chunks.append(line)
+            processed += 1
+            total_chars += len(line)
+            if total_chars >= max_chars:
+                break
+        if chunks:
+            text = "".join(chunks)
             if self.console and self.console.winfo_exists():
-                self.console.append(line)
+                self.console.append(text)
             if hasattr(self, "tx_log") and self.tx_log.winfo_exists():
-                self.tx_log.insert(tk.END, line)
+                self.tx_log.insert(tk.END, text)
                 self.tx_log.see(tk.END)
         if self._cmd_running or not self._out_queue.empty():
-            self.after(100, self._process_queue)
+            delay = 10 if self._out_queue.empty() else 1
+            self.after(delay, self._process_queue)
 
     def _ui(self, callback) -> None:
         if self._closing:
