@@ -2820,6 +2820,11 @@ class TransceiverUI(ctk.CTk):
             return "LOS entfernt: ja"
         return "LOS entfernt: nein"
 
+    def _update_path_cancellation_status(self) -> None:
+        """Placeholder to keep path cancellation controls in sync."""
+        if hasattr(self, "rx_path_cancel_check"):
+            self.rx_path_cancel_check.configure(state="normal")
+
     def _update_rx_inv_rrc_availability(self) -> None:
         has_filtered_signal = self._rrc_active()
         state = "normal" if has_filtered_signal else "disabled"
