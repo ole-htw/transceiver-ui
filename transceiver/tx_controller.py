@@ -244,6 +244,7 @@ class TxController:
             if not file_path.exists():
                 raise FileNotFoundError(f"TX file not found: {file_path}")
 
+<<<<<<< HEAD
             raw = self._open_iq_int16_file(file_path, use_memmap=params.use_memmap)
             if raw.size < 2:
                 raise ValueError("TX file is empty or incomplete (needs at least I/Q).")
