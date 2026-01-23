@@ -69,7 +69,7 @@ def main() -> None:
     pg.setConfigOption("foreground", "k")
 
     app = pg.mkQApp()
-    win = pg.plot(t * 1e6, f_inst / 1e6, pen=pg.mkPen("b"))
+    win = pg.plot(t * 1e6, f_inst / 1e6, pen=pg.mkPen("#1D4ED8"))
     win.setWindowTitle(f"Instantane Frequenz: {args.filename}")
     win.setLabel("bottom", "Zeit [µs]")
     win.setLabel("left", "Instantane Frequenz [MHz]")
@@ -80,4 +80,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

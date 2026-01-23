@@ -55,7 +55,9 @@ def main():
     pg.setConfigOption('foreground', 'k')
 
     app = pg.mkQApp()
-    win = pg.plot(freqs, mag, pen='b', title=f"Frequenzspektrum: {args.filename}")
+    win = pg.plot(
+        freqs, mag, pen="#1D4ED8", title=f"Frequenzspektrum: {args.filename}"
+    )
     win.setWindowTitle(args.filename)
     win.showGrid(x=True, y=True)
     win.setLabel('bottom', xlabel)
@@ -65,4 +67,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

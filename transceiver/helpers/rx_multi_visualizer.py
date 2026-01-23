@@ -50,7 +50,7 @@ def main():
     win = pg.GraphicsLayoutWidget(title="RX Waveforms (komplex)")
     win.setWindowTitle(args.filename)
 
-    colours = itertools.cycle(('b', 'r', 'g', 'm'))
+    colours = itertools.cycle(("#1D4ED8", "#C2410C", "#166534", "#6B21A8"))
 
     for idx, (sig, color) in enumerate(zip(sigs, colours)):
         p = win.addPlot(row=idx, col=0)
@@ -67,4 +67,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

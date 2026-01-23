@@ -112,7 +112,7 @@ def main():
     pg.setConfigOption("foreground", "k")
     app = pg.mkQApp()
 
-    win = pg.plot(lags, plot_data, pen=pg.mkPen("b"))
+    win = pg.plot(lags, plot_data, pen=pg.mkPen("#1D4ED8"))
     win.setWindowTitle(f"Autokorrelation - {args.filename}")
     win.setLabel("bottom", "Lag / Verschiebung [Samples]")
     win.setLabel("left", ylabel_text)
@@ -123,4 +123,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
