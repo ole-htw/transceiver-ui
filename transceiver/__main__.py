@@ -1984,11 +1984,10 @@ class TransceiverUI(tk.Tk):
         self.rx_rate_var = self.rate_var
         self.console = None
         self._out_queue = queue.Queue()
+        self._tx_log_handler = _QueueLogHandler(self._out_queue)
+        self._tx_log_handler.setFormatter(logging.Formatter("%(message)s"))
         self._tx_logger = logging.getLogger("transceiver.tx_controller")
-        if not self._tx_logger.handlers:
-            tx_handler = logging.StreamHandler(sys.stdout)
-            tx_handler.setFormatter(logging.Formatter("%(message)s"))
-            self._tx_logger.addHandler(tx_handler)
+        self._tx_logger.addHandler(self._tx_log_handler)
         self._tx_logger.setLevel(logging.INFO)
         self._tx_logger.propagate = False
         self._cmd_running = False
@@ -4129,6 +4128,7 @@ class TransceiverUI(tk.Tk):
             self.tx_stop.config(state="normal")
         if hasattr(self, "tx_retrans"):
             self.tx_retrans.config(state="normal")
+        self._start_tx_output_capture()
         started = False
         try:
             started = controller.start_tx(
@@ -4138,10 +4138,11 @@ class TransceiverUI(tk.Tk):
                 freq=freq,
                 gain=gain,
                 chan=0,
+                log_callback=lambda msg: self._out_queue.put(msg),
             )
         finally:
             if not started:
-                pass
+                self._stop_tx_output_capture()
         if not started:
             self._out_queue.put("TX already running; start request ignored.\n")
             self._process_queue()
@@ -4158,6 +4159,7 @@ class TransceiverUI(tk.Tk):
             return
         if controller.last_error:
             self._out_queue.put(f"TX error: {controller.last_error}\n")
+        self._stop_tx_output_capture()
         self._cmd_running = False
         self._tx_running = False
         self._last_tx_end = controller.last_end_monotonic or time.monotonic()
@@ -4171,6 +4173,7 @@ class TransceiverUI(tk.Tk):
             self._tx_running = False
             self._cmd_running = False
             self._last_tx_end = time.monotonic()
+            self._stop_tx_output_capture()
             self._ui(self._reset_tx_buttons)
             return
         stopped = controller.stop_tx(timeout=5.0)
@@ -4180,6 +4183,7 @@ class TransceiverUI(tk.Tk):
         self._cmd_running = controller.is_running
         self._last_tx_end = controller.last_end_monotonic or time.monotonic()
         if not controller.is_running:
+            self._stop_tx_output_capture()
             self._ui(self._reset_tx_buttons)
 
     def retransmit(self) -> None:
