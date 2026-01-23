@@ -384,11 +384,12 @@ class RangeSlider(ctk.CTkFrame):
     def _draw_signal(self) -> None:
         self.canvas.delete("signal")
         if self.data.size:
-            y = np.abs(self.data)
+            y = np.asarray(self.data)
             step = max(1, len(y) // self.width)
             y = y[::step]
-            if np.max(y) > 0:
-                y = y / np.max(y)
+            max_val = float(np.max(np.abs(y))) if y.size else 0.0
+            if max_val > 0:
+                y = y / max_val
             prev_x = 0
             prev_y = self.height / 2
             for i, val in enumerate(y):
