@@ -2521,12 +2521,14 @@ class TransceiverUI(tk.Tk):
         data: np.ndarray,
         fs: float,
         symbol_rate: float | None = None,
+        corr_mode: str = "Autocorr",
+        corr_ref: np.ndarray | None = None,
     ) -> None:
-        modes = ["Signal", "Freq", "InstantFreq", "Autocorr"]
+        modes = ["Signal", "Freq", "InstantFreq", corr_mode]
         for idx, mode in enumerate(modes):
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
-            _plot_on_mpl(ax, data, fs, mode, f"TX {mode}")
+            _plot_on_mpl(ax, data, fs, mode, f"TX {mode}", ref_data=corr_ref)
             canvas = FigureCanvasTkAgg(fig, master=frame)
             canvas.draw()
             widget = canvas.get_tk_widget()
@@ -2589,17 +2591,24 @@ class TransceiverUI(tk.Tk):
         notebook.grid(row=0, column=0, sticky="nsew")
         self.gen_plots_frame.columnconfigure(0, weight=1)
 
-        tabs: list[tuple[str, np.ndarray, float, float | None]] = []
+        corr_reference = filtered_data if filtered_data is not None else data
+        corr_reference = _strip_trailing_zeros(corr_reference)
+        if corr_reference.size == 0:
+            corr_reference = None
+
+        tabs: list[tuple[str, np.ndarray, float, float | None, str, np.ndarray | None]] = []
         if filtered_data is None:
-            tabs.append(("Signal", data, fs, symbol_rate))
+            tabs.append(("Signal", data, fs, symbol_rate, "Autocorr", None))
         else:
-            tabs.append(("Ungefiltert", data, fs, symbol_rate))
+            tabs.append(("Ungefiltert", data, fs, symbol_rate, "Autocorr", None))
             tabs.append(
                 (
                     "Gefiltert",
                     filtered_data,
                     filtered_fs if filtered_fs is not None else fs,
                     filtered_symbol_rate,
+                    "Autocorr",
+                    None,
                 )
             )
 
@@ -2613,6 +2622,8 @@ class TransceiverUI(tk.Tk):
                     repeated_data,
                     repeated_fs if repeated_fs is not None else fs,
                     repeated_symbol_rate or filtered_symbol_rate or symbol_rate,
+                    "Crosscorr",
+                    corr_reference,
                 )
             )
         if zeros_data is not None:
@@ -2632,14 +2643,23 @@ class TransceiverUI(tk.Tk):
                     or repeated_symbol_rate
                     or filtered_symbol_rate
                     or symbol_rate,
+                    "Crosscorr",
+                    corr_reference,
                 )
             )
 
-        for label, tab_data, tab_fs, tab_symbol_rate in tabs:
+        for label, tab_data, tab_fs, tab_symbol_rate, corr_mode, corr_ref in tabs:
             tab = ttk.Frame(notebook)
             tab.columnconfigure(0, weight=1)
             notebook.add(tab, text=label)
-            self._render_gen_tab(tab, tab_data, tab_fs, symbol_rate=tab_symbol_rate)
+            self._render_gen_tab(
+                tab,
+                tab_data,
+                tab_fs,
+                symbol_rate=tab_symbol_rate,
+                corr_mode=corr_mode,
+                corr_ref=corr_ref,
+            )
 
         if tabs:
             notebook.select(len(tabs) - 1)
