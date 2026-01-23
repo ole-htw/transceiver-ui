@@ -1118,6 +1118,57 @@ def _find_los_echo(cc: np.ndarray) -> tuple[int | None, int | None]:
     return los, echo
 
 
+def _estimate_los_lag(
+    data: np.ndarray,
+    ref_data: np.ndarray,
+    manual_lags: dict[str, int | None] | None = None,
+) -> int | None:
+    if data.size == 0 or ref_data.size == 0:
+        return None
+    data_red, ref_red, step = _reduce_pair(data, ref_data)
+    n = min(len(data_red), len(ref_red))
+    if n == 0:
+        return None
+    cc = _xcorr_fft(data_red[:n], ref_red[:n])
+    lags = np.arange(-n + 1, n) * step
+    los_idx, _echo_idx = _find_los_echo(cc)
+    los_idx, _ = _apply_manual_lags(lags, los_idx, None, manual_lags)
+    if los_idx is None:
+        return None
+    return int(lags[los_idx])
+
+
+def _subtract_reference_at_lag(
+    data: np.ndarray,
+    ref_data: np.ndarray,
+    lag: int,
+) -> tuple[np.ndarray, complex | None]:
+    """Return *data* with a scaled reference path removed at *lag*."""
+    if data.size == 0 or ref_data.size == 0:
+        return data, None
+    n = len(data)
+    m = len(ref_data)
+    if lag >= 0:
+        r_start = lag
+        s_start = 0
+        length = min(n - r_start, m)
+    else:
+        r_start = 0
+        s_start = -lag
+        length = min(n, m - s_start)
+    if length <= 0:
+        return data, None
+    r_seg = data[r_start : r_start + length]
+    s_seg = ref_data[s_start : s_start + length]
+    denom = np.vdot(s_seg, s_seg)
+    if denom == 0:
+        return data, None
+    coeff = np.vdot(s_seg, r_seg) / (denom + 1e-12)
+    residual = data.copy()
+    residual[r_start : r_start + length] = r_seg - coeff * s_seg
+    return residual, coeff
+
+
 def _find_peaks_simple(
     mag: np.ndarray, rel_thresh: float = 0.2, min_dist: int = 200
 ) -> list[int]:
@@ -2383,37 +2434,59 @@ class TransceiverUI(tk.Tk):
         self.rx_inv_os_entry = SuggestEntry(rx_frame, "rx_inv_os_entry")
         self.rx_inv_os_entry.insert(0, "1")
         self.rx_inv_os_entry.entry.configure(state="disabled")
-        ttk.Label(rx_frame, text="Output").grid(row=8, column=0, sticky="w")
+        self.rx_path_cancel_enable = tk.BooleanVar(value=False)
+        self.rx_path_cancel_check = ttk.Checkbutton(
+            rx_frame,
+            text="Pfad-Cancellation (LOS entfernen)",
+            variable=self.rx_path_cancel_enable,
+            command=self._on_rx_path_cancel_toggle,
+        )
+        self.rx_path_cancel_check.grid(row=8, column=0, columnspan=2, sticky="w")
+        self.rx_path_cancel_help = ttk.Label(
+            rx_frame,
+            text=(
+                "Schätzt den dominanten Pfad (LOS) aus der Referenzsequenz und "
+                "subtrahiert ihn aus dem Empfangssignal. Danach wird die "
+                "Kreuzkorrelation erneut berechnet."
+            ),
+            wraplength=260,
+            justify="left",
+        )
+        self.rx_path_cancel_help.grid(row=9, column=0, columnspan=2, sticky="w")
+        self.rx_path_cancel_status = ttk.Label(rx_frame, text="")
+        self.rx_path_cancel_status.grid(row=10, column=0, columnspan=2, sticky="w")
+
+        ttk.Label(rx_frame, text="Output").grid(row=11, column=0, sticky="w")
         self.rx_file = SuggestEntry(rx_frame, "rx_file")
         self.rx_file.insert(0, "rx_signal.bin")
-        self.rx_file.grid(row=8, column=1, sticky="ew")
+        self.rx_file.grid(row=11, column=1, sticky="ew")
 
-        ttk.Label(rx_frame, text="View").grid(row=9, column=0, sticky="w")
+        ttk.Label(rx_frame, text="View").grid(row=12, column=0, sticky="w")
         ttk.Combobox(
             rx_frame,
             textvariable=self.rx_view,
             values=["Signal", "Freq", "InstantFreq", "Crosscorr", "AoA (ESPRIT)"],
             width=12,
-        ).grid(row=9, column=1)
+        ).grid(row=12, column=1)
 
         ttk.Label(rx_frame, text="Antennenabstand [m]").grid(
-            row=10, column=0, sticky="w"
+            row=13, column=0, sticky="w"
         )
         self.rx_ant_spacing = SuggestEntry(rx_frame, "rx_ant_spacing")
         self.rx_ant_spacing.insert(0, "0.03")
-        self.rx_ant_spacing.grid(row=10, column=1, sticky="ew")
+        self.rx_ant_spacing.grid(row=13, column=1, sticky="ew")
 
         ttk.Label(rx_frame, text="Wellenlänge [m]").grid(
-            row=11, column=0, sticky="w"
+            row=14, column=0, sticky="w"
         )
         self.rx_wavelength = SuggestEntry(rx_frame, "rx_wavelength")
         self.rx_wavelength.insert(0, "3e8/5.18e9")
-        self.rx_wavelength.grid(row=11, column=1, sticky="ew")
+        self.rx_wavelength.grid(row=14, column=1, sticky="ew")
 
         self.rx_aoa_label = ttk.Label(rx_frame, text="AoA (ESPRIT): --")
-        self.rx_aoa_label.grid(row=12, column=0, columnspan=2, sticky="w")
+        self.rx_aoa_label.grid(row=15, column=0, columnspan=2, sticky="w")
         self.rx_echo_aoa_label = ttk.Label(rx_frame, text="Echo AoA: --")
-        self.rx_echo_aoa_label.grid(row=13, column=0, columnspan=2, sticky="w")
+        self.rx_echo_aoa_label.grid(row=16, column=0, columnspan=2, sticky="w")
 
         # --- Trim controls -------------------------------------------------
         self.trim_var = tk.BooleanVar(value=False)
@@ -2422,7 +2495,7 @@ class TransceiverUI(tk.Tk):
         self.trim_dirty = False
 
         trim_frame = ttk.Frame(rx_frame)
-        trim_frame.grid(row=14, column=0, columnspan=2, sticky="ew")
+        trim_frame.grid(row=17, column=0, columnspan=2, sticky="ew")
         trim_frame.columnconfigure(1, weight=1)
 
         ttk.Checkbutton(
@@ -2454,7 +2527,7 @@ class TransceiverUI(tk.Tk):
         self.trim_end_label.grid(row=1, column=2, sticky="e")
 
         rx_btn_frame = ttk.Frame(rx_frame)
-        rx_btn_frame.grid(row=15, column=0, columnspan=2, pady=5)
+        rx_btn_frame.grid(row=18, column=0, columnspan=2, pady=5)
         rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
         self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
@@ -2472,7 +2545,7 @@ class TransceiverUI(tk.Tk):
         )
 
         rx_scroll_container = ttk.Frame(rx_frame)
-        rx_scroll_container.grid(row=16, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.grid(row=19, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
@@ -2495,7 +2568,7 @@ class TransceiverUI(tk.Tk):
                 scrollregion=self.rx_canvas.bbox("all")
             ),
         )
-        rx_frame.rowconfigure(16, weight=1)
+        rx_frame.rowconfigure(19, weight=1)
         self.rx_canvases = []
         self.update_waveform_fields()
         self._update_rx_inv_rrc_availability()
@@ -2611,6 +2684,43 @@ class TransceiverUI(tk.Tk):
         self._sync_rx_inv_rrc_params()
         self._reset_manual_xcorr_lags("Oversampling geändert")
         self.update_trim()
+
+    def _on_rx_path_cancel_toggle(self) -> None:
+        self._update_path_cancellation_status()
+        self._reset_manual_xcorr_lags("Pfad-Cancellation geändert")
+        self.update_trim()
+
+    def _update_path_cancellation_status(self) -> None:
+        if self.rx_path_cancel_enable.get():
+            self.rx_path_cancel_status.configure(text="Pfad-Cancellation: aktiv")
+        else:
+            self.rx_path_cancel_status.configure(text="")
+
+    def _apply_path_cancellation(
+        self, data: np.ndarray, ref_data: np.ndarray
+    ) -> tuple[np.ndarray, dict[str, object]]:
+        info: dict[str, object] = {"applied": False, "lag": None, "coeff": None}
+        if data.size == 0 or ref_data.size == 0:
+            return data, info
+        lag = _estimate_los_lag(data, ref_data, self.manual_xcorr_lags)
+        if lag is None:
+            return data, info
+        residual, coeff = _subtract_reference_at_lag(data, ref_data, lag)
+        if coeff is None:
+            return data, info
+        info.update({"applied": True, "lag": lag, "coeff": coeff})
+        return residual, info
+
+    def _path_cancellation_note(
+        self, info: dict[str, object], ref_data: np.ndarray
+    ) -> str | None:
+        if not self.rx_path_cancel_enable.get():
+            return None
+        if ref_data.size == 0:
+            return "LOS entfernt: nein (keine TX-Daten)"
+        if info.get("applied"):
+            return "LOS entfernt: ja"
+        return "LOS entfernt: nein"
 
     def _update_rx_inv_rrc_availability(self) -> None:
         has_filtered_signal = self._rrc_active()
@@ -2912,8 +3022,6 @@ class TransceiverUI(tk.Tk):
         rx_fs = fs
         data, fac = self._apply_inverse_rrc(data)
         fs *= fac
-        self.latest_fs = fs
-        self.latest_data = data
 
         def _load_tx_samples(path: str) -> np.ndarray:
             raw = np.fromfile(path, dtype=np.int16)
@@ -3026,6 +3134,21 @@ class TransceiverUI(tk.Tk):
         ):
             echo_aoa_text = "Echo AoA: TX-Daten erforderlich"
 
+        rx_cancel_note = None
+        cancel_note = None
+        if self.rx_path_cancel_enable.get():
+            rx_data, rx_cancel_info = self._apply_path_cancellation(
+                rx_data, rx_ref_data
+            )
+            data, cancel_info = self._apply_path_cancellation(data, ref_data)
+            rx_cancel_note = self._path_cancellation_note(
+                rx_cancel_info, rx_ref_data
+            )
+            cancel_note = self._path_cancellation_note(cancel_info, ref_data)
+
+        self.latest_fs = fs
+        self.latest_data = data
+
         for c in self.rx_canvases:
             if hasattr(c, "get_tk_widget"):
                 c.get_tk_widget().destroy()
@@ -3044,6 +3167,7 @@ class TransceiverUI(tk.Tk):
             plot_ref_label: str,
             aoa_plot_time: np.ndarray | None,
             aoa_plot_series: np.ndarray | None,
+            path_note: str | None,
         ) -> None:
             target_frame.columnconfigure(0, weight=1)
             for idx, mode in enumerate(modes):
@@ -3099,6 +3223,8 @@ class TransceiverUI(tk.Tk):
                 xcorr_reduce=True,
             )
             text = _format_stats_text(stats)
+            if path_note:
+                text = f"{text}\n{path_note}"
             stats_label = ttk.Label(target_frame, justify="left", anchor="w")
             stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
             stats_label.configure(text=text)
@@ -3160,6 +3286,7 @@ class TransceiverUI(tk.Tk):
                     if aoa_series_unfiltered is not None
                     else aoa_series
                 ),
+                rx_cancel_note,
             )
             _render_rx_preview(
                 filtered_tab,
@@ -3169,6 +3296,7 @@ class TransceiverUI(tk.Tk):
                 ref_label,
                 aoa_time,
                 aoa_series,
+                cancel_note,
             )
         else:
             _render_rx_preview(
@@ -3179,6 +3307,7 @@ class TransceiverUI(tk.Tk):
                 ref_label,
                 aoa_time,
                 aoa_series,
+                cancel_note,
             )
 
         if hasattr(self, "rx_aoa_label"):
@@ -3625,6 +3754,7 @@ class TransceiverUI(tk.Tk):
             "rx_inv_rrc_beta": self.rrc_beta_entry.get(),
             "rx_inv_rrc_span": self.rrc_span_entry.get(),
             "rx_inv_rrc_enabled": self.rx_inv_rrc_enable.get(),
+            "rx_path_cancellation_enabled": self.rx_path_cancel_enable.get(),
             "rx_channel_2": self.rx_channel_2.get(),
             "rx_channel_view": self.rx_channel_view.get(),
             "rx_file": self.rx_file.get(),
@@ -3728,6 +3858,10 @@ class TransceiverUI(tk.Tk):
             params.get("rx_inv_rrc_enabled", params.get("rx_rrc_enabled", False))
         )
         self._update_rx_inv_rrc_availability()
+        self.rx_path_cancel_enable.set(
+            params.get("rx_path_cancellation_enabled", False)
+        )
+        self._update_path_cancellation_status()
         self.rx_channel_2.set(params.get("rx_channel_2", False))
         self.rx_channel_view.set(params.get("rx_channel_view", "Kanal 1"))
         self.rx_file.delete(0, tk.END)
