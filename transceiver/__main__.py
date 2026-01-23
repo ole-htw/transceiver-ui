@@ -2799,15 +2799,6 @@ class TransceiverUI(ctk.CTk):
         self.rx_channel_view_box.grid(row=2, column=1, sticky="w")
         self.rx_channel_view_box.configure(state="disabled")
 
-        self.rx_path_cancel_enable = tk.BooleanVar(value=False)
-        self.rx_path_cancel_check = ctk.CTkCheckBox(
-            rx_body,
-            text="Pfad-Cancellation (LOS entfernen)",
-            variable=self.rx_path_cancel_enable,
-            command=self._on_rx_path_cancel_toggle,
-        )
-        self.rx_path_cancel_check.grid(row=3, column=0, columnspan=2, sticky="w")
-
         ctk.CTkLabel(rx_body, text="Output").grid(row=4, column=0, sticky="w")
         self.rx_file = SuggestEntry(rx_body, "rx_file")
         self.rx_file.insert(0, "rx_signal.bin")
@@ -2870,8 +2861,17 @@ class TransceiverUI(ctk.CTk):
         self.trim_end_label = ctk.CTkLabel(trim_frame, width=50, text="")
         self.trim_end_label.grid(row=1, column=2, sticky="e")
 
+        self.rx_path_cancel_enable = tk.BooleanVar(value=False)
+        self.rx_path_cancel_check = ctk.CTkCheckBox(
+            rx_body,
+            text="Pfad-Cancellation (LOS entfernen)",
+            variable=self.rx_path_cancel_enable,
+            command=self._on_rx_path_cancel_toggle,
+        )
+        self.rx_path_cancel_check.grid(row=11, column=0, columnspan=2, sticky="w")
+
         rx_btn_frame = ctk.CTkFrame(rx_body)
-        rx_btn_frame.grid(row=11, column=0, columnspan=2, pady=5)
+        rx_btn_frame.grid(row=12, column=0, columnspan=2, pady=5)
         rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
         self.rx_button = ctk.CTkButton(rx_btn_frame, text="Receive", command=self.receive)
@@ -2893,7 +2893,7 @@ class TransceiverUI(ctk.CTk):
             fg_color=terminal_container_fg,
             corner_radius=terminal_container_corner,
         )
-        rx_scroll_container.grid(row=12, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.grid(row=13, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
