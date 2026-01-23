@@ -195,6 +195,34 @@ def _make_group(
     return frame, body, toggle
 
 
+def _make_bordered_group(
+    parent: tk.Misc,
+    title: str,
+    toggle_var: tk.BooleanVar | None = None,
+    toggle_command=None,
+) -> tuple[ctk.CTkFrame, ctk.CTkFrame, ctk.CTkCheckBox | None]:
+    frame = ctk.CTkFrame(
+        parent, corner_radius=12, border_width=1, border_color="#3b3b3b"
+    )
+    frame.columnconfigure(0, weight=1)
+    header = ctk.CTkFrame(frame, fg_color="transparent")
+    header.grid(row=0, column=0, sticky="w", padx=12, pady=(10, 0))
+    toggle = None
+    if toggle_var is not None:
+        toggle = ctk.CTkCheckBox(
+            header, text=title, variable=toggle_var, command=toggle_command, width=24
+        )
+        toggle.grid(row=0, column=0, sticky="w")
+    else:
+        label = ctk.CTkLabel(header, text=title)
+        label.grid(row=0, column=0, sticky="w")
+    body = ctk.CTkFrame(frame, fg_color="transparent")
+    body.grid(row=1, column=0, sticky="nsew", padx=12, pady=(6, 12))
+    body.columnconfigure(1, weight=1)
+    frame.rowconfigure(1, weight=1)
+    return frame, body, toggle
+
+
 def _make_inline_toggle_row(
     parent: tk.Misc,
     title: str,
@@ -2222,10 +2250,20 @@ class TransceiverUI(ctk.CTk):
         gen_body.columnconfigure(1, weight=1)
         gen_body.columnconfigure(2, weight=0)
 
-        ctk.CTkLabel(gen_body, text="Waveform").grid(row=0, column=0, sticky="w")
+        waveform_frame, waveform_body, _ = _make_bordered_group(
+            gen_body,
+            "Waveform",
+        )
+        waveform_frame.grid(row=0, column=0, columnspan=2, sticky="ew")
+        waveform_body.columnconfigure(1, weight=1)
+        waveform_body.columnconfigure(3, weight=1)
+
+        ctk.CTkLabel(waveform_body, text="Waveform").grid(
+            row=0, column=0, sticky="w"
+        )
         self.wave_var = tk.StringVar(value="sinus")
         wave_box = ctk.CTkComboBox(
-            gen_body,
+            waveform_body,
             variable=self.wave_var,
             values=["sinus", "doppelsinus", "zadoffchu", "chirp"],
             text_color="#f5f5f5",
@@ -2239,53 +2277,63 @@ class TransceiverUI(ctk.CTk):
             )
         )
 
-        ctk.CTkLabel(gen_body, text="fs").grid(row=1, column=0, sticky="w")
-        self.fs_entry = SuggestEntry(gen_body, "fs_entry", textvariable=self.fs_var)
-        self.fs_entry.grid(row=1, column=1, sticky="ew")
+        ctk.CTkLabel(waveform_body, text="fs").grid(row=0, column=2, sticky="w")
+        self.fs_entry = SuggestEntry(
+            waveform_body, "fs_entry", textvariable=self.fs_var
+        )
+        self.fs_entry.grid(row=0, column=3, sticky="ew")
         self.fs_entry.entry.bind(
             "<FocusOut>", lambda _e: self.auto_update_tx_filename()
         )
 
-        self.f_label = ctk.CTkLabel(gen_body, text="f")
-        self.f_label.grid(row=2, column=0, sticky="w")
-        self.f_entry = SuggestEntry(gen_body, "f_entry")
+        self.f_label = ctk.CTkLabel(waveform_body, text="f")
+        self.f_label.grid(row=1, column=0, sticky="w")
+        self.f_entry = SuggestEntry(waveform_body, "f_entry")
         self.f_entry.insert(0, "25e3")
-        self.f_entry.grid(row=2, column=1, sticky="ew")
+        self.f_entry.grid(row=1, column=1, sticky="ew")
         self.f_entry.entry.bind("<FocusOut>", lambda _e: self.auto_update_tx_filename())
 
-        self.f1_label = ctk.CTkLabel(gen_body, text="f1")
-        self.f1_entry = SuggestEntry(gen_body, "f1_entry")
-        self.f1_label.grid(row=3, column=0, sticky="w")
-        self.f1_entry.grid(row=3, column=1, sticky="ew")
+        self.f1_label = ctk.CTkLabel(waveform_body, text="f1")
+        self.f1_entry = SuggestEntry(waveform_body, "f1_entry")
+        self.f1_label.grid(row=2, column=0, sticky="w")
+        self.f1_entry.grid(row=2, column=1, sticky="ew")
         self.f1_entry.entry.bind(
             "<FocusOut>", lambda _e: self.auto_update_tx_filename()
         )
 
-        self.q_label = ctk.CTkLabel(gen_body, text="q")
-        self.q_entry = SuggestEntry(gen_body, "q_entry")
+        self.q_label = ctk.CTkLabel(waveform_body, text="q")
+        self.q_entry = SuggestEntry(waveform_body, "q_entry")
         self.q_entry.insert(0, "1")
         # row placement will be adjusted in update_waveform_fields
-        self.q_label.grid(row=2, column=0, sticky="w")
-        self.q_entry.grid(row=2, column=1, sticky="ew")
+        self.q_label.grid(row=1, column=0, sticky="w")
+        self.q_entry.grid(row=1, column=1, sticky="ew")
         self.q_entry.entry.bind("<FocusOut>", lambda _e: self.auto_update_tx_filename())
 
-        ctk.CTkLabel(gen_body, text="Samples").grid(row=4, column=0, sticky="w")
-        self.samples_entry = SuggestEntry(gen_body, "samples_entry")
+        ctk.CTkLabel(waveform_body, text="Samples").grid(row=1, column=2, sticky="w")
+        self.samples_entry = SuggestEntry(waveform_body, "samples_entry")
         self.samples_entry.insert(0, "40000")
-        self.samples_entry.grid(row=4, column=1, sticky="ew")
+        self.samples_entry.grid(row=1, column=3, sticky="ew")
         self.samples_entry.entry.bind(
             "<FocusOut>", lambda _e: self.auto_update_tx_filename()
         )
 
+        ctk.CTkLabel(waveform_body, text="Amplitude").grid(
+            row=2, column=2, sticky="w"
+        )
+        self.amp_entry = SuggestEntry(waveform_body, "amp_entry")
+        self.amp_entry.insert(0, "10000")
+        self.amp_entry.grid(row=2, column=3, sticky="ew")
+
         self.rrc_enable = tk.BooleanVar(value=True)
-        filter_frame, filter_body, _ = _make_group(
+        filter_frame, filter_body, _ = _make_bordered_group(
             gen_body,
             "Filter",
             toggle_var=self.rrc_enable,
             toggle_command=self._on_rrc_toggle,
         )
-        filter_frame.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        filter_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         filter_body.columnconfigure(1, weight=1)
+        filter_body.columnconfigure(3, weight=1)
 
         self.rrc_beta_label = ctk.CTkLabel(filter_body, text="RRC β")
         self.rrc_beta_label.grid(row=0, column=0, sticky="w")
@@ -2298,19 +2346,21 @@ class TransceiverUI(ctk.CTk):
         )
 
         self.rrc_span_label = ctk.CTkLabel(filter_body, text="RRC Span")
-        self.rrc_span_label.grid(row=1, column=0, sticky="w")
+        self.rrc_span_label.grid(row=0, column=2, sticky="w")
         self.rrc_span_entry = SuggestEntry(filter_body, "rrc_span_entry")
         self.rrc_span_entry.insert(0, "6")
-        self.rrc_span_entry.grid(row=1, column=1, sticky="ew")
+        self.rrc_span_entry.grid(row=0, column=3, sticky="ew")
         self.rrc_span_entry.entry.bind(
             "<FocusOut>",
             lambda _e: self.auto_update_tx_filename(),
         )
 
-        ctk.CTkLabel(filter_body, text="Oversampling").grid(row=2, column=0, sticky="w")
+        ctk.CTkLabel(filter_body, text="Oversampling").grid(
+            row=1, column=0, sticky="w"
+        )
         self.os_entry = SuggestEntry(filter_body, "os_entry")
         self.os_entry.insert(0, "1")
-        self.os_entry.grid(row=2, column=1, sticky="ew")
+        self.os_entry.grid(row=1, column=1, sticky="ew")
         self.os_entry.entry.bind(
             "<FocusOut>",
             lambda _e: (
@@ -2334,7 +2384,7 @@ class TransceiverUI(ctk.CTk):
             toggle_var=self.repeat_enable,
             toggle_command=self._on_repeat_toggle,
         )
-        repeat_frame.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        repeat_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self.repeat_entry = SuggestEntry(repeat_frame, "repeat_entry")
         self.repeat_entry.insert(0, "1")
         self.repeat_entry.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=6)
@@ -2347,7 +2397,7 @@ class TransceiverUI(ctk.CTk):
             toggle_var=self.zeros_enable,
             toggle_command=self._on_zeros_toggle,
         )
-        zeros_frame.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        zeros_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self.zeros_var = tk.StringVar(value="same")
         self.zeros_values = [
             "same",
@@ -2365,22 +2415,17 @@ class TransceiverUI(ctk.CTk):
         self.zeros_combo.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=6)
         self.zeros_combo.configure(state="disabled")
 
-        ctk.CTkLabel(gen_body, text="Amplitude").grid(row=8, column=0, sticky="w")
-        self.amp_entry = SuggestEntry(gen_body, "amp_entry")
-        self.amp_entry.insert(0, "10000")
-        self.amp_entry.grid(row=8, column=1, sticky="ew")
-
-        ctk.CTkLabel(gen_body, text="File").grid(row=9, column=0, sticky="w")
+        ctk.CTkLabel(gen_body, text="File").grid(row=4, column=0, sticky="w")
         self.file_entry = SuggestEntry(gen_body, "file_entry")
         self.file_entry.insert(0, "tx_signal.bin")
-        self.file_entry.grid(row=9, column=1, sticky="ew")
+        self.file_entry.grid(row=4, column=1, sticky="ew")
 
         ctk.CTkButton(gen_body, text="Generate", command=self.generate).grid(
-            row=10, column=0, columnspan=2, pady=5
+            row=5, column=0, columnspan=2, pady=5
         )
 
         scroll_container = ctk.CTkFrame(gen_body)
-        scroll_container.grid(row=11, column=0, columnspan=2, sticky="nsew")
+        scroll_container.grid(row=6, column=0, columnspan=2, sticky="nsew")
         scroll_container.columnconfigure(0, weight=1)
         scroll_container.rowconfigure(0, weight=1)
 
@@ -2405,7 +2450,7 @@ class TransceiverUI(ctk.CTk):
                 scrollregion=self.gen_canvas.bbox("all")
             ),
         )
-        gen_body.rowconfigure(11, weight=1)
+        gen_body.rowconfigure(6, weight=1)
         self.gen_canvases = []
         self.latest_data = None
         self.latest_fs = 0.0
@@ -2690,31 +2735,31 @@ class TransceiverUI(ctk.CTk):
 
         if w == "sinus":
             self.f_label.configure(text="f")
-            self.f_label.grid(row=2, column=0, sticky="w")
-            self.f_entry.grid(row=2, column=1, sticky="ew")
+            self.f_label.grid(row=1, column=0, sticky="w")
+            self.f_entry.grid(row=1, column=1, sticky="ew")
         elif w == "doppelsinus":
             self.f_label.configure(text="f1")
-            self.f_label.grid(row=2, column=0, sticky="w")
-            self.f_entry.grid(row=2, column=1, sticky="ew")
+            self.f_label.grid(row=1, column=0, sticky="w")
+            self.f_entry.grid(row=1, column=1, sticky="ew")
             self.f1_label.configure(text="f2")
-            self.f1_label.grid(row=3, column=0, sticky="w")
-            self.f1_entry.grid(row=3, column=1, sticky="ew")
+            self.f1_label.grid(row=2, column=0, sticky="w")
+            self.f1_entry.grid(row=2, column=1, sticky="ew")
         elif w == "zadoffchu":
-            self.q_label.grid(row=2, column=0, sticky="w")
-            self.q_entry.grid(row=2, column=1, sticky="ew")
-            self.rrc_beta_label.grid(row=6, column=0, sticky="w")
-            self.rrc_beta_entry.grid(row=6, column=1, sticky="ew")
-            self.rrc_span_label.grid(row=7, column=0, sticky="w")
-            self.rrc_span_entry.grid(row=7, column=1, sticky="ew")
+            self.q_label.grid(row=1, column=0, sticky="w")
+            self.q_entry.grid(row=1, column=1, sticky="ew")
+            self.rrc_beta_label.grid(row=0, column=0, sticky="w")
+            self.rrc_beta_entry.grid(row=0, column=1, sticky="ew")
+            self.rrc_span_label.grid(row=0, column=2, sticky="w")
+            self.rrc_span_entry.grid(row=0, column=3, sticky="ew")
             state = "normal" if self.rrc_enable.get() else "disabled"
             self.rrc_beta_entry.entry.configure(state=state)
             self.rrc_span_entry.entry.configure(state=state)
         elif w == "chirp":
             self.f_label.configure(text="f0")
-            self.f_label.grid(row=2, column=0, sticky="w")
-            self.f_entry.grid(row=2, column=1, sticky="ew")
-            self.f1_label.grid(row=3, column=0, sticky="w")
-            self.f1_entry.grid(row=3, column=1, sticky="ew")
+            self.f_label.grid(row=1, column=0, sticky="w")
+            self.f_entry.grid(row=1, column=1, sticky="ew")
+            self.f1_label.grid(row=2, column=0, sticky="w")
+            self.f1_entry.grid(row=2, column=1, sticky="ew")
 
         self.auto_update_tx_filename()
 
