@@ -8,6 +8,7 @@ from tkinter import ttk, messagebox, simpledialog, filedialog
 import time
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 import json
 import math
 import signal
@@ -1708,6 +1709,17 @@ def _plot_on_pg(
         )
         _update_echo_text()
 
+        legend = plot.addLegend()
+        legend.anchor(itemPos=(1, 0), parentPos=(1, 0), offset=(-10, 10))
+        los_legend = pg.PlotDataItem(
+            [], [], pen=None, symbol="o", symbolBrush="r", symbolPen="r"
+        )
+        echo_legend = pg.PlotDataItem(
+            [], [], pen=None, symbol="o", symbolBrush="g", symbolPen="g"
+        )
+        legend.addItem(los_legend, "LOS")
+        legend.addItem(echo_legend, "Echo")
+
         los_callback = _wrap_drag(on_los_drag_end)
         echo_callback = _wrap_drag(on_echo_drag_end)
         los_marker, echo_marker = _add_draggable_markers(
@@ -1815,6 +1827,29 @@ def _plot_on_mpl(
             ax.plot(lags[los_idx], mag[los_idx], "ro")
         if echo_idx is not None:
             ax.plot(lags[echo_idx], mag[echo_idx], "go")
+        ax.legend(
+            handles=[
+                Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    linestyle="",
+                    markerfacecolor="r",
+                    markeredgecolor="r",
+                    label="LOS",
+                ),
+                Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    linestyle="",
+                    markerfacecolor="g",
+                    markeredgecolor="g",
+                    label="Echo",
+                ),
+            ],
+            loc="upper right",
+        )
         delay = _echo_delay_samples(lags, los_idx, echo_idx)
         if delay is None:
             delay_text = "LOS-Echo: --"
