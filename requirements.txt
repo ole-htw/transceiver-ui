@@ -5,6 +5,7 @@ cffi
 chardet
 click
 cryptography
+customtkinter
 cycler
 deepdiff
 distro
@@ -47,4 +48,3 @@ zipp
 pyqtgraph
 PySide6
 scipy
-

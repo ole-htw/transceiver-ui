@@ -6,6 +6,7 @@ import threading
 import queue
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, filedialog
+import customtkinter as ctk
 import time
 import multiprocessing
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -146,6 +147,45 @@ def _configure_multiprocessing() -> None:
         pass
 
 
+def _make_section(
+    parent: tk.Misc, title: str
+) -> tuple[ctk.CTkFrame, ctk.CTkFrame]:
+    frame = ctk.CTkFrame(parent, corner_radius=10)
+    frame.columnconfigure(0, weight=1)
+    frame.rowconfigure(1, weight=1)
+    header = ctk.CTkLabel(frame, text=title, font=ctk.CTkFont(weight="bold"))
+    header.grid(row=0, column=0, sticky="w", padx=12, pady=(10, 0))
+    body = ctk.CTkFrame(frame, fg_color="transparent")
+    body.grid(row=1, column=0, sticky="nsew", padx=10, pady=(6, 10))
+    body.columnconfigure(1, weight=1)
+    return frame, body
+
+
+def _make_group(
+    parent: tk.Misc,
+    title: str,
+    toggle_var: tk.BooleanVar | None = None,
+    toggle_command=None,
+) -> tuple[ctk.CTkFrame, ctk.CTkFrame, ctk.CTkCheckBox | None]:
+    frame = ctk.CTkFrame(parent, corner_radius=10)
+    frame.columnconfigure(0, weight=1)
+    header = ctk.CTkFrame(frame, fg_color="transparent")
+    header.grid(row=0, column=0, sticky="w", padx=10, pady=(8, 0))
+    label = ctk.CTkLabel(header, text=title)
+    label.grid(row=0, column=0, sticky="w")
+    toggle = None
+    if toggle_var is not None:
+        toggle = ctk.CTkCheckBox(
+            header, text="", variable=toggle_var, command=toggle_command, width=24
+        )
+        toggle.grid(row=0, column=1, sticky="w", padx=(6, 0))
+    body = ctk.CTkFrame(frame, fg_color="transparent")
+    body.grid(row=1, column=0, sticky="nsew", padx=10, pady=(4, 8))
+    body.columnconfigure(1, weight=1)
+    frame.rowconfigure(1, weight=1)
+    return frame, body, toggle
+
+
 class _QueueLogHandler(logging.Handler):
     def __init__(self, output_queue: "queue.Queue[str]") -> None:
         super().__init__(level=logging.INFO)
@@ -244,7 +284,7 @@ class _FDCapture:
             self._reader_thread = None
 
 
-class RangeSlider(ttk.Frame):
+class RangeSlider(ctk.CTkFrame):
     """Horizontal slider with two handles and optional signal preview."""
 
     def __init__(
@@ -359,13 +399,13 @@ class RangeSlider(ttk.Frame):
             self.command(None)
 
 
-class ConsoleWindow(tk.Toplevel):
+class ConsoleWindow(ctk.CTkToplevel):
     """Simple window to display text output."""
 
     def __init__(self, parent, title: str = "Console") -> None:
         super().__init__(parent)
         self.title(title)
-        self.text = tk.Text(self, wrap="none")
+        self.text = ctk.CTkTextbox(self, wrap="none")
         self.text.pack(fill="both", expand=True)
 
     def append(self, text: str) -> None:
@@ -373,7 +413,7 @@ class ConsoleWindow(tk.Toplevel):
         self.text.see(tk.END)
 
 
-class SignalViewer(tk.Toplevel):
+class SignalViewer(ctk.CTkToplevel):
     """Window to display a previously recorded signal."""
 
     def __init__(self, parent, data: np.ndarray, fs: float, title: str) -> None:
@@ -392,11 +432,11 @@ class SignalViewer(tk.Toplevel):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
 
-        trim_frame = ttk.Frame(self)
+        trim_frame = ctk.CTkFrame(self)
         trim_frame.grid(row=0, column=0, sticky="ew")
         trim_frame.columnconfigure(1, weight=1)
 
-        ttk.Checkbutton(
+        ctk.CTkCheckBox(
             trim_frame,
             text="Trim",
             variable=self.trim_var,
@@ -411,39 +451,39 @@ class SignalViewer(tk.Toplevel):
         )
         self.range_slider.grid(row=0, column=1, sticky="ew", padx=2)
 
-        self.apply_trim_btn = ttk.Button(
+        self.apply_trim_btn = ctk.CTkButton(
             trim_frame,
             text="Apply",
             command=self.update_trim,
-            state="disabled",
         )
         self.apply_trim_btn.grid(row=0, column=2, padx=2)
+        self.apply_trim_btn.configure(state="disabled")
 
-        self.trim_start_label = ttk.Label(trim_frame, width=5)
+        self.trim_start_label = ctk.CTkLabel(trim_frame, width=50, text="")
         self.trim_start_label.grid(row=1, column=1, sticky="e")
-        self.trim_end_label = ttk.Label(trim_frame, width=5)
+        self.trim_end_label = ctk.CTkLabel(trim_frame, width=50, text="")
         self.trim_end_label.grid(row=1, column=2, sticky="e")
 
-        btn_frame = ttk.Frame(self)
+        btn_frame = ctk.CTkFrame(self)
         btn_frame.grid(row=1, column=0, pady=5)
         btn_frame.columnconfigure(0, weight=1)
 
-        ttk.Button(btn_frame, text="Save Trim", command=self.save_trimmed).grid(
+        ctk.CTkButton(btn_frame, text="Save Trim", command=self.save_trimmed).grid(
             row=0, column=0, padx=2
         )
 
-        scroll = ttk.Frame(self)
+        scroll = ctk.CTkFrame(self)
         scroll.grid(row=2, column=0, sticky="nsew")
         scroll.columnconfigure(0, weight=1)
         scroll.rowconfigure(0, weight=1)
 
         self.canvas = tk.Canvas(scroll)
         self.canvas.grid(row=0, column=0, sticky="nsew")
-        vscroll = ttk.Scrollbar(scroll, orient="vertical", command=self.canvas.yview)
+        vscroll = ctk.CTkScrollbar(scroll, orientation="vertical", command=self.canvas.yview)
         vscroll.grid(row=0, column=1, sticky="ns")
         self.canvas.configure(yscrollcommand=vscroll.set)
 
-        self.plots_frame = ttk.Frame(self.canvas)
+        self.plots_frame = ctk.CTkFrame(self.canvas)
         self.plots_frame.columnconfigure(0, weight=1)
         self.canvas.create_window((0, 0), window=self.plots_frame, anchor="nw")
         self.plots_frame.bind(
@@ -452,7 +492,7 @@ class SignalViewer(tk.Toplevel):
         )
         self.canvases: list[FigureCanvasTkAgg] = []
 
-        self.stats_label = ttk.Label(self.plots_frame, justify="left", anchor="w")
+        self.stats_label = ctk.CTkLabel(self.plots_frame, justify="left", anchor="w", text="")
 
         self._display_plots(data, fs)
 
@@ -565,7 +605,7 @@ class SignalViewer(tk.Toplevel):
         self.stats_label.configure(text=text)
 
 
-class OpenSignalDialog(tk.Toplevel):
+class OpenSignalDialog(ctk.CTkToplevel):
     """Custom file dialog listing signals sortable by modification date."""
 
     def __init__(self, parent, initialdir: str | Path) -> None:
@@ -583,14 +623,14 @@ class OpenSignalDialog(tk.Toplevel):
         self.tree.column("mtime", width=150)
         self.tree.grid(row=0, column=0, sticky="nsew")
 
-        vsb = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
+        vsb = ctk.CTkScrollbar(self, orientation="vertical", command=self.tree.yview)
         vsb.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=vsb.set)
 
-        btn_frame = ttk.Frame(self)
+        btn_frame = ctk.CTkFrame(self)
         btn_frame.grid(row=1, column=0, columnspan=2, pady=5)
-        ttk.Button(btn_frame, text="Open", command=self._on_open).pack(side="left", padx=5)
-        ttk.Button(btn_frame, text="Cancel", command=self.destroy).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="Open", command=self._on_open).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="Cancel", command=self.destroy).pack(side="left", padx=5)
 
         self._populate()
         self._sort("mtime", True)
@@ -635,7 +675,7 @@ class OpenSignalDialog(tk.Toplevel):
         return self.result
 
 
-class SignalColumn(ttk.Frame):
+class SignalColumn(ctk.CTkFrame):
     """Frame to load and display a single signal."""
 
     def __init__(self, parent, main_parent) -> None:
@@ -650,15 +690,15 @@ class SignalColumn(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(3, weight=1)
 
-        ttk.Button(self, text="Open Signal", command=self.open_signal).grid(
+        ctk.CTkButton(self, text="Open Signal", command=self.open_signal).grid(
             row=0, column=0, pady=2
         )
 
-        trim_frame = ttk.Frame(self)
+        trim_frame = ctk.CTkFrame(self)
         trim_frame.grid(row=1, column=0, sticky="ew")
         trim_frame.columnconfigure(1, weight=1)
 
-        ttk.Checkbutton(
+        ctk.CTkCheckBox(
             trim_frame,
             text="Trim",
             variable=self.trim_var,
@@ -673,39 +713,39 @@ class SignalColumn(ttk.Frame):
         )
         self.range_slider.grid(row=0, column=1, sticky="ew", padx=2)
 
-        self.apply_trim_btn = ttk.Button(
+        self.apply_trim_btn = ctk.CTkButton(
             trim_frame,
             text="Apply",
             command=self.update_trim,
-            state="disabled",
         )
         self.apply_trim_btn.grid(row=0, column=2, padx=2)
+        self.apply_trim_btn.configure(state="disabled")
 
-        self.trim_start_label = ttk.Label(trim_frame, width=5)
+        self.trim_start_label = ctk.CTkLabel(trim_frame, width=50, text="")
         self.trim_start_label.grid(row=1, column=1, sticky="e")
-        self.trim_end_label = ttk.Label(trim_frame, width=5)
+        self.trim_end_label = ctk.CTkLabel(trim_frame, width=50, text="")
         self.trim_end_label.grid(row=1, column=2, sticky="e")
 
-        btn_frame = ttk.Frame(self)
+        btn_frame = ctk.CTkFrame(self)
         btn_frame.grid(row=2, column=0, pady=5)
         btn_frame.columnconfigure(0, weight=1)
 
-        ttk.Button(btn_frame, text="Save Trim", command=self.save_trimmed).grid(
+        ctk.CTkButton(btn_frame, text="Save Trim", command=self.save_trimmed).grid(
             row=0, column=0, padx=2
         )
 
-        scroll = ttk.Frame(self)
+        scroll = ctk.CTkFrame(self)
         scroll.grid(row=3, column=0, sticky="nsew")
         scroll.columnconfigure(0, weight=1)
         scroll.rowconfigure(0, weight=1)
 
         self.canvas = tk.Canvas(scroll)
         self.canvas.grid(row=0, column=0, sticky="nsew")
-        vscroll = ttk.Scrollbar(scroll, orient="vertical", command=self.canvas.yview)
+        vscroll = ctk.CTkScrollbar(scroll, orientation="vertical", command=self.canvas.yview)
         vscroll.grid(row=0, column=1, sticky="ns")
         self.canvas.configure(yscrollcommand=vscroll.set)
 
-        self.plots_frame = ttk.Frame(self.canvas)
+        self.plots_frame = ctk.CTkFrame(self.canvas)
         self.plots_frame.columnconfigure(0, weight=1)
         self.canvas.create_window((0, 0), window=self.plots_frame, anchor="nw")
         self.plots_frame.bind(
@@ -717,7 +757,7 @@ class SignalColumn(ttk.Frame):
         self.latest_fs = None
         self.raw_data = None
         self.latest_title = ""
-        self.stats_label = ttk.Label(self.plots_frame, justify="left", anchor="w")
+        self.stats_label = ctk.CTkLabel(self.plots_frame, justify="left", anchor="w", text="")
 
     def open_signal(self) -> None:
         """Open a signal and display it inside this column."""
@@ -840,7 +880,7 @@ class SignalColumn(ttk.Frame):
             messagebox.showerror("Save Trim", str(exc), parent=self)
 
 
-class CompareWindow(tk.Toplevel):
+class CompareWindow(ctk.CTkToplevel):
     """Window with four columns to compare signals."""
 
     def __init__(self, parent) -> None:
@@ -864,7 +904,7 @@ class CompareWindow(tk.Toplevel):
             self.columns.append(col)
 
 
-class SuggestEntry(tk.Frame):
+class SuggestEntry(ctk.CTkFrame):
     """Entry widget with removable suggestion buttons.
 
     Parameters
@@ -888,10 +928,10 @@ class SuggestEntry(tk.Frame):
     ) -> None:
         super().__init__(parent)
         self.name = name
-        self.entry = ttk.Entry(self, width=width, textvariable=textvariable)
+        self.entry = ctk.CTkEntry(self, width=width, textvariable=textvariable)
         self.var = textvariable
         self.entry.grid(row=0, column=0, sticky="ew")
-        self.sugg_frame = tk.Frame(self)
+        self.sugg_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.sugg_frame.grid(row=1, column=0, sticky="w")
         self.columnconfigure(0, weight=1)
         self.suggestions = _SUGGESTIONS.get(name, [])
@@ -935,14 +975,14 @@ class SuggestEntry(tk.Frame):
         for w in self.sugg_frame.winfo_children():
             w.destroy()
         for val in self.suggestions:
-            frame = tk.Frame(self.sugg_frame, bd=1, relief="ridge", padx=2)
-            lbl = tk.Label(frame, text=val)
+            frame = ctk.CTkFrame(self.sugg_frame, corner_radius=6)
+            lbl = ctk.CTkLabel(frame, text=val)
             lbl.pack(side="left")
-            rm = tk.Button(
+            rm = ctk.CTkButton(
                 frame,
                 text="x",
                 command=lambda v=val: self._remove_suggestion(v),
-                width=2,
+                width=24,
             )
             rm.pack(side="right")
             frame.pack(side="left", padx=2, pady=1)
@@ -2047,7 +2087,7 @@ def _plot_on_mpl(
     ax.grid(True)
 
 
-class TransceiverUI(tk.Tk):
+class TransceiverUI(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title("Signal Transceiver")
@@ -2120,58 +2160,59 @@ class TransceiverUI(tk.Tk):
         self.columnconfigure(2, weight=1, uniform="cols")
 
         # ----- Column 1: Generation -----
-        gen_frame = ttk.LabelFrame(self, text="Signal Generation")
+        gen_frame, gen_body = _make_section(self, "Signal Generation")
         gen_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-        gen_frame.columnconfigure(1, weight=1)
-        gen_frame.columnconfigure(2, weight=0)
+        gen_body.columnconfigure(1, weight=1)
+        gen_body.columnconfigure(2, weight=0)
 
-        ttk.Label(gen_frame, text="Waveform").grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(gen_body, text="Waveform").grid(row=0, column=0, sticky="w")
         self.wave_var = tk.StringVar(value="sinus")
-        wave_box = ttk.Combobox(
-            gen_frame,
-            textvariable=self.wave_var,
+        wave_box = ctk.CTkComboBox(
+            gen_body,
+            variable=self.wave_var,
             values=["sinus", "doppelsinus", "zadoffchu", "chirp"],
             width=10,
-            state="readonly",
         )
         wave_box.grid(row=0, column=1)
-        wave_box.bind(
-            "<<ComboboxSelected>>",
-            lambda _e: (self.update_waveform_fields(), self.auto_update_tx_filename()),
+        wave_box.configure(
+            command=lambda _value: (
+                self.update_waveform_fields(),
+                self.auto_update_tx_filename(),
+            )
         )
 
-        ttk.Label(gen_frame, text="fs").grid(row=1, column=0, sticky="w")
-        self.fs_entry = SuggestEntry(gen_frame, "fs_entry", textvariable=self.fs_var)
+        ctk.CTkLabel(gen_body, text="fs").grid(row=1, column=0, sticky="w")
+        self.fs_entry = SuggestEntry(gen_body, "fs_entry", textvariable=self.fs_var)
         self.fs_entry.grid(row=1, column=1, sticky="ew")
         self.fs_entry.entry.bind(
             "<FocusOut>", lambda _e: self.auto_update_tx_filename()
         )
 
-        self.f_label = ttk.Label(gen_frame, text="f")
+        self.f_label = ctk.CTkLabel(gen_body, text="f")
         self.f_label.grid(row=2, column=0, sticky="w")
-        self.f_entry = SuggestEntry(gen_frame, "f_entry")
+        self.f_entry = SuggestEntry(gen_body, "f_entry")
         self.f_entry.insert(0, "25e3")
         self.f_entry.grid(row=2, column=1, sticky="ew")
         self.f_entry.entry.bind("<FocusOut>", lambda _e: self.auto_update_tx_filename())
 
-        self.f1_label = ttk.Label(gen_frame, text="f1")
-        self.f1_entry = SuggestEntry(gen_frame, "f1_entry")
+        self.f1_label = ctk.CTkLabel(gen_body, text="f1")
+        self.f1_entry = SuggestEntry(gen_body, "f1_entry")
         self.f1_label.grid(row=3, column=0, sticky="w")
         self.f1_entry.grid(row=3, column=1, sticky="ew")
         self.f1_entry.entry.bind(
             "<FocusOut>", lambda _e: self.auto_update_tx_filename()
         )
 
-        self.q_label = ttk.Label(gen_frame, text="q")
-        self.q_entry = SuggestEntry(gen_frame, "q_entry")
+        self.q_label = ctk.CTkLabel(gen_body, text="q")
+        self.q_entry = SuggestEntry(gen_body, "q_entry")
         self.q_entry.insert(0, "1")
         # row placement will be adjusted in update_waveform_fields
         self.q_label.grid(row=2, column=0, sticky="w")
         self.q_entry.grid(row=2, column=1, sticky="ew")
         self.q_entry.entry.bind("<FocusOut>", lambda _e: self.auto_update_tx_filename())
 
-        ttk.Label(gen_frame, text="Samples").grid(row=4, column=0, sticky="w")
-        self.samples_entry = SuggestEntry(gen_frame, "samples_entry")
+        ctk.CTkLabel(gen_body, text="Samples").grid(row=4, column=0, sticky="w")
+        self.samples_entry = SuggestEntry(gen_body, "samples_entry")
         self.samples_entry.insert(0, "40000")
         self.samples_entry.grid(row=4, column=1, sticky="ew")
         self.samples_entry.entry.bind(
@@ -2179,21 +2220,18 @@ class TransceiverUI(tk.Tk):
         )
 
         self.rrc_enable = tk.BooleanVar(value=True)
-        filter_label_frame = ttk.Frame(gen_frame)
-        ttk.Label(filter_label_frame, text="Filter").grid(row=0, column=0, sticky="w")
-        ttk.Checkbutton(
-            filter_label_frame,
-            variable=self.rrc_enable,
-            command=self._on_rrc_toggle,
-        ).grid(row=0, column=1, sticky="w", padx=(4, 0))
-
-        filter_frame = ttk.Labelframe(gen_frame, labelwidget=filter_label_frame)
+        filter_frame, filter_body, _ = _make_group(
+            gen_body,
+            "Filter",
+            toggle_var=self.rrc_enable,
+            toggle_command=self._on_rrc_toggle,
+        )
         filter_frame.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(4, 0))
-        filter_frame.columnconfigure(1, weight=1)
+        filter_body.columnconfigure(1, weight=1)
 
-        self.rrc_beta_label = ttk.Label(filter_frame, text="RRC β")
+        self.rrc_beta_label = ctk.CTkLabel(filter_body, text="RRC β")
         self.rrc_beta_label.grid(row=0, column=0, sticky="w")
-        self.rrc_beta_entry = SuggestEntry(filter_frame, "rrc_beta_entry")
+        self.rrc_beta_entry = SuggestEntry(filter_body, "rrc_beta_entry")
         self.rrc_beta_entry.insert(0, "0.25")
         self.rrc_beta_entry.grid(row=0, column=1, sticky="ew")
         self.rrc_beta_entry.entry.bind(
@@ -2201,9 +2239,9 @@ class TransceiverUI(tk.Tk):
             lambda _e: (self._sync_rx_inv_rrc_params(), self.auto_update_tx_filename()),
         )
 
-        self.rrc_span_label = ttk.Label(filter_frame, text="RRC Span")
+        self.rrc_span_label = ctk.CTkLabel(filter_body, text="RRC Span")
         self.rrc_span_label.grid(row=1, column=0, sticky="w")
-        self.rrc_span_entry = SuggestEntry(filter_frame, "rrc_span_entry")
+        self.rrc_span_entry = SuggestEntry(filter_body, "rrc_span_entry")
         self.rrc_span_entry.insert(0, "6")
         self.rrc_span_entry.grid(row=1, column=1, sticky="ew")
         self.rrc_span_entry.entry.bind(
@@ -2211,8 +2249,8 @@ class TransceiverUI(tk.Tk):
             lambda _e: (self._sync_rx_inv_rrc_params(), self.auto_update_tx_filename()),
         )
 
-        ttk.Label(filter_frame, text="Oversampling").grid(row=2, column=0, sticky="w")
-        self.os_entry = SuggestEntry(filter_frame, "os_entry")
+        ctk.CTkLabel(filter_body, text="Oversampling").grid(row=2, column=0, sticky="w")
+        self.os_entry = SuggestEntry(filter_body, "os_entry")
         self.os_entry.insert(0, "1")
         self.os_entry.grid(row=2, column=1, sticky="ew")
         self.os_entry.entry.bind(
@@ -2233,73 +2271,69 @@ class TransceiverUI(tk.Tk):
 
         self.repeat_enable = tk.BooleanVar(value=True)
         self._repeat_last_value = "1"
-        repeat_label_frame = ttk.Frame(gen_frame)
-        ttk.Label(repeat_label_frame, text="Repeats").grid(row=0, column=0, sticky="w")
-        ttk.Checkbutton(
-            repeat_label_frame,
-            variable=self.repeat_enable,
-            command=self._on_repeat_toggle,
-        ).grid(row=0, column=1, sticky="w", padx=(4, 0))
-        repeat_frame = ttk.Labelframe(gen_frame, labelwidget=repeat_label_frame)
+        repeat_frame, repeat_body, _ = _make_group(
+            gen_body,
+            "Repeats",
+            toggle_var=self.repeat_enable,
+            toggle_command=self._on_repeat_toggle,
+        )
         repeat_frame.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(4, 0))
-        repeat_frame.columnconfigure(0, weight=1)
-        self.repeat_entry = SuggestEntry(repeat_frame, "repeat_entry")
+        repeat_body.columnconfigure(0, weight=1)
+        self.repeat_entry = SuggestEntry(repeat_body, "repeat_entry")
         self.repeat_entry.insert(0, "1")
         self.repeat_entry.grid(row=0, column=0, sticky="ew")
 
         self.zeros_enable = tk.BooleanVar(value=False)
         self._zeros_last_value = "same"
-        zeros_label_frame = ttk.Frame(gen_frame)
-        ttk.Label(zeros_label_frame, text="Zeros").grid(row=0, column=0, sticky="w")
-        ttk.Checkbutton(
-            zeros_label_frame,
-            variable=self.zeros_enable,
-            command=self._on_zeros_toggle,
-        ).grid(row=0, column=1, sticky="w", padx=(4, 0))
-        zeros_frame = ttk.Labelframe(gen_frame, labelwidget=zeros_label_frame)
+        zeros_frame, zeros_body, _ = _make_group(
+            gen_body,
+            "Zeros",
+            toggle_var=self.zeros_enable,
+            toggle_command=self._on_zeros_toggle,
+        )
         zeros_frame.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(4, 0))
-        zeros_frame.columnconfigure(0, weight=1)
+        zeros_body.columnconfigure(0, weight=1)
         self.zeros_var = tk.StringVar(value="same")
-        self.zeros_combo = ttk.Combobox(
-            zeros_frame,
-            textvariable=self.zeros_var,
-            values=[
-                "same",
-                "half",
-                "quarter",
-                "double",
-                "quadruple",
-                "octuple",
-            ],
-            state="readonly",
+        self.zeros_values = [
+            "same",
+            "half",
+            "quarter",
+            "double",
+            "quadruple",
+            "octuple",
+        ]
+        self.zeros_combo = ctk.CTkComboBox(
+            zeros_body,
+            variable=self.zeros_var,
+            values=self.zeros_values,
             width=10,
         )
         self.zeros_combo.grid(row=0, column=0, sticky="ew")
         self.zeros_combo.configure(state="disabled")
 
-        ttk.Label(gen_frame, text="Amplitude").grid(row=8, column=0, sticky="w")
-        self.amp_entry = SuggestEntry(gen_frame, "amp_entry")
+        ctk.CTkLabel(gen_body, text="Amplitude").grid(row=8, column=0, sticky="w")
+        self.amp_entry = SuggestEntry(gen_body, "amp_entry")
         self.amp_entry.insert(0, "10000")
         self.amp_entry.grid(row=8, column=1, sticky="ew")
 
-        ttk.Label(gen_frame, text="File").grid(row=9, column=0, sticky="w")
-        self.file_entry = SuggestEntry(gen_frame, "file_entry")
+        ctk.CTkLabel(gen_body, text="File").grid(row=9, column=0, sticky="w")
+        self.file_entry = SuggestEntry(gen_body, "file_entry")
         self.file_entry.insert(0, "tx_signal.bin")
         self.file_entry.grid(row=9, column=1, sticky="ew")
 
-        ttk.Button(gen_frame, text="Generate", command=self.generate).grid(
+        ctk.CTkButton(gen_body, text="Generate", command=self.generate).grid(
             row=10, column=0, columnspan=2, pady=5
         )
 
-        scroll_container = ttk.Frame(gen_frame)
+        scroll_container = ctk.CTkFrame(gen_body)
         scroll_container.grid(row=11, column=0, columnspan=2, sticky="nsew")
         scroll_container.columnconfigure(0, weight=1)
         scroll_container.rowconfigure(0, weight=1)
 
         self.gen_canvas = tk.Canvas(scroll_container)
         self.gen_canvas.grid(row=0, column=0, sticky="nsew")
-        self.gen_scroll = ttk.Scrollbar(
-            scroll_container, orient="vertical", command=self.gen_canvas.yview
+        self.gen_scroll = ctk.CTkScrollbar(
+            scroll_container, orientation="vertical", command=self.gen_canvas.yview
         )
         self.gen_scroll.grid(row=0, column=1, sticky="ns")
         self.gen_canvas.configure(yscrollcommand=self.gen_scroll.set)
@@ -2308,7 +2342,7 @@ class TransceiverUI(tk.Tk):
         self.gen_canvas.bind("<Enter>", self._bind_gen_mousewheel)
         self.gen_canvas.bind("<Leave>", self._unbind_gen_mousewheel)
 
-        self.gen_plots_frame = ttk.Frame(self.gen_canvas)
+        self.gen_plots_frame = ctk.CTkFrame(self.gen_canvas)
         self.gen_plots_frame.columnconfigure(0, weight=1)
         self.gen_canvas.create_window((0, 0), window=self.gen_plots_frame, anchor="nw")
         self.gen_plots_frame.bind(
@@ -2317,53 +2351,53 @@ class TransceiverUI(tk.Tk):
                 scrollregion=self.gen_canvas.bbox("all")
             ),
         )
-        gen_frame.rowconfigure(11, weight=1)
+        gen_body.rowconfigure(11, weight=1)
         self.gen_canvases = []
         self.latest_data = None
         self.latest_fs = 0.0
 
         # ----- Presets -----
-        preset_frame = ttk.LabelFrame(self, text="Presets")
+        preset_frame, preset_body = _make_section(self, "Presets")
         preset_frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
-        ttk.Button(
-            preset_frame, text="Load Preset", command=self.open_load_preset_window
+        ctk.CTkButton(
+            preset_body, text="Load Preset", command=self.open_load_preset_window
         ).grid(row=0, column=0, padx=5)
-        ttk.Button(
-            preset_frame, text="Save Preset", command=self.open_save_preset_window
+        ctk.CTkButton(
+            preset_body, text="Save Preset", command=self.open_save_preset_window
         ).grid(row=0, column=1, padx=5)
-        ttk.Checkbutton(
-            preset_frame,
+        ctk.CTkCheckBox(
+            preset_body,
             text="Sync Sample Rates",
             variable=self.sync_var,
             command=lambda: self.toggle_rate_sync(self.sync_var.get()),
         ).grid(row=0, column=2, padx=5)
 
         # ----- Column 2: Transmit -----
-        tx_frame = ttk.LabelFrame(self, text="Transmit")
+        tx_frame, tx_body = _make_section(self, "Transmit")
         tx_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
-        tx_frame.columnconfigure(1, weight=1)
+        tx_body.columnconfigure(1, weight=1)
 
-        ttk.Label(tx_frame, text="Args").grid(row=0, column=0, sticky="w")
-        self.tx_args = SuggestEntry(tx_frame, "tx_args")
+        ctk.CTkLabel(tx_body, text="Args").grid(row=0, column=0, sticky="w")
+        self.tx_args = SuggestEntry(tx_body, "tx_args")
         self.tx_args.insert(0, "addr=192.168.10.2")
         self.tx_args.grid(row=0, column=1, sticky="ew")
 
-        ttk.Label(tx_frame, text="Rate").grid(row=1, column=0, sticky="w")
-        self.tx_rate = SuggestEntry(tx_frame, "tx_rate", textvariable=self.tx_rate_var)
+        ctk.CTkLabel(tx_body, text="Rate").grid(row=1, column=0, sticky="w")
+        self.tx_rate = SuggestEntry(tx_body, "tx_rate", textvariable=self.tx_rate_var)
         self.tx_rate.grid(row=1, column=1, sticky="ew")
 
-        ttk.Label(tx_frame, text="Freq").grid(row=2, column=0, sticky="w")
-        self.tx_freq = SuggestEntry(tx_frame, "tx_freq")
+        ctk.CTkLabel(tx_body, text="Freq").grid(row=2, column=0, sticky="w")
+        self.tx_freq = SuggestEntry(tx_body, "tx_freq")
         self.tx_freq.insert(0, "5.18e9")
         self.tx_freq.grid(row=2, column=1, sticky="ew")
 
-        ttk.Label(tx_frame, text="Gain").grid(row=3, column=0, sticky="w")
-        self.tx_gain = SuggestEntry(tx_frame, "tx_gain")
+        ctk.CTkLabel(tx_body, text="Gain").grid(row=3, column=0, sticky="w")
+        self.tx_gain = SuggestEntry(tx_body, "tx_gain")
         self.tx_gain.insert(0, "30")
         self.tx_gain.grid(row=3, column=1, sticky="ew")
 
-        ttk.Label(tx_frame, text="File").grid(row=4, column=0, sticky="w")
-        self.tx_file = SuggestEntry(tx_frame, "tx_file")
+        ctk.CTkLabel(tx_body, text="File").grid(row=4, column=0, sticky="w")
+        self.tx_file = SuggestEntry(tx_body, "tx_file")
         self.tx_file.insert(0, "tx_signal.bin")
         self.tx_file.grid(row=4, column=1, sticky="ew")
         self.tx_file.entry.bind(
@@ -2371,123 +2405,119 @@ class TransceiverUI(tk.Tk):
             lambda _e: self._reset_manual_xcorr_lags("TX-Datei geändert"),
         )
 
-        btn_frame = ttk.Frame(tx_frame)
+        btn_frame = ctk.CTkFrame(tx_body)
         btn_frame.grid(row=5, column=0, columnspan=2, pady=5)
         btn_frame.columnconfigure((0, 1, 2), weight=1)
 
-        self.tx_button = ttk.Button(btn_frame, text="Transmit", command=self.transmit)
+        self.tx_button = ctk.CTkButton(btn_frame, text="Transmit", command=self.transmit)
         self.tx_button.grid(row=0, column=0, padx=2)
 
-        self.tx_retrans = ttk.Button(
+        self.tx_retrans = ctk.CTkButton(
             btn_frame, text="Retransmit", command=self.retransmit, state="disabled"
         )
         self.tx_retrans.grid(row=0, column=1, padx=2)
 
-        self.tx_stop = ttk.Button(
+        self.tx_stop = ctk.CTkButton(
             btn_frame, text="Stop", command=self.stop_transmit, state="disabled"
         )
         self.tx_stop.grid(row=0, column=2, padx=2)
 
-        log_frame = ttk.Frame(tx_frame)
+        log_frame = ctk.CTkFrame(tx_body)
         log_frame.grid(row=6, column=0, columnspan=2, sticky="nsew")
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
-        self.tx_log = tk.Text(log_frame, height=10, wrap="word")
+        self.tx_log = ctk.CTkTextbox(log_frame, height=150, wrap="word")
         self.tx_log.grid(row=0, column=0, sticky="nsew")
-        log_scroll = ttk.Scrollbar(
-            log_frame, orient="vertical", command=self.tx_log.yview
+        log_scroll = ctk.CTkScrollbar(
+            log_frame, orientation="vertical", command=self.tx_log.yview
         )
         log_scroll.grid(row=0, column=1, sticky="ns")
         self.tx_log.configure(yscrollcommand=log_scroll.set)
-        tx_frame.rowconfigure(6, weight=1)
+        tx_body.rowconfigure(6, weight=1)
 
         # ----- Column 3: Receive -----
-        rx_frame = ttk.LabelFrame(self, text="Receive")
+        rx_frame, rx_body = _make_section(self, "Receive")
         rx_frame.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
-        rx_frame.columnconfigure(1, weight=1)
+        rx_body.columnconfigure(1, weight=1)
 
-        ttk.Label(rx_frame, text="Args").grid(row=0, column=0, sticky="w")
-        self.rx_args = SuggestEntry(rx_frame, "rx_args")
+        ctk.CTkLabel(rx_body, text="Args").grid(row=0, column=0, sticky="w")
+        self.rx_args = SuggestEntry(rx_body, "rx_args")
         self.rx_args.insert(0, "addr=192.168.20.2,clock_source=external")
         self.rx_args.grid(row=0, column=1, sticky="ew")
 
-        ttk.Label(rx_frame, text="Rate").grid(row=1, column=0, sticky="w")
-        self.rx_rate = SuggestEntry(rx_frame, "rx_rate", textvariable=self.rx_rate_var)
+        ctk.CTkLabel(rx_body, text="Rate").grid(row=1, column=0, sticky="w")
+        self.rx_rate = SuggestEntry(rx_body, "rx_rate", textvariable=self.rx_rate_var)
         self.rx_rate.grid(row=1, column=1, sticky="ew")
         self.rx_rate.entry.bind("<FocusOut>", lambda _e: self.auto_update_rx_filename())
 
-        ttk.Label(rx_frame, text="Freq").grid(row=2, column=0, sticky="w")
-        self.rx_freq = SuggestEntry(rx_frame, "rx_freq")
+        ctk.CTkLabel(rx_body, text="Freq").grid(row=2, column=0, sticky="w")
+        self.rx_freq = SuggestEntry(rx_body, "rx_freq")
         self.rx_freq.insert(0, "5.18e9")
         self.rx_freq.grid(row=2, column=1, sticky="ew")
         self.rx_freq.entry.bind("<FocusOut>", lambda _e: self.auto_update_rx_filename())
 
-        ttk.Label(rx_frame, text="Duration").grid(row=3, column=0, sticky="w")
-        self.rx_dur = SuggestEntry(rx_frame, "rx_dur")
+        ctk.CTkLabel(rx_body, text="Duration").grid(row=3, column=0, sticky="w")
+        self.rx_dur = SuggestEntry(rx_body, "rx_dur")
         self.rx_dur.insert(0, "0.01")
         self.rx_dur.grid(row=3, column=1, sticky="ew")
         self.rx_dur.entry.bind("<FocusOut>", lambda _e: self.auto_update_rx_filename())
 
-        ttk.Label(rx_frame, text="Gain").grid(row=4, column=0, sticky="w")
-        self.rx_gain = SuggestEntry(rx_frame, "rx_gain")
+        ctk.CTkLabel(rx_body, text="Gain").grid(row=4, column=0, sticky="w")
+        self.rx_gain = SuggestEntry(rx_body, "rx_gain")
         self.rx_gain.insert(0, "80")
         self.rx_gain.grid(row=4, column=1, sticky="ew")
         self.rx_gain.entry.bind("<FocusOut>", lambda _e: self.auto_update_rx_filename())
 
         self.rx_channel_2 = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            rx_frame,
+        ctk.CTkCheckBox(
+            rx_body,
             text="RX Antenne 2 aktivieren",
             variable=self.rx_channel_2,
         ).grid(row=5, column=0, columnspan=2, sticky="w")
 
-        self.rx_channel_view_label = ttk.Label(rx_frame, text="RX Ansicht")
+        self.rx_channel_view_label = ctk.CTkLabel(rx_body, text="RX Ansicht")
         self.rx_channel_view_label.grid(row=6, column=0, sticky="w")
-        self.rx_channel_view_box = ttk.Combobox(
-            rx_frame,
-            textvariable=self.rx_channel_view,
+        self.rx_channel_view_box = ctk.CTkComboBox(
+            rx_body,
+            variable=self.rx_channel_view,
             values=["Kanal 1", "Kanal 2", "Differenz"],
-            width=12,
-            state="readonly",
+            width=140,
+            command=lambda _value: self.update_trim(),
         )
         self.rx_channel_view_box.grid(row=6, column=1, sticky="w")
         self.rx_channel_view_box.configure(state="disabled")
-        self.rx_channel_view_box.bind(
-            "<<ComboboxSelected>>",
-            lambda _e: self.update_trim(),
-        )
 
         self.rx_inv_rrc_enable = tk.BooleanVar(value=False)
-        self.rx_inv_rrc_check = ttk.Checkbutton(
-            rx_frame,
+        self.rx_inv_rrc_check = ctk.CTkCheckBox(
+            rx_body,
             text="Inv. RRC",
             variable=self.rx_inv_rrc_enable,
             command=self._on_rx_inv_rrc_toggle,
         )
         self.rx_inv_rrc_check.grid(row=7, column=0, columnspan=2, sticky="w")
-        self.rx_inv_rrc_beta_label = ttk.Label(rx_frame, text="Inv. RRC β")
-        self.rx_inv_rrc_beta_entry = SuggestEntry(rx_frame, "rx_inv_rrc_beta")
+        self.rx_inv_rrc_beta_label = ctk.CTkLabel(rx_body, text="Inv. RRC β")
+        self.rx_inv_rrc_beta_entry = SuggestEntry(rx_body, "rx_inv_rrc_beta")
         self.rx_inv_rrc_beta_entry.insert(0, "0.25")
         self.rx_inv_rrc_beta_entry.entry.configure(state="disabled")
 
-        self.rx_inv_rrc_span_label = ttk.Label(rx_frame, text="Inv. RRC Span")
-        self.rx_inv_rrc_span_entry = SuggestEntry(rx_frame, "rx_inv_rrc_span")
+        self.rx_inv_rrc_span_label = ctk.CTkLabel(rx_body, text="Inv. RRC Span")
+        self.rx_inv_rrc_span_entry = SuggestEntry(rx_body, "rx_inv_rrc_span")
         self.rx_inv_rrc_span_entry.insert(0, "6")
         self.rx_inv_rrc_span_entry.entry.configure(state="disabled")
 
-        self.rx_inv_os_entry = SuggestEntry(rx_frame, "rx_inv_os_entry")
+        self.rx_inv_os_entry = SuggestEntry(rx_body, "rx_inv_os_entry")
         self.rx_inv_os_entry.insert(0, "1")
         self.rx_inv_os_entry.entry.configure(state="disabled")
         self.rx_path_cancel_enable = tk.BooleanVar(value=False)
-        self.rx_path_cancel_check = ttk.Checkbutton(
-            rx_frame,
+        self.rx_path_cancel_check = ctk.CTkCheckBox(
+            rx_body,
             text="Pfad-Cancellation (LOS entfernen)",
             variable=self.rx_path_cancel_enable,
             command=self._on_rx_path_cancel_toggle,
         )
         self.rx_path_cancel_check.grid(row=8, column=0, columnspan=2, sticky="w")
-        self.rx_path_cancel_help = ttk.Label(
-            rx_frame,
+        self.rx_path_cancel_help = ctk.CTkLabel(
+            rx_body,
             text=(
                 "Schätzt den dominanten Pfad (LOS) aus der Referenzsequenz und "
                 "subtrahiert ihn aus dem Empfangssignal. Danach wird die "
@@ -2497,39 +2527,39 @@ class TransceiverUI(tk.Tk):
             justify="left",
         )
         self.rx_path_cancel_help.grid(row=9, column=0, columnspan=2, sticky="w")
-        self.rx_path_cancel_status = ttk.Label(rx_frame, text="")
+        self.rx_path_cancel_status = ctk.CTkLabel(rx_body, text="")
         self.rx_path_cancel_status.grid(row=10, column=0, columnspan=2, sticky="w")
 
-        ttk.Label(rx_frame, text="Output").grid(row=11, column=0, sticky="w")
-        self.rx_file = SuggestEntry(rx_frame, "rx_file")
+        ctk.CTkLabel(rx_body, text="Output").grid(row=11, column=0, sticky="w")
+        self.rx_file = SuggestEntry(rx_body, "rx_file")
         self.rx_file.insert(0, "rx_signal.bin")
         self.rx_file.grid(row=11, column=1, sticky="ew")
 
-        ttk.Label(rx_frame, text="View").grid(row=12, column=0, sticky="w")
-        ttk.Combobox(
-            rx_frame,
-            textvariable=self.rx_view,
+        ctk.CTkLabel(rx_body, text="View").grid(row=12, column=0, sticky="w")
+        ctk.CTkComboBox(
+            rx_body,
+            variable=self.rx_view,
             values=["Signal", "Freq", "InstantFreq", "Crosscorr", "AoA (ESPRIT)"],
-            width=12,
-        ).grid(row=12, column=1)
+            width=140,
+        ).grid(row=12, column=1, sticky="w")
 
-        ttk.Label(rx_frame, text="Antennenabstand [m]").grid(
+        ctk.CTkLabel(rx_body, text="Antennenabstand [m]").grid(
             row=13, column=0, sticky="w"
         )
-        self.rx_ant_spacing = SuggestEntry(rx_frame, "rx_ant_spacing")
+        self.rx_ant_spacing = SuggestEntry(rx_body, "rx_ant_spacing")
         self.rx_ant_spacing.insert(0, "0.03")
         self.rx_ant_spacing.grid(row=13, column=1, sticky="ew")
 
-        ttk.Label(rx_frame, text="Wellenlänge [m]").grid(
+        ctk.CTkLabel(rx_body, text="Wellenlänge [m]").grid(
             row=14, column=0, sticky="w"
         )
-        self.rx_wavelength = SuggestEntry(rx_frame, "rx_wavelength")
+        self.rx_wavelength = SuggestEntry(rx_body, "rx_wavelength")
         self.rx_wavelength.insert(0, "3e8/5.18e9")
         self.rx_wavelength.grid(row=14, column=1, sticky="ew")
 
-        self.rx_aoa_label = ttk.Label(rx_frame, text="AoA (ESPRIT): --")
+        self.rx_aoa_label = ctk.CTkLabel(rx_body, text="AoA (ESPRIT): --")
         self.rx_aoa_label.grid(row=15, column=0, columnspan=2, sticky="w")
-        self.rx_echo_aoa_label = ttk.Label(rx_frame, text="Echo AoA: --")
+        self.rx_echo_aoa_label = ctk.CTkLabel(rx_body, text="Echo AoA: --")
         self.rx_echo_aoa_label.grid(row=16, column=0, columnspan=2, sticky="w")
 
         # --- Trim controls -------------------------------------------------
@@ -2538,11 +2568,11 @@ class TransceiverUI(tk.Tk):
         self.trim_end = tk.DoubleVar(value=100.0)
         self.trim_dirty = False
 
-        trim_frame = ttk.Frame(rx_frame)
+        trim_frame = ctk.CTkFrame(rx_body)
         trim_frame.grid(row=17, column=0, columnspan=2, sticky="ew")
         trim_frame.columnconfigure(1, weight=1)
 
-        ttk.Checkbutton(
+        ctk.CTkCheckBox(
             trim_frame,
             text="Trim",
             variable=self.trim_var,
@@ -2557,53 +2587,53 @@ class TransceiverUI(tk.Tk):
         )
         self.range_slider.grid(row=0, column=1, sticky="ew", padx=2)
 
-        self.apply_trim_btn = ttk.Button(
+        self.apply_trim_btn = ctk.CTkButton(
             trim_frame,
             text="Apply",
             command=self.update_trim,
-            state="disabled",
         )
         self.apply_trim_btn.grid(row=0, column=2, padx=2)
+        self.apply_trim_btn.configure(state="disabled")
 
-        self.trim_start_label = ttk.Label(trim_frame, width=5)
+        self.trim_start_label = ctk.CTkLabel(trim_frame, width=50, text="")
         self.trim_start_label.grid(row=1, column=1, sticky="e")
-        self.trim_end_label = ttk.Label(trim_frame, width=5)
+        self.trim_end_label = ctk.CTkLabel(trim_frame, width=50, text="")
         self.trim_end_label.grid(row=1, column=2, sticky="e")
 
-        rx_btn_frame = ttk.Frame(rx_frame)
+        rx_btn_frame = ctk.CTkFrame(rx_body)
         rx_btn_frame.grid(row=18, column=0, columnspan=2, pady=5)
         rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
-        self.rx_button = ttk.Button(rx_btn_frame, text="Receive", command=self.receive)
+        self.rx_button = ctk.CTkButton(rx_btn_frame, text="Receive", command=self.receive)
         self.rx_button.grid(row=0, column=0, padx=2)
-        self.rx_stop = ttk.Button(
+        self.rx_stop = ctk.CTkButton(
             rx_btn_frame, text="Stop", command=self.stop_receive, state="disabled"
         )
         self.rx_stop.grid(row=0, column=1, padx=2)
-        self.rx_save_trim = ttk.Button(
+        self.rx_save_trim = ctk.CTkButton(
             rx_btn_frame, text="Save Trim", command=self.save_trimmed
         )
         self.rx_save_trim.grid(row=0, column=2, padx=2)
-        ttk.Button(rx_btn_frame, text="Compare", command=self.open_signal).grid(
+        ctk.CTkButton(rx_btn_frame, text="Compare", command=self.open_signal).grid(
             row=0, column=3, padx=2
         )
 
-        rx_scroll_container = ttk.Frame(rx_frame)
+        rx_scroll_container = ctk.CTkFrame(rx_body)
         rx_scroll_container.grid(row=19, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
         self.rx_canvas = tk.Canvas(rx_scroll_container)
         self.rx_canvas.grid(row=0, column=0, sticky="nsew")
-        self.rx_vscroll = ttk.Scrollbar(
-            rx_scroll_container, orient="vertical", command=self.rx_canvas.yview
+        self.rx_vscroll = ctk.CTkScrollbar(
+            rx_scroll_container, orientation="vertical", command=self.rx_canvas.yview
         )
         self.rx_vscroll.grid(row=0, column=1, sticky="ns")
         self.rx_canvas.configure(yscrollcommand=self.rx_vscroll.set)
         self.rx_canvas.bind("<Enter>", self._bind_rx_mousewheel)
         self.rx_canvas.bind("<Leave>", self._unbind_rx_mousewheel)
 
-        self.rx_plots_frame = ttk.Frame(self.rx_canvas)
+        self.rx_plots_frame = ctk.CTkFrame(self.rx_canvas)
         self.rx_plots_frame.columnconfigure(0, weight=1)
         self.rx_canvas.create_window((0, 0), window=self.rx_plots_frame, anchor="nw")
         self.rx_plots_frame.bind(
@@ -2612,7 +2642,7 @@ class TransceiverUI(tk.Tk):
                 scrollregion=self.rx_canvas.bbox("all")
             ),
         )
-        rx_frame.rowconfigure(19, weight=1)
+        rx_body.rowconfigure(19, weight=1)
         self.rx_canvases = []
         self.update_waveform_fields()
         self._update_rx_inv_rrc_availability()
@@ -2714,8 +2744,8 @@ class TransceiverUI(tk.Tk):
 
     def _on_zeros_toggle(self) -> None:
         if self.zeros_enable.get():
-            self.zeros_combo.configure(state="readonly")
-            if self.zeros_var.get() not in self.zeros_combo["values"]:
+            self.zeros_combo.configure(state="normal")
+            if self.zeros_var.get() not in self.zeros_values:
                 self.zeros_var.set(self._zeros_last_value or "same")
         else:
             current = self.zeros_var.get()
@@ -2934,7 +2964,7 @@ class TransceiverUI(tk.Tk):
 
     def _render_gen_tab(
         self,
-        frame: ttk.Frame,
+        frame: ctk.CTkFrame,
         data: np.ndarray,
         fs: float,
         symbol_rate: float | None = None,
@@ -2960,7 +2990,7 @@ class TransceiverUI(tk.Tk):
 
         stats = _calc_stats(data, fs, symbol_rate=symbol_rate)
         text = _format_stats_text(stats)
-        stats_label = ttk.Label(frame, justify="left", anchor="w")
+        stats_label = ctk.CTkLabel(frame, justify="left", anchor="w", text="")
         stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
         stats_label.configure(text=text)
 
@@ -2998,13 +3028,13 @@ class TransceiverUI(tk.Tk):
         self.gen_canvases.clear()
 
         if filtered_data is None and repeated_data is None and zeros_data is None:
-            tab_frame = ttk.Frame(self.gen_plots_frame)
+            tab_frame = ctk.CTkFrame(self.gen_plots_frame)
             tab_frame.grid(row=0, column=0, sticky="nsew")
             tab_frame.columnconfigure(0, weight=1)
             self._render_gen_tab(tab_frame, data, fs, symbol_rate=symbol_rate)
             return
 
-        notebook = ttk.Notebook(self.gen_plots_frame)
+        notebook = ctk.CTkTabview(self.gen_plots_frame)
         notebook.grid(row=0, column=0, sticky="nsew")
         self.gen_plots_frame.columnconfigure(0, weight=1)
 
@@ -3066,9 +3096,8 @@ class TransceiverUI(tk.Tk):
             )
 
         for label, tab_data, tab_fs, tab_symbol_rate, corr_mode, corr_ref in tabs:
-            tab = ttk.Frame(notebook)
+            tab = notebook.add(label)
             tab.columnconfigure(0, weight=1)
-            notebook.add(tab, text=label)
             self._render_gen_tab(
                 tab,
                 tab_data,
@@ -3079,7 +3108,7 @@ class TransceiverUI(tk.Tk):
             )
 
         if tabs:
-            notebook.select(len(tabs) - 1)
+            notebook.set(tabs[-1][0])
 
     def _select_rx_display_data(self, data: np.ndarray) -> tuple[np.ndarray, str]:
         """Return the RX data according to the channel view selection."""
@@ -3122,7 +3151,7 @@ class TransceiverUI(tk.Tk):
         self.raw_rx_data = data
         self.latest_fs_raw = fs
         if data.ndim == 2 and data.shape[0] >= 2:
-            self.rx_channel_view_box.configure(state="readonly")
+            self.rx_channel_view_box.configure(state="normal")
             selection_label = self.rx_channel_view.get()
         else:
             self.rx_channel_view.set("Kanal 1")
@@ -3285,7 +3314,7 @@ class TransceiverUI(tk.Tk):
         title_suffix = f" ({channel_label})" if channel_label else ""
 
         def _render_rx_preview(
-            target_frame: ttk.Frame,
+            target_frame: ctk.CTkFrame,
             plot_data: np.ndarray,
             plot_fs: float,
             plot_ref_data: np.ndarray,
@@ -3352,7 +3381,7 @@ class TransceiverUI(tk.Tk):
             text = _format_stats_text(stats)
             if path_note:
                 text = f"{text}\n{path_note}"
-            stats_label = ttk.Label(target_frame, justify="left", anchor="w")
+            stats_label = ctk.CTkLabel(target_frame, justify="left", anchor="w", text="")
             stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
             stats_label.configure(text=text)
             self.rx_stats_labels.append(stats_label)
@@ -3387,18 +3416,16 @@ class TransceiverUI(tk.Tk):
                 self.rx_canvases.append(canvas)
 
         if self.rx_inv_rrc_enable.get():
-            notebook = ttk.Notebook(self.rx_plots_frame)
+            notebook = ctk.CTkTabview(self.rx_plots_frame)
             notebook.grid(row=0, column=0, sticky="nsew")
             self.rx_plots_frame.columnconfigure(0, weight=1)
 
-            unfiltered_tab = ttk.Frame(notebook)
+            unfiltered_tab = notebook.add("RX")
             unfiltered_tab.columnconfigure(0, weight=1)
-            filtered_tab = ttk.Frame(notebook)
+            filtered_tab = notebook.add("inv. filter")
             filtered_tab.columnconfigure(0, weight=1)
 
-            notebook.add(unfiltered_tab, text="RX")
-            notebook.add(filtered_tab, text="inv. filter")
-            notebook.select(filtered_tab)
+            notebook.set("inv. filter")
             self.rx_canvases.append(notebook)
 
             _render_rx_preview(
@@ -3852,11 +3879,11 @@ class TransceiverUI(tk.Tk):
 
     def _show_toast(self, text: str, duration: int = 2000) -> None:
         """Show a temporary notification on top of the main window."""
-        win = tk.Toplevel(self)
+        win = ctk.CTkToplevel(self)
         win.overrideredirect(True)
         win.attributes("-topmost", True)
-        lbl = ttk.Label(win, text=text, padding=10, relief="solid")
-        lbl.pack()
+        lbl = ctk.CTkLabel(win, text=text)
+        lbl.pack(padx=12, pady=8)
         win.update_idletasks()
         x = self.winfo_rootx() + (self.winfo_width() - win.winfo_width()) // 2
         y = self.winfo_rooty() + (self.winfo_height() - win.winfo_height()) // 2
@@ -4014,7 +4041,7 @@ class TransceiverUI(tk.Tk):
         zeros_enabled = params.get("zeros_enabled")
         if zeros_enabled is None:
             zeros_enabled = str(zeros_value).strip() not in ("", "none")
-        if zeros_value not in self.zeros_combo["values"]:
+        if zeros_value not in self.zeros_values:
             zeros_value = "same"
         self.zeros_var.set(zeros_value)
         if zeros_value:
@@ -4070,7 +4097,7 @@ class TransceiverUI(tk.Tk):
         self.toggle_rate_sync(self.sync_var.get())
 
     def open_load_preset_window(self) -> None:
-        win = tk.Toplevel(self)
+        win = ctk.CTkToplevel(self)
         win.title("Load Preset")
         lb = tk.Listbox(win, exportselection=False)
         for name in sorted(_PRESETS.keys()):
@@ -4086,14 +4113,16 @@ class TransceiverUI(tk.Tk):
             self.load_preset(name)
             win.destroy()
 
-        ttk.Button(win, text="Load", command=load_selected).pack(pady=5)
+        ctk.CTkButton(win, text="Load", command=load_selected).pack(pady=5)
 
     def open_save_preset_window(self) -> None:
-        win = tk.Toplevel(self)
+        win = ctk.CTkToplevel(self)
         win.title("Save Preset")
-        tk.Label(win, text="Name:").grid(row=0, column=0, padx=5, pady=5)
+        ctk.CTkLabel(win, text="Name:").grid(row=0, column=0, padx=5, pady=5)
         name_var = tk.StringVar()
-        ttk.Entry(win, textvariable=name_var).grid(row=0, column=1, padx=5, pady=5)
+        ctk.CTkEntry(win, textvariable=name_var).grid(
+            row=0, column=1, padx=5, pady=5
+        )
 
         def save() -> None:
             name = name_var.get().strip()
@@ -4103,7 +4132,7 @@ class TransceiverUI(tk.Tk):
             self.save_preset(name)
             win.destroy()
 
-        ttk.Button(win, text="Save", command=save).grid(
+        ctk.CTkButton(win, text="Save", command=save).grid(
             row=1, column=0, columnspan=2, pady=5
         )
 
@@ -4122,7 +4151,7 @@ class TransceiverUI(tk.Tk):
         if not _PRESETS:
             messagebox.showinfo("Delete Preset", "No presets available")
             return
-        win = tk.Toplevel(self)
+        win = ctk.CTkToplevel(self)
         win.title("Delete Preset")
         lb = tk.Listbox(win, exportselection=False)
         for p in sorted(_PRESETS.keys()):
@@ -4141,7 +4170,7 @@ class TransceiverUI(tk.Tk):
             _save_presets(_PRESETS)
             win.destroy()
 
-        ttk.Button(win, text="Delete", command=delete_selected).pack(pady=5)
+        ctk.CTkButton(win, text="Delete", command=delete_selected).pack(pady=5)
 
     # ----- Actions -----
     def generate(self):
@@ -4586,6 +4615,8 @@ class TransceiverUI(tk.Tk):
 
 def main() -> None:
     _configure_multiprocessing()
+    ctk.set_appearance_mode("System")
+    ctk.set_default_color_theme("dark-blue")
     app = TransceiverUI()
     app.mainloop()
 
