@@ -1850,22 +1850,6 @@ def _plot_on_mpl(
             ],
             loc="upper right",
         )
-        delay = _echo_delay_samples(lags, los_idx, echo_idx)
-        if delay is None:
-            delay_text = "LOS-Echo: --"
-        else:
-            meters = delay * 1.5
-            delay_text = f"LOS-Echo: {delay} samp ({meters:.1f} m)"
-        ax.text(
-            0.01,
-            0.01,
-            delay_text,
-            transform=ax.transAxes,
-            va="bottom",
-            ha="left",
-            fontsize=9,
-            color="black",
-        )
         ax.set_xlabel("Lag")
         ax.set_ylabel("Magnitude")
     ax.set_title(title)
