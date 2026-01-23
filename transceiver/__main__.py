@@ -1739,7 +1739,13 @@ def _calc_stats(
     return stats
 
 
-def _format_stats_rows(stats: dict, *, include_bw_extras: bool = True) -> list[tuple[str, str]]:
+def _format_stats_rows(
+    stats: dict,
+    *,
+    include_bw_extras: bool = True,
+    include_bw_nyq: bool = True,
+    include_echo: bool = True,
+) -> list[tuple[str, str]]:
     """Return rows of labels/values for signal statistics."""
     rows = [
         ("fmin", _format_hz(stats["f_low"])),
@@ -1748,19 +1754,30 @@ def _format_stats_rows(stats: dict, *, include_bw_extras: bool = True) -> list[t
         ("BW (3dB)", _format_hz(stats["bw"])),
     ]
     if include_bw_extras:
-        if stats.get("bw_norm_nyq") is not None:
+        if include_bw_nyq and stats.get("bw_norm_nyq") is not None:
             rows.append(("BW (Nyq)", f"{stats['bw_norm_nyq']:.3f}"))
         if stats.get("bw_rs") is not None:
             rows.append(("BW (Rs)", f"{stats['bw_rs']:.3f}×Rs"))
-    if stats.get("echo_delay") is not None:
+    if include_echo and stats.get("echo_delay") is not None:
         meters = stats["echo_delay"] * 1.5
         rows.append(("LOS-Echo", f"{stats['echo_delay']} samp ({meters:.1f} m)"))
     return rows
 
 
-def _format_stats_text(stats: dict) -> str:
+def _format_stats_text(
+    stats: dict,
+    *,
+    include_bw_extras: bool = True,
+    include_bw_nyq: bool = True,
+    include_echo: bool = True,
+) -> str:
     """Return a formatted multi-line string for signal statistics."""
-    rows = _format_stats_rows(stats, include_bw_extras=True)
+    rows = _format_stats_rows(
+        stats,
+        include_bw_extras=include_bw_extras,
+        include_bw_nyq=include_bw_nyq,
+        include_echo=include_echo,
+    )
     return "\n".join(f"{label}: {value}" for label, value in rows)
 
 
@@ -3579,7 +3596,11 @@ class TransceiverUI(ctk.CTk):
                 xcorr_reduce=True,
                 path_cancel_info=path_cancel_info,
             )
-            text = _format_stats_text(stats)
+            text = _format_stats_text(
+                stats,
+                include_bw_nyq=False,
+                include_echo=False,
+            )
             if path_note:
                 text = f"{text}\n{path_note}"
             stats_label = ctk.CTkLabel(target_frame, justify="left", anchor="w", text="")
@@ -3974,7 +3995,11 @@ class TransceiverUI(ctk.CTk):
             xcorr_reduce=True,
             path_cancel_info=path_cancel_info,
         )
-        text = _format_stats_text(stats)
+        text = _format_stats_text(
+            stats,
+            include_bw_nyq=False,
+            include_echo=False,
+        )
         for label in labels:
             label.configure(text=text)
 
