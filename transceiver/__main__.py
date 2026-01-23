@@ -11,7 +11,6 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 import json
 import math
-import signal
 import contextlib
 import tempfile
 from multiprocessing import shared_memory, Pipe, Process, resource_tracker
@@ -28,6 +27,7 @@ from .helpers.iq_utils import save_interleaved
 from .helpers import rx_convert
 from .helpers import doa_esprit
 from .helpers.number_parser import parse_number_expr
+from .tx_controller import TxController
 
 # --- suggestion helper -------------------------------------------------------
 
@@ -100,11 +100,6 @@ _STATE = _load_state()
 AUTOSAVE_INTERVAL = 5  # seconds
 # Arrays larger than this skip shared memory and use .npy + mmap in plot worker.
 SHM_SIZE_THRESHOLD_BYTES = 25 * 1024 * 1024  # 25 MB
-
-# Paths to external helpers
-ROOT_DIR = Path(__file__).resolve().parents[1]
-BIN_DIR = ROOT_DIR / "bin"
-REPLAY_BIN = str(BIN_DIR / "rfnoc_replay_samples_from_file")
 
 
 def _maybe_untrack_shared_memory(name: str) -> None:
@@ -1900,6 +1895,7 @@ class TransceiverUI(tk.Tk):
         self._tx_running = False
         self._last_tx_end = 0.0
         self._filtered_tx_file = None
+        self._tx_controller = None
         self._closing = False
         self._plot_worker_manager = _get_plot_worker_manager()
         self._plot_worker_manager.start()
@@ -3272,122 +3268,6 @@ class TransceiverUI(tk.Tk):
         except tk.TclError:
             pass
 
-    def _kill_stale_tx(self) -> None:
-        """Terminate orphaned transmit processes from previous runs."""
-        try:
-            result = subprocess.run(
-                ["pgrep", "-f", "rfnoc_replay_samples_from_file"],
-                capture_output=True,
-                text=True,
-            )
-            if result.stdout.strip():
-                subprocess.run(
-                    ["pkill", "-f", "rfnoc_replay_samples_from_file"],
-                    capture_output=True,
-                )
-                # Force kill any remaining processes
-                subprocess.run(
-                    ["pkill", "-9", "-f", "rfnoc_replay_samples_from_file"],
-                    capture_output=True,
-                )
-        except Exception:
-            pass
-
-    def _ping_device(self, arg_str: str) -> None:
-        """Send a single ping to the configured device address."""
-        addr = None
-        for part in arg_str.split(","):
-            if part.strip().startswith("addr="):
-                addr = part.split("=", 1)[1].strip()
-                break
-        if not addr:
-            return
-        try:
-            subprocess.run(
-                ["ping", "-c", "1", addr],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=2,
-            )
-        except Exception:
-            pass
-
-    def _initial_stop(self) -> None:
-        """Send a single stop signal to any running transmit helper."""
-        if self._proc:
-            try:
-                self._proc.send_signal(signal.SIGINT)
-                self._proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                with contextlib.suppress(Exception):
-                    self._proc.terminate()
-                    self._proc.wait(timeout=3)
-            finally:
-                if self._proc and self._proc.poll() is None:
-                    with contextlib.suppress(Exception):
-                        self._proc.kill()
-                        self._proc.wait(timeout=2)
-                self._proc = None
-
-    def _run_cmd(
-        self,
-        cmd: list[str],
-        max_attempts: int = 1,
-        delay: float = 5.0,
-        tx_args: str | None = None,
-    ) -> None:
-        attempt = 1
-        # Ensure the replay block is stopped before retrying
-        self._initial_stop()
-        try:
-            while attempt <= max_attempts and not self._stop_requested:
-                self._kill_stale_tx()
-                try:
-                    proc = subprocess.Popen(
-                        cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                        bufsize=1,
-                    )
-                    self._proc = proc
-                    output_lines = []
-                    for line in proc.stdout:
-                        output_lines.append(line)
-                        self._out_queue.put(line)
-                    proc.wait()
-                    self._out_queue.put(f"[Exited with code {proc.returncode}]\n")
-                except Exception as exc:
-                    self._out_queue.put(f"Error: {exc}\n")
-                    proc = None
-                    output_lines = []
-                finally:
-                    self._proc = None
-
-                # If the device was not found, try pinging the target once
-                if (
-                    output_lines
-                    and any("No devices found" in l for l in output_lines)
-                    and tx_args
-                ):
-                    self._ping_device(tx_args)
-
-                if self._stop_requested or (proc is not None and proc.returncode == 0):
-                    break
-
-                if attempt < max_attempts:
-                    self._out_queue.put(
-                        f"Retry {attempt}/{max_attempts} failed, retrying...\n"
-                    )
-                    time.sleep(delay)
-                attempt += 1
-        finally:
-            self._cmd_running = False
-            self._proc = None
-            self._tx_running = False
-            self._last_tx_end = time.monotonic()
-            self._ui(self._reset_tx_buttons)
-
     def _reset_tx_buttons(self) -> None:
         if hasattr(self, "tx_stop"):
             self.tx_stop.config(state="disabled")
@@ -4102,24 +3982,17 @@ class TransceiverUI(tk.Tk):
             wait = MIN_GAP - (now - self._last_tx_end)
             self.after(int(wait * 1000), self.transmit)
             return
-        self._kill_stale_tx()
         self._stop_requested = False
         tx_args = self.tx_args.get()
-        cmd = [
-            REPLAY_BIN,
-            "--args",
-            tx_args,
-            "--rate",
-            self.tx_rate.get(),
-            "--freq",
-            self.tx_freq.get(),
-            "--gain",
-            self.tx_gain.get(),
-            "--nsamps",
-            "0",
-            "--file",
-            self._tx_transmit_file(),
-        ]
+        try:
+            rate = _parse_number_expr_or_error(self.tx_rate.get())
+            freq = _parse_number_expr_or_error(self.tx_freq.get())
+            gain = _parse_number_expr_or_error(self.tx_gain.get())
+        except ValueError as exc:
+            messagebox.showerror("Transmit", str(exc))
+            return
+        controller = TxController.for_args(tx_args)
+        self._tx_controller = controller
         if hasattr(self, "tx_log"):
             self.tx_log.delete("1.0", tk.END)
         self._cmd_running = True
@@ -4130,42 +4003,53 @@ class TransceiverUI(tk.Tk):
             self.tx_stop.config(state="normal")
         if hasattr(self, "tx_retrans"):
             self.tx_retrans.config(state="normal")
-        threading.Thread(
-            target=self._run_cmd,
-            args=(cmd,),
-            kwargs={"max_attempts": 10, "delay": 2.0, "tx_args": tx_args},
-            daemon=True,
-        ).start()
+        started = controller.start_tx(
+            self._tx_transmit_file(),
+            repeat=True,
+            rate=rate,
+            freq=freq,
+            gain=gain,
+            chan=0,
+            log_callback=lambda msg: self._out_queue.put(msg),
+        )
+        if not started:
+            self._out_queue.put("TX already running; start request ignored.\n")
+            return
         self._process_queue()
+        self._monitor_tx_state()
+
+    def _monitor_tx_state(self) -> None:
+        controller = self._tx_controller
+        if not controller:
+            return
+        if controller.is_running and not self._closing:
+            self.after(200, self._monitor_tx_state)
+            return
+        if controller.last_error:
+            self._out_queue.put(f"TX error: {controller.last_error}\n")
+        self._cmd_running = False
+        self._tx_running = False
+        self._last_tx_end = controller.last_end_monotonic or time.monotonic()
+        self._ui(self._reset_tx_buttons)
 
     def stop_transmit(self) -> None:
-        """Gracefully stop rfnoc_replay_samples_from_file in --nsamps 0 mode."""
-        if self._proc:
-            # 1) Freundlich: SIGINT (entspricht Ctrl‑C)
-            try:
-                self._proc.send_signal(signal.SIGINT)
-                self._proc.wait(timeout=3)  # <‑ Helfer macht replay->stop()
-            except subprocess.TimeoutExpired:
-                # 2) Immer noch aktiv? Leicht härter: SIGTERM
-                with contextlib.suppress(Exception):
-                    self._proc.terminate()
-                    self._proc.wait(timeout=3)
-            finally:
-                # 3) Wenn alles schiefgeht, letzter Ausweg SIGKILL
-                if self._proc and self._proc.poll() is None:
-                    with contextlib.suppress(Exception):
-                        self._proc.kill()
-                        self._proc.wait(timeout=2)
-                self._proc = None
-
-        # FPGA‑Block ist jetzt freigegeben → UI zurücksetzen
+        """Gracefully stop TX via the in-process UHD controller."""
         self._stop_requested = True
-        self._tx_running = False
-        self._last_tx_end = time.monotonic()
-
-        self.tx_stop.config(state="disabled")
-        self.tx_button.config(state="normal")
-        self.tx_retrans.config(state="disabled")
+        controller = self._tx_controller
+        if controller is None:
+            self._tx_running = False
+            self._cmd_running = False
+            self._last_tx_end = time.monotonic()
+            self._ui(self._reset_tx_buttons)
+            return
+        stopped = controller.stop_tx(timeout=5.0)
+        if not stopped:
+            self._out_queue.put("TX stop timed out; controller still running.\n")
+        self._tx_running = controller.is_running
+        self._cmd_running = controller.is_running
+        self._last_tx_end = controller.last_end_monotonic or time.monotonic()
+        if not controller.is_running:
+            self._ui(self._reset_tx_buttons)
 
     def retransmit(self) -> None:
         """Stop any ongoing transmission and start a new one."""
