@@ -220,6 +220,21 @@ def _apply_mpl_transparent(fig: Figure, ax) -> None:
     ax.patch.set_alpha(0)
 
 
+def _apply_mpl_gray_style(ax, color: str = "#9E9E9E") -> None:
+    ax.tick_params(axis="both", colors=color)
+    ax.xaxis.label.set_color(color)
+    ax.yaxis.label.set_color(color)
+    ax.title.set_color(color)
+    for spine in ax.spines.values():
+        spine.set_color(color)
+    legend = ax.get_legend()
+    if legend is not None:
+        for text in legend.get_texts():
+            text.set_color(color)
+        legend.get_frame().set_edgecolor(color)
+        legend.get_frame().set_facecolor("none")
+
+
 def _make_bordered_group(
     parent: tk.Misc,
     title: str,
@@ -2184,6 +2199,7 @@ def _plot_on_mpl(
         if ref_data is None or ref_data.size == 0:
             ax.set_title("No TX data")
             ax.grid(True)
+            _apply_mpl_gray_style(ax)
             return
         data, ref_data, step_r = _reduce_pair(data, ref_data)
         if crosscorr_compare is not None and crosscorr_compare.size:
@@ -2270,7 +2286,7 @@ def _plot_on_mpl(
         ax.set_ylabel("Magnitude")
     ax.set_title(title)
     ax.grid(True)
-    ax.figure.tight_layout(pad=1.0)
+    _apply_mpl_gray_style(ax)
 
 
 class TransceiverUI(ctk.CTk):
@@ -3528,6 +3544,7 @@ class TransceiverUI(ctk.CTk):
                         "Keine AoA-Daten",
                         ha="center",
                         va="center",
+                        color="#9E9E9E",
                     )
                     ax.set_axis_off()
                 else:
@@ -3537,6 +3554,7 @@ class TransceiverUI(ctk.CTk):
                     ax.set_xlabel("Time [s]")
                     ax.set_ylabel("Angle [deg]")
                     ax.grid(True)
+                _apply_mpl_gray_style(ax)
                 canvas = FigureCanvasTkAgg(fig, master=target_frame)
                 canvas.draw()
                 widget = canvas.get_tk_widget()
