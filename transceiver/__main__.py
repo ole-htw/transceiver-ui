@@ -2711,43 +2711,67 @@ class TransceiverUI(ctk.CTk):
         rx_frame.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
         rx_body.columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(rx_body, text="Args").grid(row=0, column=0, sticky="w")
-        self.rx_args = SuggestEntry(rx_body, "rx_args")
-        self.rx_args.insert(0, "addr=192.168.20.2,clock_source=external")
-        self.rx_args.grid(row=0, column=1, sticky="ew")
+        rx_params_frame, rx_params_body, _ = _make_side_bordered_group(
+            rx_body,
+            "Parameters",
+        )
+        rx_params_frame.grid(row=0, column=0, columnspan=2, sticky="ew")
+        rx_params_left = ctk.CTkFrame(rx_params_body, fg_color="transparent")
+        rx_params_left.grid(row=0, column=1, sticky="nsew")
+        rx_params_left.columnconfigure(1, weight=1)
+        rx_params_right = ctk.CTkFrame(rx_params_body, fg_color="transparent")
+        rx_params_right.grid(row=0, column=2, sticky="nsew", padx=(12, 0))
+        rx_params_right.columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(rx_body, text="Rate").grid(row=1, column=0, sticky="w")
-        self.rx_rate = SuggestEntry(rx_body, "rx_rate", textvariable=self.rx_rate_var)
-        self.rx_rate.grid(row=1, column=1, sticky="ew")
+        ctk.CTkLabel(rx_params_left, text="Rate").grid(
+            row=0, column=0, sticky="w", padx=label_padx
+        )
+        self.rx_rate = SuggestEntry(
+            rx_params_left, "rx_rate", textvariable=self.rx_rate_var
+        )
+        self.rx_rate.grid(row=0, column=1, sticky="ew")
         self.rx_rate.entry.bind("<FocusOut>", lambda _e: self.auto_update_rx_filename())
 
-        ctk.CTkLabel(rx_body, text="Freq").grid(row=2, column=0, sticky="w")
-        self.rx_freq = SuggestEntry(rx_body, "rx_freq")
+        ctk.CTkLabel(rx_params_right, text="Freq").grid(
+            row=0, column=0, sticky="w", padx=label_padx
+        )
+        self.rx_freq = SuggestEntry(rx_params_right, "rx_freq")
         self.rx_freq.insert(0, "5.18e9")
-        self.rx_freq.grid(row=2, column=1, sticky="ew")
+        self.rx_freq.grid(row=0, column=1, sticky="ew")
         self.rx_freq.entry.bind("<FocusOut>", lambda _e: self.auto_update_rx_filename())
 
-        ctk.CTkLabel(rx_body, text="Duration").grid(row=3, column=0, sticky="w")
-        self.rx_dur = SuggestEntry(rx_body, "rx_dur")
+        ctk.CTkLabel(rx_params_left, text="Duration").grid(
+            row=1, column=0, sticky="w", padx=label_padx
+        )
+        self.rx_dur = SuggestEntry(rx_params_left, "rx_dur")
         self.rx_dur.insert(0, "0.01")
-        self.rx_dur.grid(row=3, column=1, sticky="ew")
+        self.rx_dur.grid(row=1, column=1, sticky="ew")
         self.rx_dur.entry.bind("<FocusOut>", lambda _e: self.auto_update_rx_filename())
 
-        ctk.CTkLabel(rx_body, text="Gain").grid(row=4, column=0, sticky="w")
-        self.rx_gain = SuggestEntry(rx_body, "rx_gain")
+        ctk.CTkLabel(rx_params_right, text="Gain").grid(
+            row=1, column=0, sticky="w", padx=label_padx
+        )
+        self.rx_gain = SuggestEntry(rx_params_right, "rx_gain")
         self.rx_gain.insert(0, "80")
-        self.rx_gain.grid(row=4, column=1, sticky="ew")
+        self.rx_gain.grid(row=1, column=1, sticky="ew")
         self.rx_gain.entry.bind("<FocusOut>", lambda _e: self.auto_update_rx_filename())
+
+        ctk.CTkLabel(rx_params_body, text="Args").grid(
+            row=1, column=0, sticky="w", padx=label_padx
+        )
+        self.rx_args = SuggestEntry(rx_params_body, "rx_args")
+        self.rx_args.insert(0, "addr=192.168.20.2,clock_source=external")
+        self.rx_args.grid(row=1, column=1, columnspan=2, sticky="ew")
 
         self.rx_channel_2 = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(
             rx_body,
             text="RX Antenne 2 aktivieren",
             variable=self.rx_channel_2,
-        ).grid(row=5, column=0, columnspan=2, sticky="w")
+        ).grid(row=1, column=0, columnspan=2, sticky="w")
 
         self.rx_channel_view_label = ctk.CTkLabel(rx_body, text="RX Ansicht")
-        self.rx_channel_view_label.grid(row=6, column=0, sticky="w")
+        self.rx_channel_view_label.grid(row=2, column=0, sticky="w")
         self.rx_channel_view_box = ctk.CTkComboBox(
             rx_body,
             variable=self.rx_channel_view,
@@ -2755,7 +2779,7 @@ class TransceiverUI(ctk.CTk):
             width=140,
             command=lambda _value: self.update_trim(),
         )
-        self.rx_channel_view_box.grid(row=6, column=1, sticky="w")
+        self.rx_channel_view_box.grid(row=2, column=1, sticky="w")
         self.rx_channel_view_box.configure(state="disabled")
 
         self.rx_path_cancel_enable = tk.BooleanVar(value=False)
@@ -2765,31 +2789,31 @@ class TransceiverUI(ctk.CTk):
             variable=self.rx_path_cancel_enable,
             command=self._on_rx_path_cancel_toggle,
         )
-        self.rx_path_cancel_check.grid(row=7, column=0, columnspan=2, sticky="w")
+        self.rx_path_cancel_check.grid(row=3, column=0, columnspan=2, sticky="w")
 
-        ctk.CTkLabel(rx_body, text="Output").grid(row=8, column=0, sticky="w")
+        ctk.CTkLabel(rx_body, text="Output").grid(row=4, column=0, sticky="w")
         self.rx_file = SuggestEntry(rx_body, "rx_file")
         self.rx_file.insert(0, "rx_signal.bin")
-        self.rx_file.grid(row=8, column=1, sticky="ew")
+        self.rx_file.grid(row=4, column=1, sticky="ew")
 
         ctk.CTkLabel(rx_body, text="Antennenabstand [m]").grid(
-            row=9, column=0, sticky="w"
+            row=5, column=0, sticky="w"
         )
         self.rx_ant_spacing = SuggestEntry(rx_body, "rx_ant_spacing")
         self.rx_ant_spacing.insert(0, "0.03")
-        self.rx_ant_spacing.grid(row=9, column=1, sticky="ew")
+        self.rx_ant_spacing.grid(row=5, column=1, sticky="ew")
 
         ctk.CTkLabel(rx_body, text="Wellenlänge [m]").grid(
-            row=10, column=0, sticky="w"
+            row=6, column=0, sticky="w"
         )
         self.rx_wavelength = SuggestEntry(rx_body, "rx_wavelength")
         self.rx_wavelength.insert(0, "3e8/5.18e9")
-        self.rx_wavelength.grid(row=10, column=1, sticky="ew")
+        self.rx_wavelength.grid(row=6, column=1, sticky="ew")
 
         self.rx_aoa_label = ctk.CTkLabel(rx_body, text="AoA (ESPRIT): --")
-        self.rx_aoa_label.grid(row=11, column=0, columnspan=2, sticky="w")
+        self.rx_aoa_label.grid(row=7, column=0, columnspan=2, sticky="w")
         self.rx_echo_aoa_label = ctk.CTkLabel(rx_body, text="Echo AoA: --")
-        self.rx_echo_aoa_label.grid(row=12, column=0, columnspan=2, sticky="w")
+        self.rx_echo_aoa_label.grid(row=8, column=0, columnspan=2, sticky="w")
 
         # --- Trim controls -------------------------------------------------
         self.trim_var = tk.BooleanVar(value=False)
@@ -2798,7 +2822,7 @@ class TransceiverUI(ctk.CTk):
         self.trim_dirty = False
 
         trim_frame = ctk.CTkFrame(rx_body)
-        trim_frame.grid(row=14, column=0, columnspan=2, sticky="ew")
+        trim_frame.grid(row=10, column=0, columnspan=2, sticky="ew")
         trim_frame.columnconfigure(1, weight=1)
 
         ctk.CTkCheckBox(
@@ -2830,7 +2854,7 @@ class TransceiverUI(ctk.CTk):
         self.trim_end_label.grid(row=1, column=2, sticky="e")
 
         rx_btn_frame = ctk.CTkFrame(rx_body)
-        rx_btn_frame.grid(row=15, column=0, columnspan=2, pady=5)
+        rx_btn_frame.grid(row=11, column=0, columnspan=2, pady=5)
         rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
         self.rx_button = ctk.CTkButton(rx_btn_frame, text="Receive", command=self.receive)
@@ -2852,7 +2876,7 @@ class TransceiverUI(ctk.CTk):
             fg_color=terminal_container_fg,
             corner_radius=terminal_container_corner,
         )
-        rx_scroll_container.grid(row=16, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.grid(row=12, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
@@ -2891,7 +2915,7 @@ class TransceiverUI(ctk.CTk):
                 self.rx_canvas, self.rx_plots_window
             ),
         )
-        rx_body.rowconfigure(16, weight=1)
+        rx_body.rowconfigure(12, weight=1)
         self.rx_canvases = []
         self.update_waveform_fields()
         self.auto_update_tx_filename()
