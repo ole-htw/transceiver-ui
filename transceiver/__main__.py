@@ -2247,7 +2247,7 @@ def _plot_on_mpl(
     """Helper to draw a small matplotlib preview plot."""
     mpl_colors = {
         "real": "#0288D1",
-        "imag": "#F4511E",
+        "imag": "#26C6DA",
         "freq": "#388E3C",
         "autocorr": "#7B1FA2",
         "crosscorr": "#1976D2",
