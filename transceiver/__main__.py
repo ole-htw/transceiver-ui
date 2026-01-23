@@ -880,6 +880,9 @@ class DraggableLagMarker(pg.ScatterPlotItem):
         self._index = index
         self.setData([self._lags[index]], [self._magnitudes[index]])
 
+    def set_index(self, index: int) -> None:
+        self._update_position(index)
+
     def mouseDragEvent(self, ev) -> None:
         if ev.button() != QtCore.Qt.LeftButton:
             ev.ignore()
@@ -907,31 +910,32 @@ def _add_draggable_markers(
     echo_idx: int | None,
     on_los_drag_end=None,
     on_echo_drag_end=None,
-) -> None:
+) -> tuple[DraggableLagMarker | None, DraggableLagMarker | None]:
     """Attach draggable LOS/echo markers to a plot."""
     view_box = plot.getViewBox()
+    los_marker = None
+    echo_marker = None
     if los_idx is not None:
-        plot.addItem(
-            DraggableLagMarker(
-                view_box,
-                lags,
-                magnitudes,
-                los_idx,
-                "r",
-                on_drag_end=on_los_drag_end,
-            )
+        los_marker = DraggableLagMarker(
+            view_box,
+            lags,
+            magnitudes,
+            los_idx,
+            "r",
+            on_drag_end=on_los_drag_end,
         )
+        plot.addItem(los_marker)
     if echo_idx is not None:
-        plot.addItem(
-            DraggableLagMarker(
-                view_box,
-                lags,
-                magnitudes,
-                echo_idx,
-                "g",
-                on_drag_end=on_echo_drag_end,
-            )
+        echo_marker = DraggableLagMarker(
+            view_box,
+            lags,
+            magnitudes,
+            echo_idx,
+            "g",
+            on_drag_end=on_echo_drag_end,
         )
+        plot.addItem(echo_marker)
+    return los_marker, echo_marker
 
 
 def _apply_manual_lags(
@@ -1601,6 +1605,13 @@ def _plot_on_pg(
 ) -> None:
     """Helper to draw the selected visualization on a PyQtGraph PlotItem."""
     step = max(1, int(reduction_step))
+    scene = plot.scene()
+    if scene is not None and hasattr(plot, "_xcorr_click_handler"):
+        try:
+            scene.sigMouseClicked.disconnect(plot._xcorr_click_handler)
+        except (TypeError, RuntimeError):
+            pass
+        delattr(plot, "_xcorr_click_handler")
     if reduce_data and mode != "Crosscorr":
         data, step = _reduce_data(data)
         fs /= step
@@ -1688,15 +1699,45 @@ def _plot_on_pg(
         )
         _update_echo_text()
 
-        _add_draggable_markers(
+        los_callback = _wrap_drag(on_los_drag_end)
+        echo_callback = _wrap_drag(on_echo_drag_end)
+        los_marker, echo_marker = _add_draggable_markers(
             plot,
             lags,
             mag,
             los_idx,
             echo_idx,
-            on_los_drag_end=_wrap_drag(on_los_drag_end),
-            on_echo_drag_end=_wrap_drag(on_echo_drag_end),
+            on_los_drag_end=los_callback,
+            on_echo_drag_end=echo_callback,
         )
+        if scene is not None and manual_lags is not None:
+            def _handle_click(ev) -> None:
+                if ev.button() != QtCore.Qt.LeftButton:
+                    return
+                modifiers = ev.modifiers()
+                if not (
+                    modifiers & QtCore.Qt.ShiftModifier
+                    or modifiers & QtCore.Qt.AltModifier
+                ):
+                    return
+                pos = plot.getViewBox().mapSceneToView(ev.scenePos())
+                idx = int(np.abs(lags - pos.x()).argmin())
+                lag_value = float(lags[idx])
+                if modifiers & QtCore.Qt.ShiftModifier:
+                    manual_lags["los"] = int(round(lag_value))
+                    if los_marker is not None:
+                        los_marker.set_index(idx)
+                    if los_callback is not None:
+                        los_callback(idx, lag_value)
+                if modifiers & QtCore.Qt.AltModifier:
+                    manual_lags["echo"] = int(round(lag_value))
+                    if echo_marker is not None:
+                        echo_marker.set_index(idx)
+                    if echo_callback is not None:
+                        echo_callback(idx, lag_value)
+
+            plot._xcorr_click_handler = _handle_click
+            scene.sigMouseClicked.connect(_handle_click)
         plot.setTitle(f"Crosscorr. with TX: {title}")
         plot.setLabel("bottom", "Lag")
         plot.setLabel("left", "Magnitude")
