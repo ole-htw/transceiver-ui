@@ -2325,7 +2325,7 @@ class TransceiverUI(tk.Tk):
         log_frame.grid(row=6, column=0, columnspan=2, sticky="nsew")
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
-        self.tx_log = tk.Text(log_frame, height=10, wrap="none")
+        self.tx_log = tk.Text(log_frame, height=10, wrap="word")
         self.tx_log.grid(row=0, column=0, sticky="nsew")
         log_scroll = ttk.Scrollbar(
             log_frame, orient="vertical", command=self.tx_log.yview
