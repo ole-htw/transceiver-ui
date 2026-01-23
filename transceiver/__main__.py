@@ -2553,38 +2553,48 @@ class TransceiverUI(ctk.CTk):
         # ----- Column 2: Transmit -----
         tx_frame, tx_body = _make_section(self, "Transmit")
         tx_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
-        tx_body.columnconfigure(1, weight=1)
+        tx_body.columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(tx_body, text="Args").grid(row=0, column=0, sticky="w")
-        self.tx_args = SuggestEntry(tx_body, "tx_args")
+        tx_fields = ctk.CTkFrame(tx_body, fg_color="transparent")
+        tx_fields.grid(row=0, column=0, sticky="ew")
+        tx_fields.columnconfigure((1, 3), weight=1)
+
+        ctk.CTkLabel(tx_fields, text="Args").grid(row=0, column=0, sticky="w")
+        self.tx_args = SuggestEntry(tx_fields, "tx_args")
         self.tx_args.insert(0, "addr=192.168.10.2")
-        self.tx_args.grid(row=0, column=1, sticky="ew")
+        self.tx_args.grid(row=0, column=1, sticky="ew", padx=(0, 12))
 
-        ctk.CTkLabel(tx_body, text="Rate").grid(row=1, column=0, sticky="w")
-        self.tx_rate = SuggestEntry(tx_body, "tx_rate", textvariable=self.tx_rate_var)
-        self.tx_rate.grid(row=1, column=1, sticky="ew")
+        ctk.CTkLabel(tx_fields, text="Rate").grid(row=0, column=2, sticky="w")
+        self.tx_rate = SuggestEntry(tx_fields, "tx_rate", textvariable=self.tx_rate_var)
+        self.tx_rate.grid(row=0, column=3, sticky="ew")
 
-        ctk.CTkLabel(tx_body, text="Freq").grid(row=2, column=0, sticky="w")
-        self.tx_freq = SuggestEntry(tx_body, "tx_freq")
+        ctk.CTkLabel(tx_fields, text="Freq").grid(row=1, column=0, sticky="w")
+        self.tx_freq = SuggestEntry(tx_fields, "tx_freq")
         self.tx_freq.insert(0, "5.18e9")
-        self.tx_freq.grid(row=2, column=1, sticky="ew")
+        self.tx_freq.grid(row=1, column=1, sticky="ew", padx=(0, 12))
 
-        ctk.CTkLabel(tx_body, text="Gain").grid(row=3, column=0, sticky="w")
-        self.tx_gain = SuggestEntry(tx_body, "tx_gain")
+        ctk.CTkLabel(tx_fields, text="Gain").grid(row=1, column=2, sticky="w")
+        self.tx_gain = SuggestEntry(tx_fields, "tx_gain")
         self.tx_gain.insert(0, "30")
-        self.tx_gain.grid(row=3, column=1, sticky="ew")
+        self.tx_gain.grid(row=1, column=3, sticky="ew")
 
-        ctk.CTkLabel(tx_body, text="File").grid(row=4, column=0, sticky="w")
-        self.tx_file = SuggestEntry(tx_body, "tx_file")
+        ctk.CTkLabel(tx_fields, text="File").grid(row=2, column=0, sticky="w")
+        self.tx_file = SuggestEntry(tx_fields, "tx_file")
         self.tx_file.insert(0, "tx_signal.bin")
-        self.tx_file.grid(row=4, column=1, sticky="ew")
+        self.tx_file.grid(row=2, column=1, columnspan=3, sticky="ew")
         self.tx_file.entry.bind(
             "<FocusOut>",
             lambda _e: self._reset_manual_xcorr_lags("TX-Datei geändert"),
         )
 
+        tx_entry_border = ctk.ThemeManager.theme["CTkEntry"].get("border_color")
+        if isinstance(tx_entry_border, (list, tuple)):
+            tx_entry_border = tx_entry_border[0]
+        for entry in (self.tx_args, self.tx_rate, self.tx_freq, self.tx_gain, self.tx_file):
+            entry.entry.configure(border_width=2, border_color=tx_entry_border)
+
         btn_frame = ctk.CTkFrame(tx_body)
-        btn_frame.grid(row=5, column=0, columnspan=2, pady=5)
+        btn_frame.grid(row=1, column=0, pady=5)
         btn_frame.columnconfigure((0, 1, 2), weight=1)
 
         self.tx_button = ctk.CTkButton(btn_frame, text="Transmit", command=self.transmit)
@@ -2605,7 +2615,7 @@ class TransceiverUI(ctk.CTk):
             fg_color=terminal_container_fg,
             corner_radius=terminal_container_corner,
         )
-        log_frame.grid(row=6, column=0, columnspan=2, sticky="nsew")
+        log_frame.grid(row=2, column=0, sticky="nsew")
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
         self.tx_log = ctk.CTkTextbox(log_frame, height=150, wrap="word")
@@ -2615,7 +2625,7 @@ class TransceiverUI(ctk.CTk):
         )
         log_scroll.grid(row=0, column=1, sticky="ns")
         self.tx_log.configure(yscrollcommand=log_scroll.set)
-        tx_body.rowconfigure(6, weight=1)
+        tx_body.rowconfigure(2, weight=1)
 
         # ----- Column 3: Receive -----
         rx_frame, rx_body = _make_section(self, "Receive")
