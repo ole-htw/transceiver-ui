@@ -377,6 +377,7 @@ class RangeSlider(ctk.CTkFrame):
             width, 0, width, height, fill="red", width=2
         )
         self.active = None
+        self.range_offset = 0.0
         self.canvas.bind("<Button-1>", self._on_press)
         self.canvas.bind("<B1-Motion>", self._on_drag)
         start_var.trace_add("write", self._update_from_vars)
@@ -456,7 +457,14 @@ class RangeSlider(ctk.CTkFrame):
         x = max(0, min(self.width, event.x))
         x1 = self.canvas.coords(self.handle_start)[0]
         x2 = self.canvas.coords(self.handle_end)[0]
-        self.active = "start" if abs(x - x1) <= abs(x - x2) else "end"
+        handle_grab = 6
+        if abs(x - x1) <= handle_grab or abs(x - x2) <= handle_grab:
+            self.active = "start" if abs(x - x1) <= abs(x - x2) else "end"
+        elif x1 <= x <= x2:
+            self.active = "range"
+            self.range_offset = x - x1
+        else:
+            self.active = "start" if abs(x - x1) <= abs(x - x2) else "end"
         self._move(x)
 
     def _on_drag(self, event) -> None:
@@ -466,15 +474,25 @@ class RangeSlider(ctk.CTkFrame):
 
     def _move(self, x: float) -> None:
         x = max(0, min(self.width, x))
-        pct = 100 * x / self.width
-        if self.active == "start":
-            if pct > self.end_var.get():
-                self.end_var.set(pct)
-            self.start_var.set(pct)
+        if self.active == "range":
+            range_width = (self.end_var.get() - self.start_var.get()) / 100 * self.width
+            if range_width < 0:
+                range_width = 0
+            new_x1 = x - self.range_offset
+            new_x1 = max(0, min(self.width - range_width, new_x1))
+            new_x2 = new_x1 + range_width
+            self.start_var.set(100 * new_x1 / self.width)
+            self.end_var.set(100 * new_x2 / self.width)
         else:
-            if pct < self.start_var.get():
+            pct = 100 * x / self.width
+            if self.active == "start":
+                if pct > self.end_var.get():
+                    self.end_var.set(pct)
                 self.start_var.set(pct)
-            self.end_var.set(pct)
+            else:
+                if pct < self.start_var.get():
+                    self.start_var.set(pct)
+                self.end_var.set(pct)
         if self.command:
             self.command(None)
 
