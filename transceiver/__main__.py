@@ -2520,24 +2520,20 @@ class TransceiverUI(tk.Tk):
         frame: ttk.Frame,
         data: np.ndarray,
         fs: float,
-        autocorr_data: np.ndarray | None = None,
         symbol_rate: float | None = None,
     ) -> None:
         modes = ["Signal", "Freq", "InstantFreq", "Autocorr"]
         for idx, mode in enumerate(modes):
-            plot_data = data
-            if mode == "Autocorr" and autocorr_data is not None:
-                plot_data = autocorr_data
             fig = Figure(figsize=(5, 2), dpi=100)
             ax = fig.add_subplot(111)
-            _plot_on_mpl(ax, plot_data, fs, mode, f"TX {mode}")
+            _plot_on_mpl(ax, data, fs, mode, f"TX {mode}")
             canvas = FigureCanvasTkAgg(fig, master=frame)
             canvas.draw()
             widget = canvas.get_tk_widget()
             widget.grid(row=idx, column=0, sticky="nsew", pady=2)
             widget.bind(
                 "<Button-1>",
-                lambda _e, m=mode, d=plot_data, s=fs: self._show_fullscreen(
+                lambda _e, m=mode, d=data, s=fs: self._show_fullscreen(
                     d, s, m, f"TX {m}"
                 ),
             )
@@ -2565,8 +2561,6 @@ class TransceiverUI(tk.Tk):
         zeros_symbol_rate: float | None = None,
     ) -> None:
         """Render preview plots below the generation parameters."""
-        base_unfiltered = data
-        base_filtered = filtered_data if filtered_data is not None else data
         if zeros_data is not None:
             self.latest_data = zeros_data
             self.latest_fs = zeros_fs if zeros_fs is not None else fs
@@ -2588,31 +2582,24 @@ class TransceiverUI(tk.Tk):
             tab_frame = ttk.Frame(self.gen_plots_frame)
             tab_frame.grid(row=0, column=0, sticky="nsew")
             tab_frame.columnconfigure(0, weight=1)
-            self._render_gen_tab(
-                tab_frame,
-                data,
-                fs,
-                autocorr_data=base_unfiltered,
-                symbol_rate=symbol_rate,
-            )
+            self._render_gen_tab(tab_frame, data, fs, symbol_rate=symbol_rate)
             return
 
         notebook = ttk.Notebook(self.gen_plots_frame)
         notebook.grid(row=0, column=0, sticky="nsew")
         self.gen_plots_frame.columnconfigure(0, weight=1)
 
-        tabs: list[tuple[str, np.ndarray, float, float | None, np.ndarray]] = []
+        tabs: list[tuple[str, np.ndarray, float, float | None]] = []
         if filtered_data is None:
-            tabs.append(("Signal", data, fs, symbol_rate, base_unfiltered))
+            tabs.append(("Signal", data, fs, symbol_rate))
         else:
-            tabs.append(("Ungefiltert", data, fs, symbol_rate, base_unfiltered))
+            tabs.append(("Ungefiltert", data, fs, symbol_rate))
             tabs.append(
                 (
                     "Gefiltert",
                     filtered_data,
                     filtered_fs if filtered_fs is not None else fs,
                     filtered_symbol_rate,
-                    base_filtered,
                 )
             )
 
@@ -2626,7 +2613,6 @@ class TransceiverUI(tk.Tk):
                     repeated_data,
                     repeated_fs if repeated_fs is not None else fs,
                     repeated_symbol_rate or filtered_symbol_rate or symbol_rate,
-                    base_filtered if filtered_data is not None else base_unfiltered,
                 )
             )
         if zeros_data is not None:
@@ -2646,21 +2632,14 @@ class TransceiverUI(tk.Tk):
                     or repeated_symbol_rate
                     or filtered_symbol_rate
                     or symbol_rate,
-                    base_filtered if filtered_data is not None else base_unfiltered,
                 )
             )
 
-        for label, tab_data, tab_fs, tab_symbol_rate, autocorr_data in tabs:
+        for label, tab_data, tab_fs, tab_symbol_rate in tabs:
             tab = ttk.Frame(notebook)
             tab.columnconfigure(0, weight=1)
             notebook.add(tab, text=label)
-            self._render_gen_tab(
-                tab,
-                tab_data,
-                tab_fs,
-                autocorr_data=autocorr_data,
-                symbol_rate=tab_symbol_rate,
-            )
+            self._render_gen_tab(tab, tab_data, tab_fs, symbol_rate=tab_symbol_rate)
 
         if tabs:
             notebook.select(len(tabs) - 1)
