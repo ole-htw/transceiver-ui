@@ -490,7 +490,10 @@ class RangeSlider(ctk.CTkFrame):
         self.enabled = True
         self.width = width
         self.height = height
-        self.signal_color = "#e3e7ff"
+        self.signal_color = "#9aa0a6"
+        self.region_color = "#6c7eb8"
+        self.handle_color = "#d18282"
+        self.region_radius = 6
         self.canvas = tk.Canvas(
             self,
             width=width,
@@ -502,14 +505,14 @@ class RangeSlider(ctk.CTkFrame):
         self.columnconfigure(0, weight=1)
         self.canvas.bind("<Configure>", self._on_resize)
         self.data = np.array([], dtype=np.float32)
-        self.region = self.canvas.create_rectangle(
-            0, 0, 0, height, fill="#4b5fbf", outline=""
+        self.region = self._create_rounded_rect(
+            0, 0, 0, height, radius=self.region_radius, fill=self.region_color, outline=""
         )
         self.handle_start = self.canvas.create_line(
-            0, 0, 0, height, fill="red", width=2
+            0, 0, 0, height, fill=self.handle_color, width=2
         )
         self.handle_end = self.canvas.create_line(
-            width, 0, width, height, fill="red", width=2
+            width, 0, width, height, fill=self.handle_color, width=2
         )
         self.active = None
         self.range_offset = 0.0
@@ -545,6 +548,45 @@ class RangeSlider(ctk.CTkFrame):
             return color[0] if ctk.get_appearance_mode() == "Light" else color[1]
         return color
 
+    def _create_rounded_rect(
+        self, x1: float, y1: float, x2: float, y2: float, radius: float, **kwargs
+    ):
+        points = self._rounded_rect_points(x1, y1, x2, y2, radius)
+        return self.canvas.create_polygon(points, smooth=True, **kwargs)
+
+    def _rounded_rect_points(
+        self, x1: float, y1: float, x2: float, y2: float, radius: float
+    ) -> list[float]:
+        width = max(0.0, x2 - x1)
+        height = max(0.0, y2 - y1)
+        r = max(0.0, min(radius, width / 2, height / 2))
+        return [
+            x1 + r,
+            y1,
+            x2 - r,
+            y1,
+            x2,
+            y1,
+            x2,
+            y1 + r,
+            x2,
+            y2 - r,
+            x2,
+            y2,
+            x2 - r,
+            y2,
+            x1 + r,
+            y2,
+            x1,
+            y2,
+            x1,
+            y2 - r,
+            x1,
+            y1 + r,
+            x1,
+            y1,
+        ]
+
     def _draw_signal(self) -> None:
         self.canvas.delete("signal")
         if self.data.size:
@@ -574,9 +616,12 @@ class RangeSlider(ctk.CTkFrame):
             end = start
         x1 = start / 100 * self.width
         x2 = end / 100 * self.width
+        radius = min(self.region_radius, (x2 - x1) / 2, self.height / 2)
         self.canvas.coords(self.handle_start, x1, 0, x1, self.height)
         self.canvas.coords(self.handle_end, x2, 0, x2, self.height)
-        self.canvas.coords(self.region, x1, 0, x2, self.height)
+        self.canvas.coords(
+            self.region, *self._rounded_rect_points(x1, 0, x2, self.height, radius)
+        )
 
     def _on_resize(self, event) -> None:
         if event.width == self.width and event.height == self.height:
@@ -667,7 +712,7 @@ class SignalViewer(ctk.CTkToplevel):
 
         trim_frame = ctk.CTkFrame(self)
         trim_frame.grid(row=0, column=0, sticky="ew")
-        trim_frame.columnconfigure(1, weight=1)
+        trim_frame.columnconfigure(2, weight=1)
 
         ctk.CTkCheckBox(
             trim_frame,
@@ -682,20 +727,20 @@ class SignalViewer(ctk.CTkToplevel):
             self.trim_end,
             command=self._on_trim_change,
         )
-        self.range_slider.grid(row=0, column=1, sticky="ew", padx=2)
+        self.range_slider.grid(row=0, column=2, sticky="ew", padx=2)
 
         self.apply_trim_btn = ctk.CTkButton(
             trim_frame,
             text="Apply",
             command=self.update_trim,
         )
-        self.apply_trim_btn.grid(row=0, column=2, padx=2)
+        self.apply_trim_btn.grid(row=0, column=4, padx=2)
         self.apply_trim_btn.configure(state="disabled")
 
         self.trim_start_label = ctk.CTkLabel(trim_frame, width=50, text="")
-        self.trim_start_label.grid(row=1, column=1, sticky="e")
+        self.trim_start_label.grid(row=0, column=1, sticky="w")
         self.trim_end_label = ctk.CTkLabel(trim_frame, width=50, text="")
-        self.trim_end_label.grid(row=1, column=2, sticky="e")
+        self.trim_end_label.grid(row=0, column=3, sticky="e")
 
         btn_frame = ctk.CTkFrame(self)
         btn_frame.grid(row=1, column=0, pady=5)
@@ -931,7 +976,7 @@ class SignalColumn(ctk.CTkFrame):
 
         trim_frame = ctk.CTkFrame(self)
         trim_frame.grid(row=1, column=0, sticky="ew")
-        trim_frame.columnconfigure(1, weight=1)
+        trim_frame.columnconfigure(2, weight=1)
 
         ctk.CTkCheckBox(
             trim_frame,
@@ -946,20 +991,20 @@ class SignalColumn(ctk.CTkFrame):
             self.trim_end,
             command=self._on_trim_change,
         )
-        self.range_slider.grid(row=0, column=1, sticky="ew", padx=2)
+        self.range_slider.grid(row=0, column=2, sticky="ew", padx=2)
 
         self.apply_trim_btn = ctk.CTkButton(
             trim_frame,
             text="Apply",
             command=self.update_trim,
         )
-        self.apply_trim_btn.grid(row=0, column=2, padx=2)
+        self.apply_trim_btn.grid(row=0, column=4, padx=2)
         self.apply_trim_btn.configure(state="disabled")
 
         self.trim_start_label = ctk.CTkLabel(trim_frame, width=50, text="")
-        self.trim_start_label.grid(row=1, column=1, sticky="e")
+        self.trim_start_label.grid(row=0, column=1, sticky="w")
         self.trim_end_label = ctk.CTkLabel(trim_frame, width=50, text="")
-        self.trim_end_label.grid(row=1, column=2, sticky="e")
+        self.trim_end_label.grid(row=0, column=3, sticky="e")
 
         btn_frame = ctk.CTkFrame(self)
         btn_frame.grid(row=2, column=0, pady=5)
@@ -2924,7 +2969,7 @@ class TransceiverUI(ctk.CTk):
             toggle_command=self._on_trim_change,
         )
         trim_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 6))
-        trim_body.columnconfigure(0, weight=1)
+        trim_body.columnconfigure(1, weight=1)
 
         self.range_slider = RangeSlider(
             trim_body,
@@ -2932,20 +2977,20 @@ class TransceiverUI(ctk.CTk):
             self.trim_end,
             command=self._on_trim_change,
         )
-        self.range_slider.grid(row=1, column=0, columnspan=2, sticky="ew", padx=2)
+        self.range_slider.grid(row=1, column=1, sticky="ew", padx=2)
 
         self.apply_trim_btn = ctk.CTkButton(
             trim_body,
             text="Apply",
             command=self.update_trim,
         )
-        self.apply_trim_btn.grid(row=1, column=2, padx=2)
+        self.apply_trim_btn.grid(row=1, column=3, padx=2)
         self.apply_trim_btn.configure(state="disabled")
 
         self.trim_start_label = ctk.CTkLabel(trim_body, width=50, text="")
-        self.trim_start_label.grid(row=2, column=1, sticky="e")
+        self.trim_start_label.grid(row=1, column=0, sticky="w")
         self.trim_end_label = ctk.CTkLabel(trim_body, width=50, text="")
-        self.trim_end_label.grid(row=2, column=2, sticky="e")
+        self.trim_end_label.grid(row=1, column=2, sticky="e")
 
         self.rx_path_cancel_enable = tk.BooleanVar(value=False)
         (
