@@ -2954,7 +2954,12 @@ class TransceiverUI(ctk.CTk):
         log_frame.grid(row=3, column=0, sticky="nsew")
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
-        self.tx_log = ctk.CTkTextbox(log_frame, height=150, wrap="word")
+        self.tx_log = ctk.CTkTextbox(
+            log_frame,
+            height=150,
+            wrap="word",
+            activate_scrollbars=False,
+        )
         self.tx_log.grid(row=0, column=0, sticky="nsew")
         self.tx_log_scroll = ctk.CTkScrollbar(
             log_frame, orientation="vertical", command=self.tx_log.yview
