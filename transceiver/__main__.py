@@ -3068,7 +3068,8 @@ class TransceiverUI(ctk.CTk):
             toggle_command=self._on_trim_change,
         )
         trim_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 6))
-        trim_body.columnconfigure(1, weight=1)
+        trim_body.grid_configure(padx=8, pady=4)
+        trim_body.columnconfigure(2, weight=1)
 
         self.range_slider = RangeSlider(
             trim_body,
@@ -3076,20 +3077,20 @@ class TransceiverUI(ctk.CTk):
             self.trim_end,
             command=self._on_trim_change,
         )
-        self.range_slider.grid(row=1, column=1, sticky="ew", padx=2)
+        self.range_slider.grid(row=0, column=2, sticky="ew", padx=4)
 
         self.apply_trim_btn = ctk.CTkButton(
             trim_body,
             text="Apply",
             command=self.update_trim,
         )
-        self.apply_trim_btn.grid(row=1, column=3, padx=2)
+        self.apply_trim_btn.grid(row=0, column=4, padx=2)
         self.apply_trim_btn.configure(state="disabled")
 
         self.trim_start_label = ctk.CTkLabel(trim_body, width=50, text="")
-        self.trim_start_label.grid(row=1, column=0, sticky="w")
+        self.trim_start_label.grid(row=0, column=1, sticky="w", padx=(0, 4))
         self.trim_end_label = ctk.CTkLabel(trim_body, width=50, text="")
-        self.trim_end_label.grid(row=1, column=2, sticky="e")
+        self.trim_end_label.grid(row=0, column=3, sticky="e", padx=(4, 2))
 
         self.rx_path_cancel_enable = tk.BooleanVar(value=False)
         (
