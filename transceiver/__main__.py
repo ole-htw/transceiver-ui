@@ -3304,15 +3304,25 @@ class TransceiverUI(ctk.CTk):
         stats_rows = _format_stats_rows(stats, include_bw_extras=False)
         stats_frame = ctk.CTkFrame(frame, fg_color="transparent")
         stats_frame.grid(row=len(modes), column=0, sticky="ew", pady=2)
-        stats_frame.columnconfigure((1, 3), weight=1)
+        stats_frame.columnconfigure((0, 1, 2, 3), weight=1)
         for idx, (label, value) in enumerate(stats_rows):
             row = idx // 2
             col = (idx % 2) * 2
-            ctk.CTkLabel(stats_frame, justify="left", anchor="w", text=f"{label}:").grid(
-                row=row, column=col, sticky="w", padx=(0, 6)
+            ctk.CTkLabel(
+                stats_frame,
+                justify="center",
+                anchor="center",
+                text=f"{label}:",
+            ).grid(
+                row=row, column=col, sticky="ew", padx=6
             )
-            ctk.CTkLabel(stats_frame, justify="left", anchor="w", text=value).grid(
-                row=row, column=col + 1, sticky="w", padx=(0, 12)
+            ctk.CTkLabel(
+                stats_frame,
+                justify="center",
+                anchor="center",
+                text=value,
+            ).grid(
+                row=row, column=col + 1, sticky="ew", padx=6
             )
 
     def _display_gen_plots(
@@ -3658,24 +3668,24 @@ class TransceiverUI(ctk.CTk):
             )
             stats_frame = ctk.CTkFrame(target_frame, fg_color="transparent")
             stats_frame.grid(row=len(modes), column=0, sticky="ew", pady=2)
-            stats_frame.columnconfigure((1, 3), weight=1)
+            stats_frame.columnconfigure((0, 1, 2, 3), weight=1)
             value_labels: list[ctk.CTkLabel] = []
             for idx, (label, value) in enumerate(stats_rows):
                 row = idx // 2
                 col = (idx % 2) * 2
                 ctk.CTkLabel(
                     stats_frame,
-                    justify="left",
-                    anchor="w",
+                    justify="center",
+                    anchor="center",
                     text=f"{label}:",
-                ).grid(row=row, column=col, sticky="w", padx=(0, 6))
+                ).grid(row=row, column=col, sticky="ew", padx=6)
                 value_label = ctk.CTkLabel(
                     stats_frame,
-                    justify="left",
-                    anchor="w",
+                    justify="center",
+                    anchor="center",
                     text=value,
                 )
-                value_label.grid(row=row, column=col + 1, sticky="w", padx=(0, 12))
+                value_label.grid(row=row, column=col + 1, sticky="ew", padx=6)
                 value_labels.append(value_label)
             self.rx_stats_labels.append(value_labels)
             if self.rx_view.get() == "AoA (ESPRIT)":
