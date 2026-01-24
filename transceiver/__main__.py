@@ -3489,15 +3489,16 @@ class TransceiverUI(ctk.CTk):
             child.destroy()
         self.gen_canvases.clear()
 
+        plot_top_pad = (8, 0)
         if filtered_data is None and repeated_data is None and zeros_data is None:
             tab_frame = ctk.CTkFrame(self.gen_plots_frame)
-            tab_frame.grid(row=0, column=0, sticky="nsew")
+            tab_frame.grid(row=0, column=0, sticky="nsew", pady=plot_top_pad)
             tab_frame.columnconfigure(0, weight=1)
             self._render_gen_tab(tab_frame, data, fs, symbol_rate=symbol_rate)
             return
 
         notebook = ctk.CTkTabview(self.gen_plots_frame)
-        notebook.grid(row=0, column=0, sticky="nsew")
+        notebook.grid(row=0, column=0, sticky="nsew", pady=plot_top_pad)
         self.gen_plots_frame.columnconfigure(0, weight=1)
 
         corr_reference = filtered_data if filtered_data is not None else data
