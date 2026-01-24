@@ -2,7 +2,7 @@
 
 PLOT_COLORS: dict[str, str] = {
     "real": "#0288D1",
-    "imag": "#26C6DA",
+    "imag": "#00838F",
     "freq": "#388E3C",
     "autocorr": "#7B1FA2",
     "crosscorr": "#1976D2",
