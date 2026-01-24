@@ -3196,17 +3196,6 @@ class TransceiverUI(ctk.CTk):
             data, ref_data, manual_lags=self.manual_xcorr_lags
         )
 
-    def _path_cancellation_note(
-        self, info: dict[str, object], ref_data: np.ndarray
-    ) -> str | None:
-        if not self.rx_path_cancel_enable.get():
-            return None
-        if ref_data.size == 0:
-            return "LOS entfernt: nein (keine TX-Daten)"
-        if info.get("applied"):
-            return "LOS entfernt: ja"
-        return "LOS entfernt: nein"
-
     def _update_path_cancellation_status(self) -> None:
         """Placeholder to keep path cancellation controls in sync."""
         if hasattr(self, "rx_path_cancel_check"):
@@ -3569,11 +3558,9 @@ class TransceiverUI(ctk.CTk):
         ):
             echo_aoa_text = "Echo AoA: TX-Daten erforderlich"
 
-        cancel_note = None
         cancel_info: dict[str, object] | None = None
         if self.rx_path_cancel_enable.get():
             data, cancel_info = self._apply_path_cancellation(data, ref_data)
-            cancel_note = self._path_cancellation_note(cancel_info, ref_data)
             if cancel_info is not None:
                 self._log_path_cancellation(cancel_info, "RX")
             self._last_path_cancel_info = cancel_info
@@ -3601,7 +3588,6 @@ class TransceiverUI(ctk.CTk):
             plot_ref_label: str,
             aoa_plot_time: np.ndarray | None,
             aoa_plot_series: np.ndarray | None,
-            path_note: str | None,
             path_cancel_info: dict[str, object] | None,
             crosscorr_compare: np.ndarray | None,
         ) -> None:
@@ -3670,8 +3656,6 @@ class TransceiverUI(ctk.CTk):
                 include_bw_nyq=False,
                 include_echo=False,
             )
-            if path_note:
-                text = f"{text}\n{path_note}"
             stats_label = ctk.CTkLabel(target_frame, justify="left", anchor="w", text="")
             stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
             stats_label.configure(text=text)
@@ -3718,7 +3702,6 @@ class TransceiverUI(ctk.CTk):
             ref_label,
             aoa_time,
             aoa_series,
-            cancel_note,
             cancel_info if cancel_info and cancel_info.get("applied") else None,
             data_uncanceled if self.rx_path_cancel_enable.get() else None,
         )
