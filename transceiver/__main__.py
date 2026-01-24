@@ -3144,7 +3144,9 @@ class TransceiverUI(ctk.CTk):
             rx_scroll_container, orientation="vertical", command=self.rx_canvas.yview
         )
         self.rx_vscroll.grid(row=0, column=1, sticky="ns")
-        self.rx_canvas.configure(yscrollcommand=self.rx_vscroll.set)
+        self.rx_vscroll.grid_remove()
+        self.rx_canvas.configure(yscrollcommand=None)
+        self._rx_scroll_active = False
         self.rx_canvas.bind("<Enter>", self._bind_rx_mousewheel)
         self.rx_canvas.bind("<Leave>", self._unbind_rx_mousewheel)
 
@@ -3159,14 +3161,16 @@ class TransceiverUI(ctk.CTk):
         )
         self.rx_plots_frame.bind(
             "<Configure>",
-            lambda _e: self.rx_canvas.configure(
-                scrollregion=self.rx_canvas.bbox("all")
+            lambda _e: (
+                self.rx_canvas.configure(scrollregion=self.rx_canvas.bbox("all")),
+                self._update_rx_scrollbar(),
             ),
         )
         self.rx_canvas.bind(
             "<Configure>",
-            lambda _e: self._center_canvas_window(
-                self.rx_canvas, self.rx_plots_window
+            lambda _e: (
+                self._center_canvas_window(self.rx_canvas, self.rx_plots_window),
+                self._update_rx_scrollbar(),
             ),
         )
         rx_body.rowconfigure(6, weight=1)
@@ -4014,6 +4018,32 @@ class TransceiverUI(ctk.CTk):
             self.gen_canvas.yview_moveto(0)
             self._gen_scroll_active = False
 
+    def _update_rx_scrollbar(self) -> None:
+        if not hasattr(self, "rx_canvas"):
+            return
+        bbox = self.rx_canvas.bbox("all")
+        if not bbox:
+            if self.rx_vscroll.winfo_ismapped():
+                self.rx_vscroll.grid_remove()
+            self.rx_canvas.configure(yscrollcommand=None)
+            self.rx_canvas.yview_moveto(0)
+            self._rx_scroll_active = False
+            return
+        content_height = bbox[3] - bbox[1]
+        canvas_height = self.rx_canvas.winfo_height()
+        needs_scroll = content_height > (canvas_height + 1)
+        if needs_scroll:
+            if not self.rx_vscroll.winfo_ismapped():
+                self.rx_vscroll.grid(row=0, column=1, sticky="ns")
+            self.rx_canvas.configure(yscrollcommand=self.rx_vscroll.set)
+            self._rx_scroll_active = True
+        else:
+            if self.rx_vscroll.winfo_ismapped():
+                self.rx_vscroll.grid_remove()
+            self.rx_canvas.configure(yscrollcommand=None)
+            self.rx_canvas.yview_moveto(0)
+            self._rx_scroll_active = False
+
     # ----- Mousewheel helpers -----
     def _bind_gen_mousewheel(self, _event) -> None:
         self.gen_canvas.bind_all("<MouseWheel>", self._on_gen_mousewheel)
@@ -4049,6 +4079,8 @@ class TransceiverUI(ctk.CTk):
         self.rx_canvas.unbind_all("<Button-5>")
 
     def _on_rx_mousewheel(self, event) -> None:
+        if not self._rx_scroll_active:
+            return
         delta = 0
         if hasattr(event, "delta") and event.delta:
             delta = -1 * int(event.delta / 120)
