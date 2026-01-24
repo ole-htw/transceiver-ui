@@ -3651,15 +3651,33 @@ class TransceiverUI(ctk.CTk):
                 xcorr_reduce=True,
                 path_cancel_info=path_cancel_info,
             )
-            text = _format_stats_text(
+            stats_rows = _format_stats_rows(
                 stats,
                 include_bw_nyq=False,
                 include_echo=False,
             )
-            stats_label = ctk.CTkLabel(target_frame, justify="left", anchor="w", text="")
-            stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
-            stats_label.configure(text=text)
-            self.rx_stats_labels.append(stats_label)
+            stats_frame = ctk.CTkFrame(target_frame, fg_color="transparent")
+            stats_frame.grid(row=len(modes), column=0, sticky="ew", pady=2)
+            stats_frame.columnconfigure((1, 3), weight=1)
+            value_labels: list[ctk.CTkLabel] = []
+            for idx, (label, value) in enumerate(stats_rows):
+                row = idx // 2
+                col = (idx % 2) * 2
+                ctk.CTkLabel(
+                    stats_frame,
+                    justify="left",
+                    anchor="w",
+                    text=f"{label}:",
+                ).grid(row=row, column=col, sticky="w", padx=(0, 6))
+                value_label = ctk.CTkLabel(
+                    stats_frame,
+                    justify="left",
+                    anchor="w",
+                    text=value,
+                )
+                value_label.grid(row=row, column=col + 1, sticky="w", padx=(0, 12))
+                value_labels.append(value_label)
+            self.rx_stats_labels.append(value_labels)
             if self.rx_view.get() == "AoA (ESPRIT)":
                 fig = Figure(figsize=(5, 2), dpi=100)
                 ax = fig.add_subplot(111)
@@ -4024,12 +4042,14 @@ class TransceiverUI(ctk.CTk):
         self._refresh_rx_stats()
 
     def _refresh_rx_stats(self) -> None:
-        labels = []
+        label_groups = []
         if hasattr(self, "rx_stats_labels"):
-            labels = [label for label in self.rx_stats_labels if label is not None]
+            label_groups = [
+                label for label in self.rx_stats_labels if label is not None
+            ]
         elif hasattr(self, "rx_stats_label"):
-            labels = [self.rx_stats_label]
-        if not labels:
+            label_groups = [self.rx_stats_label]
+        if not label_groups:
             return
         if not hasattr(self, "latest_data") or self.latest_data is None:
             return
@@ -4047,13 +4067,21 @@ class TransceiverUI(ctk.CTk):
             xcorr_reduce=True,
             path_cancel_info=path_cancel_info,
         )
-        text = _format_stats_text(
+        stats_rows = _format_stats_rows(
             stats,
             include_bw_nyq=False,
             include_echo=False,
         )
-        for label in labels:
-            label.configure(text=text)
+        text = "\n".join(f"{label}: {value}" for label, value in stats_rows)
+        for label_group in label_groups:
+            if isinstance(label_group, (list, tuple)):
+                for idx, value_label in enumerate(label_group):
+                    if idx < len(stats_rows):
+                        value_label.configure(text=stats_rows[idx][1])
+                    else:
+                        value_label.configure(text="")
+            else:
+                label_group.configure(text=text)
 
     def _start_manual_xcorr_polling(self, output_path: str | None) -> None:
         if not output_path:
