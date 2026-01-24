@@ -2484,6 +2484,7 @@ class TransceiverUI(ctk.CTk):
         gen_body.columnconfigure(0, weight=0)
         gen_body.columnconfigure(1, weight=1)
         gen_body.columnconfigure(2, weight=1)
+        gen_body.grid_anchor("n")
         label_padx = (6, 8)
         self._label_padx = label_padx
 
@@ -2847,6 +2848,7 @@ class TransceiverUI(ctk.CTk):
         rx_frame, rx_body = _make_section(self, "Receive")
         rx_frame.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
         rx_body.columnconfigure(1, weight=1)
+        rx_body.grid_anchor("n")
 
         rx_params_frame, rx_params_body, _ = _make_side_bordered_group(
             rx_body,
@@ -2908,18 +2910,21 @@ class TransceiverUI(ctk.CTk):
         )
         rx_ant_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 6))
 
-        rx_ant_content = ctk.CTkFrame(rx_ant_body, fg_color="transparent")
-        rx_ant_content.grid(row=0, column=1, columnspan=2, sticky="nsew")
-        rx_ant_content.columnconfigure(1, weight=1)
+        rx_ant_left = ctk.CTkFrame(rx_ant_body, fg_color="transparent")
+        rx_ant_left.grid(row=0, column=1, sticky="nsew")
+        rx_ant_left.columnconfigure(1, weight=1)
+        rx_ant_right = ctk.CTkFrame(rx_ant_body, fg_color="transparent")
+        rx_ant_right.grid(row=0, column=2, sticky="nsew", padx=(12, 0))
+        rx_ant_right.columnconfigure(1, weight=1)
 
         self.rx_channel_view_label = ctk.CTkLabel(
-            rx_ant_content, text="RX Ansicht", anchor="e"
+            rx_ant_left, text="RX Ansicht", anchor="e"
         )
         self.rx_channel_view_label.grid(
             row=0, column=0, sticky="e", padx=label_padx
         )
         self.rx_channel_view_box = ctk.CTkComboBox(
-            rx_ant_content,
+            rx_ant_left,
             variable=self.rx_channel_view,
             values=["Kanal 1", "Kanal 2", "Differenz"],
             width=140,
@@ -2928,33 +2933,40 @@ class TransceiverUI(ctk.CTk):
         self.rx_channel_view_box.grid(row=0, column=1, sticky="w", padx=(0, 8))
         self.rx_channel_view_box.configure(state="disabled")
 
-        ctk.CTkLabel(rx_ant_content, text="Antennenabstand [m]", anchor="e").grid(
+        ctk.CTkLabel(rx_ant_left, text="Antennenabstand [m]", anchor="e").grid(
             row=1, column=0, sticky="e", padx=label_padx
         )
-        self.rx_ant_spacing = SuggestEntry(rx_ant_content, "rx_ant_spacing")
+        self.rx_ant_spacing = SuggestEntry(rx_ant_left, "rx_ant_spacing")
         self.rx_ant_spacing.insert(0, "0.03")
         self.rx_ant_spacing.grid(row=1, column=1, sticky="ew", padx=(0, 8))
 
-        ctk.CTkLabel(rx_ant_content, text="Wellenlänge [m]", anchor="e").grid(
-            row=2, column=0, sticky="e", padx=label_padx
+        ctk.CTkLabel(rx_ant_right, text="Wellenlänge [m]", anchor="e").grid(
+            row=0, column=0, sticky="e", padx=label_padx
         )
-        self.rx_wavelength = SuggestEntry(rx_ant_content, "rx_wavelength")
+        self.rx_wavelength = SuggestEntry(rx_ant_right, "rx_wavelength")
         self.rx_wavelength.insert(0, "3e8/5.18e9")
-        self.rx_wavelength.grid(row=2, column=1, sticky="ew", padx=(0, 8))
+        self.rx_wavelength.grid(row=0, column=1, sticky="ew", padx=(0, 8))
 
-        self.rx_aoa_label = ctk.CTkLabel(rx_ant_content, text="AoA (ESPRIT): --")
-        self.rx_aoa_label.grid(row=3, column=0, sticky="w", pady=(4, 0))
-        self.rx_echo_aoa_label = ctk.CTkLabel(rx_ant_content, text="Echo AoA: --")
-        self.rx_echo_aoa_label.grid(row=3, column=1, sticky="w", pady=(4, 0))
+        self.rx_aoa_label = ctk.CTkLabel(rx_ant_left, text="AoA (ESPRIT): --")
+        self.rx_aoa_label.grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self.rx_echo_aoa_label = ctk.CTkLabel(rx_ant_right, text="Echo AoA: --")
+        self.rx_echo_aoa_label.grid(row=2, column=0, sticky="w", pady=(4, 0))
 
         rx_output_frame, rx_output_body, _ = _make_side_bordered_group(
             rx_body,
             "Output",
         )
         rx_output_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 6))
-        self.rx_file = SuggestEntry(rx_output_body, "rx_file")
+        rx_output_left = ctk.CTkFrame(rx_output_body, fg_color="transparent")
+        rx_output_left.grid(row=0, column=1, sticky="nsew")
+        rx_output_left.columnconfigure(1, weight=1)
+        rx_output_right = ctk.CTkFrame(rx_output_body, fg_color="transparent")
+        rx_output_right.grid(row=0, column=2, sticky="nsew", padx=(12, 0))
+        rx_output_right.columnconfigure(1, weight=1)
+
+        self.rx_file = SuggestEntry(rx_output_left, "rx_file")
         self.rx_file.insert(0, "rx_signal.bin")
-        self.rx_file.grid(row=0, column=1, columnspan=2, sticky="ew")
+        self.rx_file.grid(row=0, column=1, sticky="ew")
 
         # --- Trim controls -------------------------------------------------
         self.trim_var = tk.BooleanVar(value=False)
