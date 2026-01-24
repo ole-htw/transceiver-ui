@@ -2813,7 +2813,7 @@ class TransceiverUI(ctk.CTk):
 
         self.gen_plots_frame = ctk.CTkFrame(
             self.gen_canvas,
-            fg_color=terminal_container_fg,
+            fg_color="transparent",
             corner_radius=terminal_container_corner,
         )
         self.gen_plots_frame.columnconfigure(0, weight=1)
