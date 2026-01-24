@@ -3036,15 +3036,15 @@ class TransceiverUI(ctk.CTk):
         )
         self.rx_echo_aoa_label = ctk.CTkLabel(rx_ant_content, text="Echo AoA: --")
         self.rx_echo_aoa_label.grid(
-            row=1, column=2, sticky="w", padx=label_padx, pady=(4, 0)
+            row=1, column=1, sticky="w", padx=label_padx, pady=(4, 0)
         )
 
         ctk.CTkLabel(rx_ant_content, text="Antennenabstand [m]", anchor="e").grid(
-            row=2, column=2, sticky="e", padx=label_padx
+            row=1, column=2, sticky="e", padx=label_padx, pady=(4, 0)
         )
         self.rx_ant_spacing = SuggestEntry(rx_ant_content, "rx_ant_spacing")
         self.rx_ant_spacing.insert(0, "0.03")
-        self.rx_ant_spacing.grid(row=2, column=3, sticky="ew", padx=(0, 8))
+        self.rx_ant_spacing.grid(row=1, column=3, sticky="ew", padx=(0, 8), pady=(4, 0))
 
         rx_output_frame, rx_output_body, _ = _make_side_bordered_group(
             rx_body,
