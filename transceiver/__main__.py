@@ -3037,12 +3037,14 @@ class TransceiverUI(ctk.CTk):
         self.rx_wavelength.insert(0, "3e8/5.18e9")
         self.rx_wavelength.grid(row=1, column=3, sticky="ew", padx=(0, 8))
 
-        self.rx_aoa_label = ctk.CTkLabel(rx_ant_content, text="AoA (ESPRIT): --")
+        self.rx_aoa_label = ctk.CTkLabel(rx_ant_body, text="AoA (ESPRIT): --")
         self.rx_aoa_label.grid(
-            row=2, column=0, columnspan=4, sticky="w", pady=(4, 0)
+            row=1, column=0, sticky="w", padx=(6, 12), pady=(4, 0)
         )
-        self.rx_echo_aoa_label = ctk.CTkLabel(rx_ant_content, text="Echo AoA: --")
-        self.rx_echo_aoa_label.grid(row=3, column=0, columnspan=4, sticky="w")
+        self.rx_echo_aoa_label = ctk.CTkLabel(rx_ant_body, text="Echo AoA: --")
+        self.rx_echo_aoa_label.grid(
+            row=2, column=0, sticky="w", padx=(6, 12)
+        )
 
         rx_output_frame, rx_output_body, _ = _make_side_bordered_group(
             rx_body,
