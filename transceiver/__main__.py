@@ -1605,6 +1605,18 @@ def _format_hz(val: float) -> str:
     return f"{val*1e3:.2f} mHz"
 
 
+def _format_amp(val: float) -> str:
+    """Return *val* in a compact, non-zero amplitude format."""
+    if not math.isfinite(val):
+        return "nan"
+    abs_v = abs(val)
+    if abs_v >= 1.0:
+        return f"{val:.1f}"
+    if abs_v >= 1e-6:
+        return f"{val:.6f}"
+    return f"{val:.2e}"
+
+
 def _try_parse_number_expr(text: str, default: float = 0.0) -> float:
     try:
         return parse_number_expr(text)
@@ -1813,7 +1825,7 @@ def _format_stats_rows(
     rows = [
         ("fmin", _format_hz(stats["f_low"])),
         ("fmax", _format_hz(stats["f_high"])),
-        ("max Amp", f"{stats['amp']:.1f}"),
+        ("max Amp", _format_amp(stats["amp"])),
         ("BW (3dB)", _format_hz(stats["bw"])),
     ]
     if include_bw_extras:
