@@ -1787,13 +1787,6 @@ def _calc_stats(
         if symbol_rate is not None and symbol_rate > 0:
             stats["bw_rs"] = stats["bw"] / symbol_rate
 
-    if path_cancel_info is not None:
-        if (
-            path_cancel_info.get("k0") is not None
-            and path_cancel_info.get("k1") is not None
-        ):
-            stats["echo_delay"] = path_cancel_info.get("delta_k")
-        return stats
     if ref_data is not None and ref_data.size and data.size:
         xcorr_data = data
         xcorr_ref = ref_data
@@ -1810,6 +1803,12 @@ def _calc_stats(
             lags, los_idx, echo_idx, manual_lags
         )
         stats["echo_delay"] = _echo_delay_samples(lags, los_idx, echo_idx)
+    elif path_cancel_info is not None:
+        if (
+            path_cancel_info.get("k0") is not None
+            and path_cancel_info.get("k1") is not None
+        ):
+            stats["echo_delay"] = path_cancel_info.get("delta_k")
 
     return stats
 
