@@ -2957,11 +2957,14 @@ class TransceiverUI(ctk.CTk):
         log_frame.rowconfigure(0, weight=1)
         self.tx_log = ctk.CTkTextbox(log_frame, height=150, wrap="word")
         self.tx_log.grid(row=0, column=0, sticky="nsew")
-        log_scroll = ctk.CTkScrollbar(
+        self.tx_log_scroll = ctk.CTkScrollbar(
             log_frame, orientation="vertical", command=self.tx_log.yview
         )
-        log_scroll.grid(row=0, column=1, sticky="ns")
-        self.tx_log.configure(yscrollcommand=log_scroll.set)
+        self.tx_log_scroll.grid(row=0, column=1, sticky="ns")
+        self.tx_log_scroll.grid_remove()
+        self.tx_log.configure(yscrollcommand=self._on_tx_log_scroll)
+        self.tx_log.bind("<Configure>", lambda _e: self._update_tx_log_scrollbar())
+        log_frame.bind("<Configure>", lambda _e: self._update_tx_log_scrollbar())
         tx_body.rowconfigure(3, weight=1)
 
         # ----- Column 3: Receive -----
@@ -4014,6 +4017,29 @@ class TransceiverUI(ctk.CTk):
         canvas_width = max(1, canvas.winfo_width())
         canvas.itemconfigure(window_id, width=canvas_width)
         canvas.coords(window_id, canvas_width / 2, 0)
+
+    def _on_tx_log_scroll(self, first: str, last: str) -> None:
+        if not hasattr(self, "tx_log_scroll"):
+            return
+        self.tx_log_scroll.set(first, last)
+        try:
+            first_val = float(first)
+            last_val = float(last)
+        except (TypeError, ValueError):
+            return
+        needs_scroll = first_val > 0.0 or last_val < 1.0
+        if needs_scroll:
+            if not self.tx_log_scroll.winfo_ismapped():
+                self.tx_log_scroll.grid(row=0, column=1, sticky="ns")
+        else:
+            if self.tx_log_scroll.winfo_ismapped():
+                self.tx_log_scroll.grid_remove()
+
+    def _update_tx_log_scrollbar(self) -> None:
+        if not hasattr(self, "tx_log"):
+            return
+        first, last = self.tx_log.yview()
+        self._on_tx_log_scroll(str(first), str(last))
 
     def _update_gen_scrollbar(self) -> None:
         if not hasattr(self, "gen_canvas"):
