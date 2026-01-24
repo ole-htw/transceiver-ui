@@ -10,6 +10,7 @@ import argparse
 import numpy as np
 from pyqtgraph.Qt import QtCore
 import pyqtgraph as pg
+from transceiver.helpers.plot_colors import PLOT_COLORS
 
 
 def instantaneous_frequency(x: np.ndarray, fs: float) -> np.ndarray:
@@ -69,7 +70,9 @@ def main() -> None:
     pg.setConfigOption("foreground", "k")
 
     app = pg.mkQApp()
-    win = pg.plot(t * 1e6, f_inst / 1e6, pen=pg.mkPen("#1D4ED8"))
+    win = pg.plot(
+        t * 1e6, f_inst / 1e6, pen=pg.mkPen(PLOT_COLORS["real"])
+    )
     win.setWindowTitle(f"Instantane Frequenz: {args.filename}")
     win.setLabel("bottom", "Zeit [µs]")
     win.setLabel("left", "Instantane Frequenz [MHz]")

@@ -5,6 +5,7 @@ import pyqtgraph as pg
 import argparse
 import os # For basename in title
 import time # To measure correlation time
+from transceiver.helpers.plot_colors import PLOT_COLORS
 
 def read_signal_file(filename):
     """Liest eine Binärdatei mit interleaved int16 Samples und gibt ein komplexes Signal zurück."""
@@ -154,7 +155,7 @@ def main():
 
     fname1_base = os.path.basename(args.filename1)
     fname2_base = os.path.basename(args.filename2)
-    win = pg.plot(lags, plot_data, pen=pg.mkPen("#1D4ED8"))
+    win = pg.plot(lags, plot_data, pen=pg.mkPen(PLOT_COLORS["crosscorr"]))
     win.setWindowTitle(f"Kreuzkorrelation - {fname1_base} vs {fname2_base}")
     win.setLabel("bottom", "Lag / Verschiebung von Signal 2 zu Signal 1 [Samples]")
     win.setLabel("left", ylabel_text)
@@ -164,7 +165,7 @@ def main():
             [plot_data[los_idx]],
             pen=None,
             symbol="o",
-            symbolBrush="#991B1B",
+            symbolBrush=PLOT_COLORS["los"],
         )
     if echo_idx is not None:
         win.plot(
@@ -172,7 +173,7 @@ def main():
             [plot_data[echo_idx]],
             pen=None,
             symbol="o",
-            symbolBrush="#166534",
+            symbolBrush=PLOT_COLORS["echo"],
         )
     win.showGrid(x=True, y=True)
     win.setTitle(f"{plot_title}: {fname1_base} vs {fname2_base}{plot_title_suffix}")

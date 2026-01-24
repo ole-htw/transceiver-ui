@@ -4,6 +4,7 @@ from pyqtgraph.Qt import QtCore
 import pyqtgraph as pg
 import argparse
 import time # Um die Berechnungszeit zu messen
+from transceiver.helpers.plot_colors import PLOT_COLORS
 
 def main():
     parser = argparse.ArgumentParser(
@@ -112,7 +113,7 @@ def main():
     pg.setConfigOption("foreground", "k")
     app = pg.mkQApp()
 
-    win = pg.plot(lags, plot_data, pen=pg.mkPen("#1D4ED8"))
+    win = pg.plot(lags, plot_data, pen=pg.mkPen(PLOT_COLORS["autocorr"]))
     win.setWindowTitle(f"Autokorrelation - {args.filename}")
     win.setLabel("bottom", "Lag / Verschiebung [Samples]")
     win.setLabel("left", ylabel_text)
