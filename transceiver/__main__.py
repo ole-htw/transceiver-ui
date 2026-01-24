@@ -3096,7 +3096,7 @@ class TransceiverUI(ctk.CTk):
             self.rx_path_cancel_check,
         ) = _make_side_bordered_group(
             rx_body,
-            "Pfad-Cancellation (LOS entfernen)",
+            "LOS Cancellation",
             toggle_var=self.rx_path_cancel_enable,
             toggle_command=self._on_rx_path_cancel_toggle,
         )
