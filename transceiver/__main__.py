@@ -4888,7 +4888,7 @@ class TransceiverUI(ctk.CTk):
         self._last_tx_end = controller.last_end_monotonic or time.monotonic()
         self._ui(self._reset_tx_buttons)
 
-    def stop_transmit(self) -> None:
+    def stop_transmit(self, reset_ui: bool = True) -> None:
         """Gracefully stop TX via the in-process UHD controller."""
         self._stop_requested = True
         controller = self._tx_controller
@@ -4897,7 +4897,8 @@ class TransceiverUI(ctk.CTk):
             self._cmd_running = False
             self._last_tx_end = time.monotonic()
             self._stop_tx_output_capture()
-            self._ui(self._reset_tx_buttons)
+            if reset_ui:
+                self._ui(self._reset_tx_buttons)
             return
         stopped = controller.stop_tx(timeout=5.0)
         if not stopped:
@@ -4907,11 +4908,12 @@ class TransceiverUI(ctk.CTk):
         self._last_tx_end = controller.last_end_monotonic or time.monotonic()
         if not controller.is_running:
             self._stop_tx_output_capture()
-            self._ui(self._reset_tx_buttons)
+            if reset_ui:
+                self._ui(self._reset_tx_buttons)
 
     def retransmit(self) -> None:
         """Stop any ongoing transmission and start a new one."""
-        self.stop_transmit()
+        self.stop_transmit(reset_ui=False)
         # Give the previous process a moment to terminate
         self.transmit()
 
