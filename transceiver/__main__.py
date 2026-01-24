@@ -3005,6 +3005,7 @@ class TransceiverUI(ctk.CTk):
         rx_ant_content = ctk.CTkFrame(rx_ant_body, fg_color="transparent")
         rx_ant_content.grid(row=0, column=1, columnspan=2, sticky="nsew")
         rx_ant_content.columnconfigure(1, weight=1)
+        rx_ant_content.columnconfigure(3, weight=1)
 
         self.rx_channel_view_label = ctk.CTkLabel(
             rx_ant_content, text="RX Ansicht", anchor="e"
@@ -3030,16 +3031,18 @@ class TransceiverUI(ctk.CTk):
         self.rx_ant_spacing.grid(row=1, column=1, sticky="ew", padx=(0, 8))
 
         ctk.CTkLabel(rx_ant_content, text="Wellenlänge [m]", anchor="e").grid(
-            row=2, column=0, sticky="e", padx=label_padx
+            row=1, column=2, sticky="e", padx=label_padx
         )
         self.rx_wavelength = SuggestEntry(rx_ant_content, "rx_wavelength")
         self.rx_wavelength.insert(0, "3e8/5.18e9")
-        self.rx_wavelength.grid(row=2, column=1, sticky="ew", padx=(0, 8))
+        self.rx_wavelength.grid(row=1, column=3, sticky="ew", padx=(0, 8))
 
         self.rx_aoa_label = ctk.CTkLabel(rx_ant_content, text="AoA (ESPRIT): --")
-        self.rx_aoa_label.grid(row=3, column=0, sticky="w", pady=(4, 0))
+        self.rx_aoa_label.grid(
+            row=2, column=0, columnspan=4, sticky="w", pady=(4, 0)
+        )
         self.rx_echo_aoa_label = ctk.CTkLabel(rx_ant_content, text="Echo AoA: --")
-        self.rx_echo_aoa_label.grid(row=3, column=1, sticky="w", pady=(4, 0))
+        self.rx_echo_aoa_label.grid(row=3, column=0, columnspan=4, sticky="w")
 
         rx_output_frame, rx_output_body, _ = _make_side_bordered_group(
             rx_body,
