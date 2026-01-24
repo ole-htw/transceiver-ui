@@ -3426,19 +3426,19 @@ class TransceiverUI(ctk.CTk):
             col = (idx % 2) * 2
             ctk.CTkLabel(
                 stats_frame,
-                justify="center",
-                anchor="center",
+                justify="right",
+                anchor="e",
                 text=f"{label}:",
             ).grid(
-                row=row, column=col, sticky="ew", padx=6
+                row=row, column=col, sticky="e", padx=6
             )
             ctk.CTkLabel(
                 stats_frame,
-                justify="center",
-                anchor="center",
+                justify="left",
+                anchor="w",
                 text=value,
             ).grid(
-                row=row, column=col + 1, sticky="ew", padx=6
+                row=row, column=col + 1, sticky="w", padx=6
             )
 
     def _display_gen_plots(
@@ -3791,17 +3791,17 @@ class TransceiverUI(ctk.CTk):
                 col = (idx % 2) * 2
                 ctk.CTkLabel(
                     stats_frame,
-                    justify="center",
-                    anchor="center",
+                    justify="right",
+                    anchor="e",
                     text=f"{label}:",
-                ).grid(row=row, column=col, sticky="ew", padx=6)
+                ).grid(row=row, column=col, sticky="e", padx=6)
                 value_label = ctk.CTkLabel(
                     stats_frame,
-                    justify="center",
-                    anchor="center",
+                    justify="left",
+                    anchor="w",
                     text=value,
                 )
-                value_label.grid(row=row, column=col + 1, sticky="ew", padx=6)
+                value_label.grid(row=row, column=col + 1, sticky="w", padx=6)
                 value_labels.append(value_label)
             self.rx_stats_labels.append(value_labels)
             if self.rx_view.get() == "AoA (ESPRIT)":
