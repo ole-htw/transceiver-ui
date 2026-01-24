@@ -22,6 +22,7 @@ from pathlib import Path
 from datetime import datetime
 
 import numpy as np
+from PIL import Image, ImageDraw
 from pyqtgraph.Qt import QtCore
 import pyqtgraph as pg
 
@@ -2443,6 +2444,13 @@ class TransceiverUI(ctk.CTk):
         self._xcorr_polling = False
         self._last_path_cancel_log: tuple[object, ...] | None = None
         self._last_path_cancel_info: dict[str, object] | None = None
+        self._tx_indicator_state = "idle"
+        self._tx_indicator_job: str | None = None
+        self._tx_indicator_frame = 0
+        self._tx_indicator_spinner_frames: list[ctk.CTkImage] = []
+        self._tx_indicator_blink_frames: list[ctk.CTkImage] = []
+        self._tx_indicator_blank: ctk.CTkImage | None = None
+        self._build_tx_indicator_assets()
         self.create_widgets()
         try:
             self.state("zoomed")
@@ -2468,6 +2476,91 @@ class TransceiverUI(ctk.CTk):
             return
         self._tx_output_capture.__exit__(None, None, None)
         self._tx_output_capture = None
+
+    def _build_tx_indicator_assets(self) -> None:
+        size = 14
+        blank = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        self._tx_indicator_blank = ctk.CTkImage(
+            light_image=blank, dark_image=blank, size=(size, size)
+        )
+
+        blink_levels = [60, 100, 150, 200, 255, 200, 150, 100]
+        blink_frames = []
+        for alpha in blink_levels:
+            img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(img)
+            draw.ellipse(
+                (2, 2, size - 2, size - 2), fill=(0, 200, 0, alpha)
+            )
+            blink_frames.append(
+                ctk.CTkImage(light_image=img, dark_image=img, size=(size, size))
+            )
+        self._tx_indicator_blink_frames = blink_frames
+
+        spinner_frames = []
+        spokes = 12
+        center = (size - 1) / 2
+        radius = size / 2 - 2
+        for frame in range(spokes):
+            img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(img)
+            for i in range(spokes):
+                delta = (i - frame) % spokes
+                alpha = max(40, 255 - delta * 20)
+                angle = 2 * math.pi * (i / spokes)
+                x = center + math.cos(angle) * radius
+                y = center + math.sin(angle) * radius
+                draw.ellipse(
+                    (x - 1.5, y - 1.5, x + 1.5, y + 1.5),
+                    fill=(220, 220, 220, alpha),
+                )
+            spinner_frames.append(
+                ctk.CTkImage(light_image=img, dark_image=img, size=(size, size))
+            )
+        self._tx_indicator_spinner_frames = spinner_frames
+
+    def _set_tx_indicator_image(self, image: ctk.CTkImage | None) -> None:
+        if hasattr(self, "tx_button") and self.tx_button.winfo_exists():
+            self.tx_button.configure(image=image, compound="left")
+
+    def _stop_tx_indicator_animation(self) -> None:
+        if self._tx_indicator_job is not None:
+            self.after_cancel(self._tx_indicator_job)
+            self._tx_indicator_job = None
+
+    def _set_tx_indicator_state(self, state: str) -> None:
+        if state == self._tx_indicator_state:
+            return
+        self._tx_indicator_state = state
+        self._tx_indicator_frame = 0
+        self._stop_tx_indicator_animation()
+        if state == "idle":
+            self._set_tx_indicator_image(self._tx_indicator_blank)
+            return
+        if state == "pending":
+            self._animate_tx_spinner()
+        elif state == "active":
+            self._animate_tx_blink()
+
+    def _animate_tx_spinner(self) -> None:
+        if self._tx_indicator_state != "pending":
+            return
+        frames = self._tx_indicator_spinner_frames
+        if frames:
+            frame = frames[self._tx_indicator_frame % len(frames)]
+            self._set_tx_indicator_image(frame)
+        self._tx_indicator_frame += 1
+        self._tx_indicator_job = self.after(120, self._animate_tx_spinner)
+
+    def _animate_tx_blink(self) -> None:
+        if self._tx_indicator_state != "active":
+            return
+        frames = self._tx_indicator_blink_frames
+        if frames:
+            frame = frames[self._tx_indicator_frame % len(frames)]
+            self._set_tx_indicator_image(frame)
+        self._tx_indicator_frame += 1
+        self._tx_indicator_job = self.after(180, self._animate_tx_blink)
 
     def create_widgets(self):
         self.rowconfigure(0, weight=1)
@@ -2815,6 +2908,7 @@ class TransceiverUI(ctk.CTk):
 
         self.tx_button = ctk.CTkButton(btn_frame, text="Transmit", command=self.transmit)
         self.tx_button.grid(row=0, column=0, padx=2)
+        self._set_tx_indicator_image(self._tx_indicator_blank)
 
         self.tx_retrans = ctk.CTkButton(
             btn_frame, text="Retransmit", command=self.retransmit, state="disabled"
@@ -3970,6 +4064,7 @@ class TransceiverUI(ctk.CTk):
             self.tx_button.configure(state="normal")
         if hasattr(self, "tx_retrans"):
             self.tx_retrans.configure(state="disabled")
+        self._set_tx_indicator_state("idle")
 
     def _run_rx_cmd(
         self, cmd: list[str], out_file: str, channels: int, rate: float
@@ -4685,9 +4780,11 @@ class TransceiverUI(ctk.CTk):
         MIN_GAP = 0.3  # Sekunden (statt 10)
 
         if now - self._last_tx_end < MIN_GAP:
+            self._set_tx_indicator_state("pending")
             wait = MIN_GAP - (now - self._last_tx_end)
             self.after(int(wait * 1000), self.transmit)
             return
+        self._set_tx_indicator_state("pending")
         self._stop_requested = False
         tx_args = self.tx_args.get()
         try:
@@ -4696,6 +4793,7 @@ class TransceiverUI(ctk.CTk):
             gain = _parse_number_expr_or_error(self.tx_gain.get())
         except ValueError as exc:
             messagebox.showerror("Transmit", str(exc))
+            self._set_tx_indicator_state("idle")
             return
         controller = TxController.for_args(tx_args)
         self._tx_controller = controller
@@ -4726,7 +4824,9 @@ class TransceiverUI(ctk.CTk):
         if not started:
             self._out_queue.put("TX start failed; controller still running.\n")
             self._process_queue()
+            self._set_tx_indicator_state("idle")
             return
+        self._set_tx_indicator_state("active")
         self._process_queue()
         self._monitor_tx_state()
 
