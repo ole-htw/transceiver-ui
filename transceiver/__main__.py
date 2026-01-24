@@ -163,9 +163,9 @@ def _make_section(
     frame.columnconfigure(0, weight=1)
     frame.rowconfigure(1, weight=1)
     header = ctk.CTkLabel(frame, text=title, font=ctk.CTkFont(weight="bold"))
-    header.grid(row=0, column=0, sticky="w", padx=12, pady=(10, 0))
+    header.grid(row=0, column=0, sticky="w", padx=12, pady=(5, 0))
     body = ctk.CTkFrame(frame, fg_color="transparent")
-    body.grid(row=1, column=0, sticky="nsew", padx=10, pady=(6, 10))
+    body.grid(row=1, column=0, sticky="nsew", padx=10, pady=(3, 5))
     body.columnconfigure(1, weight=1)
     return frame, body
 
@@ -179,7 +179,7 @@ def _make_group(
     frame = ctk.CTkFrame(parent, corner_radius=10)
     frame.columnconfigure(0, weight=1)
     header = ctk.CTkFrame(frame, fg_color="transparent")
-    header.grid(row=0, column=0, sticky="w", padx=10, pady=(8, 0))
+    header.grid(row=0, column=0, sticky="w", padx=10, pady=(4, 0))
     toggle = None
     if toggle_var is not None:
         toggle = ctk.CTkCheckBox(
@@ -190,7 +190,7 @@ def _make_group(
         label = ctk.CTkLabel(header, text=title)
         label.grid(row=0, column=0, sticky="w")
     body = ctk.CTkFrame(frame, fg_color="transparent")
-    body.grid(row=1, column=0, sticky="nsew", padx=10, pady=(4, 8))
+    body.grid(row=1, column=0, sticky="nsew", padx=10, pady=(2, 4))
     body.columnconfigure(1, weight=1)
     frame.rowconfigure(1, weight=1)
     return frame, body, toggle
@@ -317,7 +317,7 @@ def _make_bordered_group(
     )
     frame.columnconfigure(0, weight=1)
     header = ctk.CTkFrame(frame, fg_color="transparent")
-    header.grid(row=0, column=0, sticky="w", padx=12, pady=(10, 0))
+    header.grid(row=0, column=0, sticky="w", padx=12, pady=(5, 0))
     toggle = None
     if toggle_var is not None:
         toggle = ctk.CTkCheckBox(
@@ -328,7 +328,7 @@ def _make_bordered_group(
         label = ctk.CTkLabel(header, text=title)
         label.grid(row=0, column=0, sticky="w")
     body = ctk.CTkFrame(frame, fg_color="transparent")
-    body.grid(row=1, column=0, sticky="nsew", padx=12, pady=(6, 12))
+    body.grid(row=1, column=0, sticky="nsew", padx=12, pady=(3, 6))
     body.columnconfigure(1, weight=1)
     frame.rowconfigure(1, weight=1)
     return frame, body, toggle
@@ -345,7 +345,7 @@ def _make_side_bordered_group(
     )
     frame.columnconfigure(0, weight=1)
     body = ctk.CTkFrame(frame, fg_color="transparent")
-    body.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
+    body.grid(row=0, column=0, sticky="nsew", padx=12, pady=6)
     body.columnconfigure(1, weight=1)
     body.columnconfigure(2, weight=1)
     if toggle_var is not None:
@@ -354,7 +354,7 @@ def _make_side_bordered_group(
         )
     else:
         header = ctk.CTkLabel(body, text=title, font=ctk.CTkFont(weight="bold"))
-    header.grid(row=0, column=0, sticky="nw", padx=(6, 12), pady=2)
+    header.grid(row=0, column=0, sticky="nw", padx=(6, 12), pady=1)
     frame.rowconfigure(0, weight=1)
     return frame, body, header
 
@@ -370,7 +370,7 @@ def _make_inline_toggle_row(
     toggle = ctk.CTkCheckBox(
         frame, text=title, variable=toggle_var, command=toggle_command
     )
-    toggle.grid(row=0, column=0, sticky="w", padx=(10, 6), pady=6)
+    toggle.grid(row=0, column=0, sticky="w", padx=(10, 6), pady=3)
     return frame, toggle
 
 
