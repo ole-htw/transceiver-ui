@@ -1839,6 +1839,21 @@ def _format_stats_rows(
     return rows
 
 
+def _format_rx_stats_rows(stats: dict) -> list[tuple[str, str]]:
+    """Return rows for RX stats with a fixed layout order."""
+    echo_value = "--"
+    if stats.get("echo_delay") is not None:
+        meters = stats["echo_delay"] * 1.5
+        echo_value = f"{stats['echo_delay']} samp ({meters:.1f} m)"
+    return [
+        ("fmin", _format_hz(stats["f_low"])),
+        ("fmax", _format_hz(stats["f_high"])),
+        ("max Amp", _format_amp(stats["amp"])),
+        ("LOS-Echo", echo_value),
+        ("BW (3dB)", _format_hz(stats["bw"])),
+    ]
+
+
 def _format_stats_text(
     stats: dict,
     *,
@@ -3777,18 +3792,14 @@ class TransceiverUI(ctk.CTk):
                 xcorr_reduce=True,
                 path_cancel_info=path_cancel_info,
             )
-            stats_rows = _format_stats_rows(
-                stats,
-                include_bw_nyq=False,
-                include_echo=False,
-            )
+            stats_rows = _format_rx_stats_rows(stats)
             stats_frame = ctk.CTkFrame(target_frame, fg_color="transparent")
             stats_frame.grid(row=len(modes), column=0, sticky="ew", pady=2)
-            stats_frame.columnconfigure((0, 1, 2, 3), weight=1)
+            stats_frame.columnconfigure((0, 1, 2, 3, 4, 5), weight=1)
             value_labels: list[ctk.CTkLabel] = []
             for idx, (label, value) in enumerate(stats_rows):
-                row = idx // 2
-                col = (idx % 2) * 2
+                row = 0 if idx < 3 else 1
+                col = (idx if idx < 3 else idx - 3) * 2
                 ctk.CTkLabel(
                     stats_frame,
                     justify="right",
@@ -4222,11 +4233,7 @@ class TransceiverUI(ctk.CTk):
             xcorr_reduce=True,
             path_cancel_info=path_cancel_info,
         )
-        stats_rows = _format_stats_rows(
-            stats,
-            include_bw_nyq=False,
-            include_echo=False,
-        )
+        stats_rows = _format_rx_stats_rows(stats)
         text = "\n".join(f"{label}: {value}" for label, value in stats_rows)
         for label_group in label_groups:
             if isinstance(label_group, (list, tuple)):
