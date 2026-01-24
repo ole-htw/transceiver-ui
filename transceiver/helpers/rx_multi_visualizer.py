@@ -4,6 +4,7 @@ from pyqtgraph.Qt import QtCore
 import pyqtgraph as pg
 import argparse
 import itertools
+from transceiver.helpers.plot_colors import MULTI_CHANNEL_COLORS
 
 def main():
     p = argparse.ArgumentParser(
@@ -50,7 +51,7 @@ def main():
     win = pg.GraphicsLayoutWidget(title="RX Waveforms (komplex)")
     win.setWindowTitle(args.filename)
 
-    colours = itertools.cycle(("#1D4ED8", "#C2410C", "#166534", "#6B21A8"))
+    colours = itertools.cycle(MULTI_CHANNEL_COLORS)
 
     for idx, (sig, color) in enumerate(zip(sigs, colours)):
         p = win.addPlot(row=idx, col=0)

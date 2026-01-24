@@ -39,6 +39,7 @@ from .helpers.correlation_utils import (
 )
 from .helpers.path_cancellation import apply_path_cancellation
 from .helpers.number_parser import parse_number_expr
+from .helpers.plot_colors import PLOT_COLORS
 from .tx_controller import TxController
 
 # --- suggestion helper -------------------------------------------------------
@@ -2098,17 +2099,7 @@ def _plot_on_pg(
     reduction_step: int = 1,
 ) -> None:
     """Helper to draw the selected visualization on a PyQtGraph PlotItem."""
-    colors = {
-        "real": "#1D4ED8",
-        "imag": "#C2410C",
-        "freq": "#0F766E",
-        "autocorr": "#6B21A8",
-        "crosscorr": "#1E3A8A",
-        "compare": "#9D174D",
-        "los": "#991B1B",
-        "echo": "#166534",
-        "text": "#E0E0E0",
-    }
+    colors = PLOT_COLORS
     step = max(1, int(reduction_step))
     scene = plot.scene()
     if scene is not None and hasattr(plot, "_xcorr_click_handler"):
@@ -2307,16 +2298,7 @@ def _plot_on_mpl(
     manual_lags: dict[str, int | None] | None = None,
 ) -> None:
     """Helper to draw a small matplotlib preview plot."""
-    mpl_colors = {
-        "real": "#0288D1",
-        "imag": "#26C6DA",
-        "freq": "#388E3C",
-        "autocorr": "#7B1FA2",
-        "crosscorr": "#1976D2",
-        "compare": "#C2185B",
-        "los": "#D32F2F",
-        "echo": "#00796B",
-    }
+    mpl_colors = PLOT_COLORS
     if data.ndim != 1:
         data = np.asarray(data)
         if data.ndim >= 2:

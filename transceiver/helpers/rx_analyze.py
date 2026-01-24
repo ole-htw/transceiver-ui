@@ -12,6 +12,7 @@ import argparse
 import os
 from pyqtgraph.Qt import QtCore
 import pyqtgraph as pg
+from transceiver.helpers.plot_colors import PLOT_COLORS
 
 def load_rx_file(filename):
     """
@@ -172,20 +173,28 @@ def main():
         app = pg.mkQApp()
         win = pg.GraphicsLayoutWidget(title="RX Signal")
         p1 = win.addPlot(title="Originales RX Signal")
-        p1.plot(np.real(orig_plot), pen=pg.mkPen("#1D4ED8"), name="Real")
+        p1.plot(
+            np.real(orig_plot),
+            pen=pg.mkPen(PLOT_COLORS["real"]),
+            name="Real",
+        )
         p1.plot(
             np.imag(orig_plot),
-            pen=pg.mkPen("#C2410C", style=QtCore.Qt.DashLine),
+            pen=pg.mkPen(PLOT_COLORS["imag"], style=QtCore.Qt.DashLine),
             name="Imag",
         )
         p1.showGrid(x=True, y=True)
         p1.addLegend()
         win.nextRow()
         p2 = win.addPlot(title="Postprocessetes RX Signal (skaliert)")
-        p2.plot(np.real(proc_plot), pen=pg.mkPen("#1D4ED8"), name="Real")
+        p2.plot(
+            np.real(proc_plot),
+            pen=pg.mkPen(PLOT_COLORS["real"]),
+            name="Real",
+        )
         p2.plot(
             np.imag(proc_plot),
-            pen=pg.mkPen("#C2410C", style=QtCore.Qt.DashLine),
+            pen=pg.mkPen(PLOT_COLORS["imag"], style=QtCore.Qt.DashLine),
             name="Imag",
         )
         p2.showGrid(x=True, y=True)

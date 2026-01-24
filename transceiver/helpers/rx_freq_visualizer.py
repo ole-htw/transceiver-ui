@@ -3,6 +3,7 @@ import numpy as np
 from pyqtgraph.Qt import QtCore
 import pyqtgraph as pg
 import argparse
+from transceiver.helpers.plot_colors import PLOT_COLORS
 
 def main():
     parser = argparse.ArgumentParser(
@@ -56,7 +57,10 @@ def main():
 
     app = pg.mkQApp()
     win = pg.plot(
-        freqs, mag, pen="#1D4ED8", title=f"Frequenzspektrum: {args.filename}"
+        freqs,
+        mag,
+        pen=pg.mkPen(PLOT_COLORS["freq"]),
+        title=f"Frequenzspektrum: {args.filename}",
     )
     win.setWindowTitle(args.filename)
     win.showGrid(x=True, y=True)
