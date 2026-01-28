@@ -2,11 +2,12 @@
 """
 Erweitertes Waveform-Generator-Skript
 ------------------------------------
-Unterstützt jetzt vier Wellenformen:
+Unterstützt jetzt fünf Wellenformen:
     • sinus      – Reiner Sinus-Ton
     • doppelsinus – Zwei halbe Sinustöne (f1 + f2)
     • zadoffchu  – Zadoff–Chu-Sequenz (komplex, zykloideiphase)
     • chirp      – Linear aufsteigender Up-Chirp (f0 → f1)
+    • ofdm_preamble – OFDM-Präambel mit CP (BPSK, deterministisch)
 
 Option **--no-zeros**
     Gibt an, dass *keine* Null-Samples an die Wellenform angehängt werden.
@@ -99,11 +100,19 @@ def generate_filename(args) -> Path:
             parts.append(f"os{args.oversampling}")
     elif args.waveform == "chirp":
         parts.append(f"{_pretty(args.f0)}_{_pretty(args.f1)}")
+    elif args.waveform == "ofdm_preamble":
+        parts.append(f"nfft{args.ofdm_nfft}")
+        parts.append(f"cp{args.ofdm_cp}")
+        parts.append(f"sym{args.ofdm_symbols}")
+        if args.ofdm_short_repeats:
+            parts.append(f"short{args.ofdm_short_repeats}")
 
     if args.waveform == "zadoffchu":
         parts.append(f"Nsym{args.samples}")
         if args.oversampling != 1:
             parts.append(f"Nsamp{args.samples * args.oversampling}")
+    elif args.waveform == "ofdm_preamble":
+        parts.append(f"N{args.samples}")
     else:
         parts.append(f"N{args.samples}")
 
@@ -182,6 +191,11 @@ def generate_waveform(
     rrc_beta: float = 0.25,
     rrc_span: int = 6,
     oversampling: int = 1,
+    ofdm_nfft: int = 64,
+    ofdm_cp_len: int = 16,
+    ofdm_active_subcarriers: int = 52,
+    ofdm_num_symbols: int = 2,
+    ofdm_short_repeats: int = 10,
 ) -> np.ndarray:
     """Erzeugt komplexe Samples einer der unterstützten Wellenformen.
 
@@ -193,12 +207,11 @@ def generate_waveform(
     - Für den oversampleten ZC-Fall wird Delay kompensiert und auf exakt
       N*oversampling Samples getrimmt.
     """
-    if N <= 0:
+    w = waveform.lower()
+    if w != "ofdm_preamble" and N <= 0:
         raise ValueError("N muss > 0 sein.")
     if oversampling <= 0:
         raise ValueError("oversampling muss >= 1 sein")
-
-    w = waveform.lower()
 
     # ---------- Sinus ---------------------------------------------------------
     if w == "sinus":
@@ -276,7 +289,6 @@ def generate_waveform(
             y = y[start:stop]                      # schneidet direkt auf Zielbereich
             y = _trim_to_length(y, N * sps).astype(np.complex64)
             return y
-            
         else:
             # Kein Oversampling -> einfach filtern (same-Länge)
             if len(h) > 1:
@@ -284,6 +296,48 @@ def generate_waveform(
             else:
                 y = symbols
             return y
+
+    # ---------- OFDM-Preamble -------------------------------------------------
+    if w == "ofdm_preamble":
+        if ofdm_nfft <= 0:
+            raise ValueError("ofdm_nfft muss > 0 sein.")
+        if ofdm_cp_len < 0:
+            raise ValueError("ofdm_cp_len muss >= 0 sein.")
+        if ofdm_cp_len >= ofdm_nfft:
+            raise ValueError("ofdm_cp_len muss < ofdm_nfft sein.")
+        if ofdm_active_subcarriers <= 0:
+            raise ValueError("ofdm_active_subcarriers muss > 0 sein.")
+        if ofdm_active_subcarriers > ofdm_nfft - 1:
+            raise ValueError("ofdm_active_subcarriers muss <= nfft-1 sein.")
+        if ofdm_num_symbols <= 0:
+            raise ValueError("ofdm_num_symbols muss > 0 sein.")
+        if ofdm_short_repeats < 0:
+            raise ValueError("ofdm_short_repeats muss >= 0 sein.")
+
+        rng = np.random.default_rng(0)
+        lower_count = ofdm_active_subcarriers // 2
+        upper_count = ofdm_active_subcarriers - lower_count
+        neg_bins = np.arange(ofdm_nfft - lower_count, ofdm_nfft)
+        pos_bins = np.arange(1, upper_count + 1)
+        active_bins = np.concatenate([neg_bins, pos_bins])
+
+        bpsk = rng.choice([-1.0, 1.0], size=(ofdm_num_symbols, ofdm_active_subcarriers))
+        symbols = []
+        for idx in range(ofdm_num_symbols):
+            spectrum = np.zeros(ofdm_nfft, dtype=np.complex64)
+            spectrum[active_bins] = bpsk[idx].astype(np.complex64)
+            spectrum[0] = 0.0
+            time_symbol = np.fft.ifft(spectrum).astype(np.complex64)
+            if ofdm_cp_len:
+                cp = time_symbol[-ofdm_cp_len:]
+                time_symbol = np.concatenate([cp, time_symbol]).astype(np.complex64)
+            symbols.append(time_symbol)
+
+        payload = np.concatenate(symbols).astype(np.complex64)
+        if ofdm_short_repeats > 0:
+            short_block = np.tile(symbols[0], ofdm_short_repeats).astype(np.complex64)
+            payload = np.concatenate([short_block, payload]).astype(np.complex64)
+        return payload.astype(np.complex64)
 
     raise ValueError(f"Unbekannte Wellenform: {waveform}")
 
@@ -294,7 +348,8 @@ def generate_waveform(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Erzeugt eine Wellen­folge (sinus, doppelsinus, zadoffchu oder chirp) "
+            "Erzeugt eine Wellen­folge (sinus, doppelsinus, zadoffchu, chirp oder "
+            "ofdm_preamble) "
             "gefolgt optional von einer gleichen Anzahl Null-Samples und speichert "
             "sie als interleaved int16 (IQIQ…) in eine Datei."
         )
@@ -314,7 +369,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--waveform",
-        choices=["sinus", "doppelsinus", "zadoffchu", "chirp"],
+        choices=["sinus", "doppelsinus", "zadoffchu", "chirp", "ofdm_preamble"],
         default="sinus",
         help="Wellenform (Standard: sinus)",
     )
@@ -388,6 +443,38 @@ def main() -> None:
         help="Oversampling-Faktor nur für Zadoff-Chu (Standard: 1)",
     )
 
+    # OFDM-spezifisch
+    parser.add_argument(
+        "--ofdm-nfft",
+        type=int,
+        default=64,
+        help="OFDM-NFFT (Standard: 64)",
+    )
+    parser.add_argument(
+        "--ofdm-cp",
+        type=int,
+        default=16,
+        help="OFDM-CP-Länge (Standard: 16)",
+    )
+    parser.add_argument(
+        "--ofdm-active",
+        type=int,
+        default=52,
+        help="Aktive OFDM-Subträger (Standard: 52, DC bleibt 0)",
+    )
+    parser.add_argument(
+        "--ofdm-symbols",
+        type=int,
+        default=2,
+        help="OFDM-Symbole (Standard: 2)",
+    )
+    parser.add_argument(
+        "--ofdm-short-repeats",
+        type=int,
+        default=10,
+        help="OFDM-Short-Repeats für erstes Symbol (Standard: 10)",
+    )
+
     # Null-Sequenz weglassen
     parser.add_argument(
         "--no-zeros",
@@ -410,6 +497,21 @@ def main() -> None:
         args.f1 = args.fs / 2 - 1
     if args.waveform == "doppelsinus" and args.f2 is None:
         raise ValueError("Für Doppelsinus muss --f2 gesetzt sein.")
+    if args.waveform == "ofdm_preamble":
+        if args.ofdm_nfft <= 0:
+            raise ValueError("--ofdm-nfft muss > 0 sein.")
+        if args.ofdm_cp < 0:
+            raise ValueError("--ofdm-cp muss >= 0 sein.")
+        if args.ofdm_cp >= args.ofdm_nfft:
+            raise ValueError("--ofdm-cp muss < --ofdm-nfft sein.")
+        if args.ofdm_active <= 0:
+            raise ValueError("--ofdm-active muss > 0 sein.")
+        if args.ofdm_active > args.ofdm_nfft - 1:
+            raise ValueError("--ofdm-active muss <= nfft-1 sein.")
+        if args.ofdm_symbols <= 0:
+            raise ValueError("--ofdm-symbols muss > 0 sein.")
+        if args.ofdm_short_repeats < 0:
+            raise ValueError("--ofdm-short-repeats muss >= 0 sein.")
 
     N_waveform = args.samples
     N_output = N_waveform
@@ -423,6 +525,11 @@ def main() -> None:
                 N_waveform = prime
 
         N_output = N_waveform * max(1, int(args.oversampling))
+    elif args.waveform == "ofdm_preamble":
+        N_output = (
+            (args.ofdm_nfft + args.ofdm_cp)
+            * (args.ofdm_symbols + args.ofdm_short_repeats)
+        )
 
     append_zeros = not args.no_zeros
 
@@ -450,6 +557,11 @@ def main() -> None:
         rrc_beta=args.rrc_beta,
         rrc_span=args.rrc_span,
         oversampling=args.oversampling,
+        ofdm_nfft=args.ofdm_nfft,
+        ofdm_cp_len=args.ofdm_cp,
+        ofdm_active_subcarriers=args.ofdm_active,
+        ofdm_num_symbols=args.ofdm_symbols,
+        ofdm_short_repeats=args.ofdm_short_repeats,
     ).astype(np.complex64)
 
     # (Sicherstellen, dass die Länge genau den Erwartungen entspricht)

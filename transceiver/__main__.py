@@ -1667,12 +1667,26 @@ def _gen_tx_filename(app) -> str:
         f0 = _try_parse_number_expr(app.f_entry.get(), default=0.0)
         f1 = _try_parse_number_expr(app.f1_entry.get(), default=f0)
         parts.append(f"{_pretty(f0)}_{_pretty(f1)}")
+    elif w == "ofdm_preamble":
+        nfft = _try_parse_number_expr(app.ofdm_nfft_entry.get(), default=64.0)
+        cp_len = _try_parse_number_expr(app.ofdm_cp_entry.get(), default=16.0)
+        num_symbols = _try_parse_number_expr(app.ofdm_symbols_entry.get(), default=2.0)
+        short_repeats = _try_parse_number_expr(
+            app.ofdm_short_entry.get(), default=10.0
+        )
+        parts.append(f"nfft{int(nfft)}")
+        parts.append(f"cp{int(cp_len)}")
+        parts.append(f"sym{int(num_symbols)}")
+        if int(short_repeats) > 0:
+            parts.append(f"short{int(short_repeats)}")
 
     parts.append(f"fs{_pretty(fs)}")
     if w == "zadoffchu":
         parts.append(f"Nsym{samples}")
         if oversampling != 1:
             parts.append(f"Nsamp{samples * oversampling}")
+    elif w == "ofdm_preamble":
+        parts.append(f"N{samples}")
     else:
         parts.append(f"N{samples}")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2625,7 +2639,7 @@ class TransceiverUI(ctk.CTk):
         wave_box = ctk.CTkComboBox(
             waveform_left,
             variable=self.wave_var,
-            values=["sinus", "doppelsinus", "zadoffchu", "chirp"],
+            values=["sinus", "doppelsinus", "zadoffchu", "chirp", "ofdm_preamble"],
             text_color="#f5f5f5",
             dropdown_text_color="#f5f5f5",
         )
@@ -2687,6 +2701,38 @@ class TransceiverUI(ctk.CTk):
         self.amp_entry = SuggestEntry(waveform_right, "amp_entry")
         self.amp_entry.insert(0, "10000")
         self.amp_entry.grid(row=2, column=1, sticky="ew")
+
+        self.ofdm_nfft_label = ctk.CTkLabel(waveform_right, text="NFFT", anchor="e")
+        self.ofdm_nfft_entry = SuggestEntry(waveform_right, "ofdm_nfft_entry")
+        self.ofdm_nfft_entry.insert(0, "64")
+        self.ofdm_nfft_entry.entry.bind(
+            "<FocusOut>", lambda _e: self.auto_update_tx_filename()
+        )
+
+        self.ofdm_cp_label = ctk.CTkLabel(waveform_right, text="CP", anchor="e")
+        self.ofdm_cp_entry = SuggestEntry(waveform_right, "ofdm_cp_entry")
+        self.ofdm_cp_entry.insert(0, "16")
+        self.ofdm_cp_entry.entry.bind(
+            "<FocusOut>", lambda _e: self.auto_update_tx_filename()
+        )
+
+        self.ofdm_symbols_label = ctk.CTkLabel(
+            waveform_right, text="OFDM Symbols", anchor="e"
+        )
+        self.ofdm_symbols_entry = SuggestEntry(waveform_right, "ofdm_symbols_entry")
+        self.ofdm_symbols_entry.insert(0, "2")
+        self.ofdm_symbols_entry.entry.bind(
+            "<FocusOut>", lambda _e: self.auto_update_tx_filename()
+        )
+
+        self.ofdm_short_label = ctk.CTkLabel(
+            waveform_right, text="Short Repeats", anchor="e"
+        )
+        self.ofdm_short_entry = SuggestEntry(waveform_right, "ofdm_short_entry")
+        self.ofdm_short_entry.insert(0, "10")
+        self.ofdm_short_entry.entry.bind(
+            "<FocusOut>", lambda _e: self.auto_update_tx_filename()
+        )
 
         self.rrc_enable = tk.BooleanVar(value=True)
         filter_frame, filter_body, _ = _make_side_bordered_group(
@@ -3232,6 +3278,14 @@ class TransceiverUI(ctk.CTk):
         self.rrc_beta_entry.grid_remove()
         self.rrc_span_label.grid_remove()
         self.rrc_span_entry.grid_remove()
+        self.ofdm_nfft_label.grid_remove()
+        self.ofdm_nfft_entry.grid_remove()
+        self.ofdm_cp_label.grid_remove()
+        self.ofdm_cp_entry.grid_remove()
+        self.ofdm_symbols_label.grid_remove()
+        self.ofdm_symbols_entry.grid_remove()
+        self.ofdm_short_label.grid_remove()
+        self.ofdm_short_entry.grid_remove()
         self.rrc_beta_entry.entry.configure(state="disabled")
         self.rrc_span_entry.entry.configure(state="disabled")
 
@@ -3266,6 +3320,19 @@ class TransceiverUI(ctk.CTk):
             self.f_entry.grid(row=1, column=1, sticky="ew")
             self.f1_label.grid(row=2, column=0, sticky="e", padx=self._label_padx)
             self.f1_entry.grid(row=2, column=1, sticky="ew")
+        elif w == "ofdm_preamble":
+            self.ofdm_nfft_label.grid(row=3, column=0, sticky="e", padx=self._label_padx)
+            self.ofdm_nfft_entry.grid(row=3, column=1, sticky="ew")
+            self.ofdm_cp_label.grid(row=4, column=0, sticky="e", padx=self._label_padx)
+            self.ofdm_cp_entry.grid(row=4, column=1, sticky="ew")
+            self.ofdm_symbols_label.grid(
+                row=5, column=0, sticky="e", padx=self._label_padx
+            )
+            self.ofdm_symbols_entry.grid(row=5, column=1, sticky="ew")
+            self.ofdm_short_label.grid(
+                row=6, column=0, sticky="e", padx=self._label_padx
+            )
+            self.ofdm_short_entry.grid(row=6, column=1, sticky="ew")
 
         self.auto_update_tx_filename()
         _apply_input_margins(self)
@@ -4415,6 +4482,10 @@ class TransceiverUI(ctk.CTk):
             "zeros": self.zeros_var.get(),
             "zeros_enabled": self.zeros_enable.get(),
             "amplitude": self.amp_entry.get(),
+            "ofdm_nfft": self.ofdm_nfft_entry.get(),
+            "ofdm_cp": self.ofdm_cp_entry.get(),
+            "ofdm_symbols": self.ofdm_symbols_entry.get(),
+            "ofdm_short_repeats": self.ofdm_short_entry.get(),
             "file": self.file_entry.get(),
             "sync_rates": self.sync_var.get(),
             "tx_args": self.tx_args.get(),
@@ -4496,6 +4567,14 @@ class TransceiverUI(ctk.CTk):
         self._on_zeros_toggle()
         self.amp_entry.delete(0, tk.END)
         self.amp_entry.insert(0, params.get("amplitude", ""))
+        self.ofdm_nfft_entry.delete(0, tk.END)
+        self.ofdm_nfft_entry.insert(0, params.get("ofdm_nfft", "64"))
+        self.ofdm_cp_entry.delete(0, tk.END)
+        self.ofdm_cp_entry.insert(0, params.get("ofdm_cp", "16"))
+        self.ofdm_symbols_entry.delete(0, tk.END)
+        self.ofdm_symbols_entry.insert(0, params.get("ofdm_symbols", "2"))
+        self.ofdm_short_entry.delete(0, tk.END)
+        self.ofdm_short_entry.insert(0, params.get("ofdm_short_repeats", "10"))
         self.file_entry.delete(0, tk.END)
         self.file_entry.insert(0, params.get("file", ""))
         self.tx_args.delete(0, tk.END)
@@ -4706,6 +4785,33 @@ class TransceiverUI(ctk.CTk):
                         rrc_span=span,
                         oversampling=oversampling,
                     )
+            elif waveform == "ofdm_preamble":
+                nfft = int(_parse_number_expr_or_error(self.ofdm_nfft_entry.get()))
+                cp_len = int(_parse_number_expr_or_error(self.ofdm_cp_entry.get()))
+                num_symbols = int(
+                    _parse_number_expr_or_error(self.ofdm_symbols_entry.get())
+                )
+                short_repeats = int(
+                    _parse_number_expr_or_error(self.ofdm_short_entry.get())
+                )
+                if cp_len >= nfft:
+                    raise ValueError("OFDM CP muss kleiner als NFFT sein.")
+                if nfft <= 0:
+                    raise ValueError("OFDM NFFT muss > 0 sein.")
+                if num_symbols <= 0:
+                    raise ValueError("OFDM Symbols muss > 0 sein.")
+                if short_repeats < 0:
+                    raise ValueError("OFDM Short Repeats muss >= 0 sein.")
+                data = generate_waveform(
+                    waveform,
+                    fs,
+                    0.0,
+                    samples,
+                    ofdm_nfft=nfft,
+                    ofdm_cp_len=cp_len,
+                    ofdm_num_symbols=num_symbols,
+                    ofdm_short_repeats=short_repeats,
+                )
             else:  # chirp
                 f0 = _parse_number_expr_or_error(
                     self.f_entry.get(), allow_empty=True, empty_value=0.0
