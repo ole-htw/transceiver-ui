@@ -77,23 +77,28 @@ def main():
     N1_orig = len(signal1)
     N2_orig = len(signal2)
 
-    # --- Signale auf gleiche Länge kürzen (auf Länge des kürzeren Signals) ---
-    min_len = min(N1_orig, N2_orig)
+    # --- Signale auf gleiche Länge bringen ---
+    max_len = max(N1_orig, N2_orig)
     if N1_orig != N2_orig:
-        print(f"Info: Kürze Signale auf die minimale Länge von {min_len} Samples.")
-        signal1 = signal1[:min_len]
-        signal2 = signal2[:min_len]
+        print(f"Info: Signale haben unterschiedliche Längen ({N1_orig} vs {N2_orig}).")
+        if N1_orig < max_len:
+            pad_len = max_len - N1_orig
+            signal1 = np.pad(signal1, (0, pad_len), mode="constant")
+        if N2_orig < max_len:
+            pad_len = max_len - N2_orig
+            signal2 = np.pad(signal2, (0, pad_len), mode="constant")
+        print(f"Info: Signale auf {max_len} Samples gepolstert.")
     else:
-        print(f"Info: Beide Signale haben bereits die gleiche Länge ({min_len} Samples).")
+        print(f"Info: Beide Signale haben bereits die gleiche Länge ({max_len} Samples).")
 
-    N = min_len # Die neue, gemeinsame Länge
+    N = max_len # Die neue, gemeinsame Länge
 
     if N == 0:
-         print("Fehler: Signallänge nach Kürzung ist Null.")
+         print("Fehler: Signallänge ist Null.")
          return
 
     # --- Kreuzkorrelation berechnen ---
-    print(f"Berechne Kreuzkorrelation zwischen gekürzten Signalen (Länge {N})...")
+    print(f"Berechne Kreuzkorrelation zwischen Signalen (Länge {N})...")
     start_time = time.time()
     cross_corr = np.correlate(signal1, signal2, mode='full')
     end_time = time.time()
@@ -110,7 +115,7 @@ def main():
         print(f"LOS-Echo Abstand: {delay_samples} Samples")
 
     # --- Daten für den Plot vorbereiten ---
-    plot_title = f'Kreuzkorrelation (gekürzt auf {N} Samples)'
+    plot_title = f'Kreuzkorrelation ({N} Samples)'
     plot_title_suffix = ""
     ylabel_text = 'Kreuzkorrelations-Magnitude'
     plot_data = np.abs(cross_corr)
@@ -131,22 +136,8 @@ def main():
             plot_title_suffix = ' [dB]'
 
 
-    # Datenreduktion bei sehr großen Datenmengen (>1 MB)
-    if plot_data.nbytes > 1_000_000:
-        step = int(np.ceil(plot_data.nbytes / 1_000_000))
-        plot_data = plot_data[::step]
-        lags = lags[::step]
-        if los_idx_full is not None:
-            los_idx = los_idx_full // step
-        else:
-            los_idx = None
-        if echo_idx_full is not None:
-            echo_idx = echo_idx_full // step
-        else:
-            echo_idx = None
-    else:
-        los_idx = los_idx_full
-        echo_idx = echo_idx_full
+    los_idx = los_idx_full
+    echo_idx = echo_idx_full
 
     # --- Plotten mit PyQtGraph ---
     pg.setConfigOption("background", "w")
