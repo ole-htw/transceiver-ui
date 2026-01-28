@@ -1376,16 +1376,33 @@ def _add_draggable_markers(
     on_echo_drag=None,
     on_los_drag_end=None,
     on_echo_drag_end=None,
+    *,
+    los_lags: np.ndarray | None = None,
+    los_magnitudes: np.ndarray | None = None,
+    echo_lags: np.ndarray | None = None,
+    echo_magnitudes: np.ndarray | None = None,
 ) -> tuple[DraggableLagMarker | None, DraggableLagMarker | None]:
     """Attach draggable LOS/echo markers to a plot."""
     view_box = plot.getViewBox()
+    los_lags = np.asarray(los_lags) if los_lags is not None else np.asarray(lags)
+    echo_lags = np.asarray(echo_lags) if echo_lags is not None else np.asarray(lags)
+    los_magnitudes = (
+        np.asarray(los_magnitudes)
+        if los_magnitudes is not None
+        else np.asarray(magnitudes)
+    )
+    echo_magnitudes = (
+        np.asarray(echo_magnitudes)
+        if echo_magnitudes is not None
+        else np.asarray(magnitudes)
+    )
     los_marker = None
     echo_marker = None
     if los_idx is not None:
         los_marker = DraggableLagMarker(
             view_box,
-            lags,
-            magnitudes,
+            los_lags,
+            los_magnitudes,
             los_idx,
             "r",
             on_drag=on_los_drag,
@@ -1395,8 +1412,8 @@ def _add_draggable_markers(
     if echo_idx is not None:
         echo_marker = DraggableLagMarker(
             view_box,
-            lags,
-            magnitudes,
+            echo_lags,
+            echo_magnitudes,
             echo_idx,
             "g",
             on_drag=on_echo_drag,
@@ -2209,9 +2226,10 @@ def _plot_on_pg(
             n2 = min(len(crosscorr_compare), len(ref_data))
             cc2 = _xcorr_fft(crosscorr_compare[:n2], ref_data[:n2])
             lags2 = np.arange(-n2 + 1, n2) * step_r
+            mag2 = np.abs(cc2)
             plot.plot(
                 lags2,
-                np.abs(cc2),
+                mag2,
                 pen=pg.mkPen(colors["compare"], style=QtCore.Qt.DashLine),
                 name="ohne Pfad-Cancellation",
             )
@@ -2220,11 +2238,25 @@ def _plot_on_pg(
         if legend is not None:
             legend.show()
         base_los_idx, base_echo_idx = _find_los_echo(cc)
-        los_idx, echo_idx = _apply_manual_lags(
-            lags, base_los_idx, base_echo_idx, manual_lags
+        los_lags = lags
+        los_mag = mag
+        if crosscorr_compare is not None and crosscorr_compare.size:
+            base_los_idx, _ = _find_los_echo(cc2)
+            los_lags = lags2
+            los_mag = mag2
+        los_idx, _ = _apply_manual_lags(
+            los_lags, base_los_idx, None, manual_lags
+        )
+        _, echo_idx = _apply_manual_lags(
+            lags, None, base_echo_idx, manual_lags
         )
 
         echo_text = pg.TextItem(color=colors["text"], anchor=(0, 1))
+
+        def _lag_value(source_lags: np.ndarray, idx: int | None) -> float | None:
+            if idx is None or source_lags.size == 0:
+                return None
+            return float(source_lags[int(np.clip(idx, 0, len(source_lags) - 1))])
 
         def _position_echo_text() -> None:
             view_box = plot.getViewBox()
@@ -2232,10 +2264,18 @@ def _plot_on_pg(
             echo_text.setPos(x_range[0], y_range[0])
 
         def _update_echo_text() -> None:
-            adj_los_idx, adj_echo_idx = _apply_manual_lags(
-                lags, base_los_idx, base_echo_idx, manual_lags
+            adj_los_idx, _ = _apply_manual_lags(
+                los_lags, base_los_idx, None, manual_lags
             )
-            delay = _echo_delay_samples(lags, adj_los_idx, adj_echo_idx)
+            _, adj_echo_idx = _apply_manual_lags(
+                lags, None, base_echo_idx, manual_lags
+            )
+            los_lag_value = _lag_value(los_lags, adj_los_idx)
+            echo_lag_value = _lag_value(lags, adj_echo_idx)
+            if los_lag_value is None or echo_lag_value is None:
+                delay = None
+            else:
+                delay = int(round(abs(echo_lag_value - los_lag_value)))
             if delay is None:
                 echo_text.setText("LOS-Echo: --")
             else:
@@ -2295,6 +2335,8 @@ def _plot_on_pg(
             on_echo_drag=echo_drag_callback,
             on_los_drag_end=los_end_callback,
             on_echo_drag_end=echo_end_callback,
+            los_lags=los_lags,
+            los_magnitudes=los_mag,
         )
         if scene is not None and manual_lags is not None:
             def _handle_click(ev) -> None:
@@ -2307,9 +2349,9 @@ def _plot_on_pg(
                 ):
                     return
                 pos = plot.getViewBox().mapSceneToView(ev.scenePos())
-                idx = int(np.abs(lags - pos.x()).argmin())
-                lag_value = float(lags[idx])
                 if modifiers & QtCore.Qt.ShiftModifier:
+                    idx = int(np.abs(los_lags - pos.x()).argmin())
+                    lag_value = float(los_lags[idx])
                     manual_lags["los"] = int(round(lag_value))
                     if los_marker is not None:
                         los_marker.set_index(idx)
@@ -2317,6 +2359,8 @@ def _plot_on_pg(
                     if callback is not None:
                         callback(idx, lag_value)
                 if modifiers & QtCore.Qt.AltModifier:
+                    idx = int(np.abs(lags - pos.x()).argmin())
+                    lag_value = float(lags[idx])
                     manual_lags["echo"] = int(round(lag_value))
                     if echo_marker is not None:
                         echo_marker.set_index(idx)
@@ -2420,14 +2464,23 @@ def _plot_on_mpl(
                     label="ohne Pfad-Cancellation",
                 ),
             ]
-        los_idx, echo_idx = _find_los_echo(cc)
-        los_idx, echo_idx = _apply_manual_lags(
-            lags, los_idx, echo_idx, manual_lags
+        base_los_idx, base_echo_idx = _find_los_echo(cc)
+        los_lags = lags
+        los_mag = mag
+        if crosscorr_compare is not None and crosscorr_compare.size:
+            base_los_idx, _ = _find_los_echo(cc2)
+            los_lags = lags2
+            los_mag = mag2
+        los_idx, _ = _apply_manual_lags(
+            los_lags, base_los_idx, None, manual_lags
+        )
+        _, echo_idx = _apply_manual_lags(
+            lags, None, base_echo_idx, manual_lags
         )
         if los_idx is not None:
             ax.plot(
-                lags[los_idx],
-                mag[los_idx],
+                los_lags[los_idx],
+                los_mag[los_idx],
                 marker="o",
                 linestyle="",
                 color=mpl_colors["los"],
