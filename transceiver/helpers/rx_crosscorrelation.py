@@ -87,7 +87,7 @@ def main():
         f"(Längen {N1} und {N2})..."
     )
     start_time = time.time()
-    cross_corr = np.correlate(signal1, signal2, mode='full')
+    cross_corr = np.correlate(signal2, signal1, mode='full')
     end_time = time.time()
     print(f"Berechnung dauerte {end_time - start_time:.2f} Sekunden.")
 
