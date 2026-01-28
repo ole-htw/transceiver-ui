@@ -2030,15 +2030,17 @@ def _spawn_plot_worker(
     compare_contiguous = None
     if ref_data is not None and np.size(ref_data) != 0:
         ref_contiguous = np.ascontiguousarray(ref_data)
-        data_contiguous, ref_contiguous, reduction_step = _reduce_pair(
-            data_contiguous, ref_contiguous
-        )
+        if mode != "Crosscorr":
+            data_contiguous, ref_contiguous, reduction_step = _reduce_pair(
+                data_contiguous, ref_contiguous
+            )
         if crosscorr_compare is not None and np.size(crosscorr_compare) != 0:
             compare_contiguous = np.ascontiguousarray(crosscorr_compare)[
                 ::reduction_step
             ]
     else:
-        data_contiguous, reduction_step = _reduce_data(data_contiguous)
+        if mode != "Crosscorr":
+            data_contiguous, reduction_step = _reduce_data(data_contiguous)
     fs = float(fs) / reduction_step
     if data_contiguous.nbytes >= SHM_SIZE_THRESHOLD_BYTES:
         data_path = temp_dir / "data.npy"
