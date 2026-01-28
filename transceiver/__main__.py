@@ -2153,7 +2153,9 @@ def _plot_on_pg(
         data, step = _reduce_data(data)
         fs /= step
     if mode == "Signal":
-        plot.addLegend()
+        legend = plot.addLegend()
+        if legend is not None:
+            legend.show()
         plot.plot(np.real(data), pen=pg.mkPen(colors["real"]), name="Real")
         plot.plot(
             np.imag(data),
@@ -2215,6 +2217,8 @@ def _plot_on_pg(
             )
         if legend is None:
             legend = plot.addLegend()
+        if legend is not None:
+            legend.show()
         base_los_idx, base_echo_idx = _find_los_echo(cc)
         los_idx, echo_idx = _apply_manual_lags(
             lags, base_los_idx, base_echo_idx, manual_lags
