@@ -1825,9 +1825,10 @@ def _calc_stats(
             xcorr_data, xcorr_ref, xcorr_step = _reduce_pair(
                 xcorr_data, xcorr_ref
             )
-        n = min(len(xcorr_data), len(xcorr_ref))
-        cc = _xcorr_fft(xcorr_data[:n], xcorr_ref[:n])
-        lags = np.arange(-n + 1, n) * xcorr_step
+        cc = _xcorr_fft(xcorr_data, xcorr_ref)
+        lags = (
+            np.arange(-(len(xcorr_ref) - 1), len(xcorr_data)) * xcorr_step
+        )
         los_idx, echo_idx = _find_los_echo(cc)
         los_idx, echo_idx = _apply_manual_lags(
             lags, los_idx, echo_idx, manual_lags
@@ -2212,9 +2213,8 @@ def _plot_on_pg(
             fs /= step_r
             if crosscorr_compare is not None and crosscorr_compare.size:
                 crosscorr_compare = crosscorr_compare[::step_r]
-        n = min(len(data), len(ref_data))
-        cc = _xcorr_fft(data[:n], ref_data[:n])
-        lags = np.arange(-n + 1, n) * step_r
+        cc = _xcorr_fft(data, ref_data)
+        lags = np.arange(-(len(ref_data) - 1), len(data)) * step_r
         mag = np.abs(cc)
         legend = plot.addLegend()
         main_label = (
@@ -2224,9 +2224,10 @@ def _plot_on_pg(
         )
         plot.plot(lags, mag, pen=pg.mkPen(colors["crosscorr"]), name=main_label)
         if crosscorr_compare is not None and crosscorr_compare.size:
-            n2 = min(len(crosscorr_compare), len(ref_data))
-            cc2 = _xcorr_fft(crosscorr_compare[:n2], ref_data[:n2])
-            lags2 = np.arange(-n2 + 1, n2) * step_r
+            cc2 = _xcorr_fft(crosscorr_compare, ref_data)
+            lags2 = np.arange(
+                -(len(ref_data) - 1), len(crosscorr_compare)
+            ) * step_r
             mag2 = np.abs(cc2)
             plot.plot(
                 lags2,
