@@ -1299,14 +1299,8 @@ def _reduce_data(
 def _reduce_pair(
     a: np.ndarray, b: np.ndarray, max_bytes: int = 1_000_000
 ) -> tuple[np.ndarray, np.ndarray, int]:
-    """Downsample *a* and *b* using the same step so both stay aligned."""
-    step = 1
-    max_nbytes = max(a.nbytes, b.nbytes)
-    if max_nbytes > max_bytes:
-        step = int(np.ceil(max_nbytes / max_bytes))
-        a = a[::step]
-        b = b[::step]
-    return a, b, step
+    """Return *a* and *b* unchanged with step 1 (no downsampling)."""
+    return a, b, 1
 
 
 class DraggableLagMarker(pg.ScatterPlotItem):

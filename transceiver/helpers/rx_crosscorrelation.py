@@ -74,40 +74,27 @@ def main():
         print("Abbruch wegen Fehlern beim Einlesen.")
         return
 
-    N1_orig = len(signal1)
-    N2_orig = len(signal2)
+    N1 = len(signal1)
+    N2 = len(signal2)
 
-    # --- Signale auf gleiche Länge bringen ---
-    max_len = max(N1_orig, N2_orig)
-    if N1_orig != N2_orig:
-        print(f"Info: Signale haben unterschiedliche Längen ({N1_orig} vs {N2_orig}).")
-        if N1_orig < max_len:
-            pad_len = max_len - N1_orig
-            signal1 = np.pad(signal1, (0, pad_len), mode="constant")
-        if N2_orig < max_len:
-            pad_len = max_len - N2_orig
-            signal2 = np.pad(signal2, (0, pad_len), mode="constant")
-        print(f"Info: Signale auf {max_len} Samples gepolstert.")
-    else:
-        print(f"Info: Beide Signale haben bereits die gleiche Länge ({max_len} Samples).")
-
-    N = max_len # Die neue, gemeinsame Länge
-
-    if N == 0:
+    if N1 == 0 or N2 == 0:
          print("Fehler: Signallänge ist Null.")
          return
 
     # --- Kreuzkorrelation berechnen ---
-    print(f"Berechne Kreuzkorrelation zwischen Signalen (Länge {N})...")
+    print(
+        "Berechne Kreuzkorrelation zwischen Signalen "
+        f"(Längen {N1} und {N2})..."
+    )
     start_time = time.time()
     cross_corr = np.correlate(signal1, signal2, mode='full')
     end_time = time.time()
     print(f"Berechnung dauerte {end_time - start_time:.2f} Sekunden.")
 
-    # Der Output hat die Länge N + N - 1 = 2*N - 1
-    # Lags reichen von -(N-1) bis +(N-1)
-    lags = np.arange(-(N - 1), N)
-    zero_lag_index = N - 1  # Index des Lags 0
+    # Der Output hat die Länge N1 + N2 - 1
+    # Lags reichen von -(N2-1) bis +(N1-1)
+    lags = np.arange(-(N2 - 1), N1)
+    zero_lag_index = N2 - 1  # Index des Lags 0
 
     los_idx_full, echo_idx_full = find_los_echo(cross_corr)
     if los_idx_full is not None and echo_idx_full is not None:
@@ -115,7 +102,7 @@ def main():
         print(f"LOS-Echo Abstand: {delay_samples} Samples")
 
     # --- Daten für den Plot vorbereiten ---
-    plot_title = f'Kreuzkorrelation ({N} Samples)'
+    plot_title = f'Kreuzkorrelation ({N1}×{N2} Samples)'
     plot_title_suffix = ""
     ylabel_text = 'Kreuzkorrelations-Magnitude'
     plot_data = np.abs(cross_corr)
