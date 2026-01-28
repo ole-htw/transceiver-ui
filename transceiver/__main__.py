@@ -3229,6 +3229,21 @@ class TransceiverUI(ctk.CTk):
         self.trim_end_label = ctk.CTkLabel(trim_body, width=50, text="")
         self.trim_end_label.grid(row=0, column=3, sticky="e", padx=(4, 2))
 
+        self.rx_magnitude_enable = tk.BooleanVar(value=False)
+        (
+            self.rx_magnitude_frame,
+            self.rx_magnitude_body,
+            self.rx_magnitude_check,
+        ) = _make_side_bordered_group(
+            rx_body,
+            "Betrag",
+            toggle_var=self.rx_magnitude_enable,
+            toggle_command=self._on_rx_magnitude_toggle,
+        )
+        self.rx_magnitude_frame.grid(
+            row=4, column=0, columnspan=2, sticky="ew", pady=(0, 6)
+        )
+
         self.rx_path_cancel_enable = tk.BooleanVar(value=False)
         (
             self.rx_path_cancel_frame,
@@ -3241,11 +3256,11 @@ class TransceiverUI(ctk.CTk):
             toggle_command=self._on_rx_path_cancel_toggle,
         )
         self.rx_path_cancel_frame.grid(
-            row=4, column=0, columnspan=2, sticky="ew", pady=(0, 6)
+            row=5, column=0, columnspan=2, sticky="ew", pady=(0, 6)
         )
 
         rx_btn_frame = ctk.CTkFrame(rx_body)
-        rx_btn_frame.grid(row=5, column=0, columnspan=2, pady=(0, 5))
+        rx_btn_frame.grid(row=6, column=0, columnspan=2, pady=(0, 5))
         rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
         self.rx_button = ctk.CTkButton(rx_btn_frame, text="Receive", command=self.receive)
@@ -3267,7 +3282,7 @@ class TransceiverUI(ctk.CTk):
             fg_color=terminal_container_fg,
             corner_radius=terminal_container_corner,
         )
-        rx_scroll_container.grid(row=6, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.grid(row=7, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
@@ -3446,6 +3461,10 @@ class TransceiverUI(ctk.CTk):
                 self._zeros_last_value = current
             self.zeros_combo.configure(state="disabled")
         self.auto_update_tx_filename()
+
+    def _on_rx_magnitude_toggle(self) -> None:
+        self._reset_manual_xcorr_lags("Betrag geändert")
+        self.update_trim()
 
     def _on_rx_path_cancel_toggle(self) -> None:
         self._reset_manual_xcorr_lags("Pfad-Cancellation geändert")
@@ -3746,8 +3765,6 @@ class TransceiverUI(ctk.CTk):
         if self.trim_var.get():
             data = self._trim_data(data)
 
-        data_uncanceled = data
-
         def _load_tx_samples(path: str) -> np.ndarray:
             raw = np.fromfile(path, dtype=np.int16)
             if raw.size % 2:
@@ -3761,6 +3778,10 @@ class TransceiverUI(ctk.CTk):
         except Exception:
             self.tx_data = np.array([], dtype=np.complex64)
         ref_data, ref_label = self._get_crosscorr_reference()
+        if self.rx_magnitude_enable.get():
+            data = np.abs(data)
+            ref_data = np.abs(ref_data)
+        data_uncanceled = data
         aoa_text = "AoA (ESPRIT): --"
         echo_aoa_text = "Echo AoA: --"
         self.echo_aoa_results = []
@@ -4451,6 +4472,12 @@ class TransceiverUI(ctk.CTk):
             return
         if mode == "Crosscorr" and ref_data is None:
             ref_data, _ref_label = self._get_crosscorr_reference()
+        if (
+            mode == "Crosscorr"
+            and ref_data is not None
+            and self.rx_magnitude_enable.get()
+        ):
+            ref_data = np.abs(ref_data)
         output_path = _spawn_plot_worker(
             data,
             fs,
@@ -4514,7 +4541,7 @@ class TransceiverUI(ctk.CTk):
             self.echo_aoa_results = echo_out["results"]
         else:
             data = self.latest_data
-            ref = ref_data
+            ref = np.abs(ref_data) if self.rx_magnitude_enable.get() else ref_data
             n = min(len(data), len(ref))
             cc = _xcorr_fft(data[:n], ref[:n])
             self.full_xcorr_lags = np.arange(-n + 1, n)
@@ -4555,6 +4582,7 @@ class TransceiverUI(ctk.CTk):
             "rx_freq": self.rx_freq.get(),
             "rx_dur": self.rx_dur.get(),
             "rx_gain": self.rx_gain.get(),
+            "rx_magnitude_enabled": self.rx_magnitude_enable.get(),
             "rx_path_cancellation_enabled": self.rx_path_cancel_enable.get(),
             "rx_channel_2": self.rx_channel_2.get(),
             "rx_channel_view": self.rx_channel_view.get(),
@@ -4654,6 +4682,7 @@ class TransceiverUI(ctk.CTk):
         self.rx_dur.insert(0, params.get("rx_dur", ""))
         self.rx_gain.delete(0, tk.END)
         self.rx_gain.insert(0, params.get("rx_gain", ""))
+        self.rx_magnitude_enable.set(params.get("rx_magnitude_enabled", False))
         self.rx_path_cancel_enable.set(
             params.get("rx_path_cancellation_enabled", False)
         )
