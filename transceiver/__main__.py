@@ -3325,7 +3325,7 @@ class TransceiverUI(ctk.CTk):
                 self._update_rx_scrollbar(),
             ),
         )
-        rx_body.rowconfigure(6, weight=1)
+        rx_body.rowconfigure(7, weight=1)
         self.rx_canvases = []
         self.update_waveform_fields()
         self.auto_update_tx_filename()
