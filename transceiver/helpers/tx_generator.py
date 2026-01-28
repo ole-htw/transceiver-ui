@@ -106,6 +106,9 @@ def generate_filename(args) -> Path:
         parts.append(f"sym{args.ofdm_symbols}")
         if args.ofdm_short_repeats:
             parts.append(f"short{args.ofdm_short_repeats}")
+    elif args.waveform == "pseudo_noise":
+        parts.append(f"pn{_pretty(args.pn_chip_rate)}")
+        parts.append(f"seed{args.pn_seed}")
 
     if args.waveform == "zadoffchu":
         parts.append(f"Nsym{args.samples}")
@@ -196,6 +199,8 @@ def generate_waveform(
     ofdm_active_subcarriers: int = 52,
     ofdm_num_symbols: int = 2,
     ofdm_short_repeats: int = 10,
+    pn_chip_rate: float = 1e6,
+    pn_seed: int = 1,
 ) -> np.ndarray:
     """Erzeugt komplexe Samples einer der unterstützten Wellenformen.
 
@@ -339,6 +344,17 @@ def generate_waveform(
             payload = np.concatenate([short_block, payload]).astype(np.complex64)
         return payload.astype(np.complex64)
 
+    # ---------- Pseudo-Noise -------------------------------------------------
+    if w == "pseudo_noise":
+        if pn_chip_rate <= 0:
+            raise ValueError("pn_chip_rate muss > 0 sein.")
+        samples_per_chip = max(1, int(round(fs / pn_chip_rate)))
+        num_chips = int(np.ceil(N / samples_per_chip))
+        rng = np.random.default_rng(pn_seed)
+        chips = rng.choice([-1.0, 1.0], size=num_chips)
+        tiled = np.repeat(chips, samples_per_chip)[:N]
+        return tiled.astype(np.complex64)
+
     raise ValueError(f"Unbekannte Wellenform: {waveform}")
 
 
@@ -348,8 +364,8 @@ def generate_waveform(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Erzeugt eine Wellen­folge (sinus, doppelsinus, zadoffchu, chirp oder "
-            "ofdm_preamble) "
+        "Erzeugt eine Wellen­folge (sinus, doppelsinus, zadoffchu, chirp, "
+        "ofdm_preamble oder pseudo_noise) "
             "gefolgt optional von einer gleichen Anzahl Null-Samples und speichert "
             "sie als interleaved int16 (IQIQ…) in eine Datei."
         )
@@ -369,7 +385,14 @@ def main() -> None:
     )
     parser.add_argument(
         "--waveform",
-        choices=["sinus", "doppelsinus", "zadoffchu", "chirp", "ofdm_preamble"],
+        choices=[
+            "sinus",
+            "doppelsinus",
+            "zadoffchu",
+            "chirp",
+            "ofdm_preamble",
+            "pseudo_noise",
+        ],
         default="sinus",
         help="Wellenform (Standard: sinus)",
     )
@@ -474,6 +497,18 @@ def main() -> None:
         default=10,
         help="OFDM-Short-Repeats für erstes Symbol (Standard: 10)",
     )
+    parser.add_argument(
+        "--pn-chip-rate",
+        type=float,
+        default=1e6,
+        help="PN Chip-Rate in Hz (Standard: 1e6)",
+    )
+    parser.add_argument(
+        "--pn-seed",
+        type=int,
+        default=1,
+        help="PN Seed (Standard: 1)",
+    )
 
     # Null-Sequenz weglassen
     parser.add_argument(
@@ -562,6 +597,8 @@ def main() -> None:
         ofdm_active_subcarriers=args.ofdm_active,
         ofdm_num_symbols=args.ofdm_symbols,
         ofdm_short_repeats=args.ofdm_short_repeats,
+        pn_chip_rate=args.pn_chip_rate,
+        pn_seed=args.pn_seed,
     ).astype(np.complex64)
 
     # (Sicherstellen, dass die Länge genau den Erwartungen entspricht)

@@ -1696,6 +1696,11 @@ def _gen_tx_filename(app) -> str:
         parts.append(f"sym{int(num_symbols)}")
         if int(short_repeats) > 0:
             parts.append(f"short{int(short_repeats)}")
+    elif w == "pseudo_noise":
+        pn_rate = _try_parse_number_expr(app.pn_chip_entry.get(), default=1e6)
+        pn_seed = app.pn_seed_entry.get() or "1"
+        parts.append(f"pn{_pretty(pn_rate)}")
+        parts.append(f"seed{pn_seed}")
 
     parts.append(f"fs{_pretty(fs)}")
     if w == "zadoffchu":
@@ -2696,7 +2701,14 @@ class TransceiverUI(ctk.CTk):
         wave_box = ctk.CTkComboBox(
             waveform_left,
             variable=self.wave_var,
-            values=["sinus", "doppelsinus", "zadoffchu", "chirp", "ofdm_preamble"],
+            values=[
+                "sinus",
+                "doppelsinus",
+                "zadoffchu",
+                "chirp",
+                "ofdm_preamble",
+                "pseudo_noise",
+            ],
             text_color="#f5f5f5",
             dropdown_text_color="#f5f5f5",
         )
@@ -2741,6 +2753,22 @@ class TransceiverUI(ctk.CTk):
         self.q_label.grid(row=1, column=0, sticky="e", padx=label_padx)
         self.q_entry.grid(row=1, column=1, sticky="ew")
         self.q_entry.entry.bind("<FocusOut>", lambda _e: self.auto_update_tx_filename())
+
+        self.pn_chip_label = ctk.CTkLabel(
+            waveform_left, text="PN Chip-Rate", anchor="e"
+        )
+        self.pn_chip_entry = SuggestEntry(waveform_left, "pn_chip_entry")
+        self.pn_chip_entry.insert(0, "1e6")
+        self.pn_chip_entry.entry.bind(
+            "<FocusOut>", lambda _e: self.auto_update_tx_filename()
+        )
+
+        self.pn_seed_label = ctk.CTkLabel(waveform_left, text="PN Seed", anchor="e")
+        self.pn_seed_entry = SuggestEntry(waveform_left, "pn_seed_entry")
+        self.pn_seed_entry.insert(0, "1")
+        self.pn_seed_entry.entry.bind(
+            "<FocusOut>", lambda _e: self.auto_update_tx_filename()
+        )
 
         ctk.CTkLabel(waveform_right, text="Samples", anchor="e").grid(
             row=1, column=0, sticky="e", padx=label_padx
@@ -3346,6 +3374,10 @@ class TransceiverUI(ctk.CTk):
         self.f1_entry.grid_remove()
         self.q_label.grid_remove()
         self.q_entry.grid_remove()
+        self.pn_chip_label.grid_remove()
+        self.pn_chip_entry.grid_remove()
+        self.pn_seed_label.grid_remove()
+        self.pn_seed_entry.grid_remove()
         self.rrc_beta_label.grid_remove()
         self.rrc_beta_entry.grid_remove()
         self.rrc_span_label.grid_remove()
@@ -3405,6 +3437,11 @@ class TransceiverUI(ctk.CTk):
                 row=6, column=0, sticky="e", padx=self._label_padx
             )
             self.ofdm_short_entry.grid(row=6, column=1, sticky="ew")
+        elif w == "pseudo_noise":
+            self.pn_chip_label.grid(row=1, column=0, sticky="e", padx=self._label_padx)
+            self.pn_chip_entry.grid(row=1, column=1, sticky="ew")
+            self.pn_seed_label.grid(row=2, column=0, sticky="e", padx=self._label_padx)
+            self.pn_seed_entry.grid(row=2, column=1, sticky="ew")
 
         self.auto_update_tx_filename()
         _apply_input_margins(self)
@@ -4897,6 +4934,17 @@ class TransceiverUI(ctk.CTk):
                     ofdm_cp_len=cp_len,
                     ofdm_num_symbols=num_symbols,
                     ofdm_short_repeats=short_repeats,
+                )
+            elif waveform == "pseudo_noise":
+                pn_chip_rate = _parse_number_expr_or_error(self.pn_chip_entry.get())
+                pn_seed = int(self.pn_seed_entry.get()) if self.pn_seed_entry.get() else 1
+                data = generate_waveform(
+                    waveform,
+                    fs,
+                    0.0,
+                    samples,
+                    pn_chip_rate=pn_chip_rate,
+                    pn_seed=pn_seed,
                 )
             else:  # chirp
                 f0 = _parse_number_expr_or_error(
