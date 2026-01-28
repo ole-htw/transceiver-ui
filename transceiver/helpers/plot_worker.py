@@ -53,10 +53,11 @@ def _cleanup_shm(shm: shared_memory.SharedMemory | None) -> None:
 def _clear_plot(plot_item: pg.PlotItem) -> None:
     if plot_item.legend is not None:
         legend = plot_item.legend
-        plot_item.legend = None
-        if legend.scene() is not None:
-            legend.scene().removeItem(legend)
-        legend.deleteLater()
+        try:
+            legend.clear()
+        except Exception:
+            pass
+        legend.hide()
     plot_item.clear()
 
 
