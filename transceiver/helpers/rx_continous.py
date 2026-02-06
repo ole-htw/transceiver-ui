@@ -12,6 +12,7 @@ NOTE:
 Replay will back-pressure when the record buffer is full; restarting avoids that. :contentReference[oaicite:1]{index=1}
 """
 
+import io
 import os
 import sys
 import time
@@ -123,7 +124,9 @@ def emit_snippet(data: np.ndarray, *, port: int, snip_idx: int, ts: str,
 
     header = f"SNIP {snip_idx} {port} {ts} {len(data)}\n"
     sys.stdout.buffer.write(header.encode("utf-8"))
-    np.save(sys.stdout.buffer, data)
+    buf = io.BytesIO()
+    np.save(buf, data)
+    sys.stdout.buffer.write(buf.getvalue())
     sys.stdout.buffer.flush()
 
 # -----------------------------
