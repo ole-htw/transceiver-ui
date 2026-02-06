@@ -5470,6 +5470,7 @@ class TransceiverUI(ctk.CTk):
             str(restart_margin),
             "-o",
             output_prefix,
+            "--memory-only",
             "--numpy",
             "--cpu-format",
             "fc32",
