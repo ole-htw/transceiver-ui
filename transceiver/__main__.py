@@ -281,6 +281,16 @@ def _resolve_ctk_frame_bg(widget: tk.Misc) -> str:
     return _resolve_theme_color(ctk.ThemeManager.theme["CTkFrame"]["fg_color"])
 
 
+def _tk_color_to_rgb(widget: tk.Misc, color: str):
+    if not color or color == "transparent":
+        return color
+    try:
+        red, green, blue = widget.winfo_rgb(color)
+    except tk.TclError:
+        return color
+    return red // 257, green // 257, blue // 257
+
+
 def _apply_mpl_transparent(fig: Figure, ax) -> None:
     fig.patch.set_facecolor("none")
     fig.patch.set_alpha(0)
@@ -4325,6 +4335,7 @@ class TransceiverUI(ctk.CTk):
             preview_width = 500
             preview_height = 200
             bg_color = _resolve_ctk_frame_bg(target_frame)
+            pg_bg_color = _tk_color_to_rgb(target_frame, bg_color)
             axis_color = "#9E9E9E"
 
             pg_state = getattr(self, "_rx_cont_pg_state", None)
@@ -4343,7 +4354,7 @@ class TransceiverUI(ctk.CTk):
                 pg_state = {"plots": {}, "stats_frame": None, "aoa_plot": None}
                 for idx, mode in enumerate(modes):
                     plot_widget = pg.GraphicsLayoutWidget()
-                    plot_widget.setBackground(bg_color)
+                    plot_widget.setBackground(pg_bg_color)
                     plot_widget.setFixedSize(preview_width, preview_height)
                     plot_item = plot_widget.addPlot()
                     plot_item.setMenuEnabled(False)
