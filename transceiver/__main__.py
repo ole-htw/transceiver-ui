@@ -5636,6 +5636,33 @@ class TransceiverUI(ctk.CTk):
         self._cont_thread.start()
         self._process_queue()
 
+    def _wait_for_continuous_stop(
+        self, cont_thread: threading.Thread, timeout: float = 10.0
+    ) -> bool:
+        dialog = tk.Toplevel(self)
+        dialog.title("Continuous")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.protocol("WM_DELETE_WINDOW", lambda: None)
+        dialog.resizable(False, False)
+        label = ttk.Label(
+            dialog,
+            text="Continuous-Modus wird beendet. Bitte warten…",
+            padding=(20, 12),
+        )
+        label.pack()
+        progress = ttk.Progressbar(dialog, mode="indeterminate", length=260)
+        progress.pack(pady=(0, 16), padx=20)
+        progress.start(10)
+        end_time = time.monotonic() + timeout
+        while cont_thread.is_alive() and time.monotonic() < end_time:
+            cont_thread.join(timeout=0.2)
+            dialog.update()
+        progress.stop()
+        dialog.grab_release()
+        dialog.destroy()
+        return not cont_thread.is_alive()
+
     def stop_continuous(self) -> None:
         stop_event = getattr(self, "_cont_stop_event", None)
         if stop_event is not None:
@@ -5643,6 +5670,16 @@ class TransceiverUI(ctk.CTk):
         cont_thread = getattr(self, "_cont_thread", None)
         if cont_thread and cont_thread.is_alive():
             cont_thread.join(timeout=5)
+            if cont_thread.is_alive():
+                stopped = self._wait_for_continuous_stop(cont_thread)
+                if not stopped:
+                    messagebox.showerror(
+                        "Continuous",
+                        "Continuous-Modus konnte nicht beendet werden. "
+                        "Bitte erneut stoppen oder warten, bevor Single-Mode "
+                        "gestartet wird.",
+                    )
+                    return
         self._cont_thread = None
         if hasattr(self, "rx_cont_stop"):
             self.rx_cont_stop.configure(state="disabled")
