@@ -3455,6 +3455,23 @@ class TransceiverUI(ctk.CTk):
         )
         self.rx_cont_output_prefix.insert(0, "signals/rx/snippet")
         self.rx_cont_output_prefix.grid(row=0, column=1, columnspan=2, sticky="ew")
+
+        rx_cont_btn_frame = ctk.CTkFrame(rx_continuous_tab)
+        rx_cont_btn_frame.grid(row=3, column=0, columnspan=2, pady=(0, 5))
+        rx_cont_btn_frame.columnconfigure((0, 1), weight=1)
+        self.rx_cont_start = ctk.CTkButton(
+            rx_cont_btn_frame,
+            text="Start",
+            command=self.start_continuous,
+        )
+        self.rx_cont_start.grid(row=0, column=0, padx=2)
+        self.rx_cont_stop = ctk.CTkButton(
+            rx_cont_btn_frame,
+            text="Stop",
+            command=self.stop_continuous,
+            state="disabled",
+        )
+        self.rx_cont_stop.grid(row=0, column=1, padx=2)
         self.rx_canvases = []
         self.update_waveform_fields()
         self.auto_update_tx_filename()
@@ -5394,10 +5411,139 @@ class TransceiverUI(ctk.CTk):
         ).start()
         self._process_queue()
 
+    def start_continuous(self) -> None:
+        if getattr(self, "_cont_proc", None):
+            return
+        output_prefix = self.rx_cont_output_prefix.get().strip()
+        if not output_prefix:
+            messagebox.showerror("Continuous", "Output prefix ist erforderlich.")
+            return
+        ring_text = self.rx_cont_ring_seconds.get().strip()
+        if not ring_text:
+            messagebox.showerror("Continuous", "Ring Buffer (s) ist erforderlich.")
+            return
+        try:
+            rate = _parse_number_expr_or_error(self.rx_cont_rate.get())
+            freq = _parse_number_expr_or_error(self.rx_cont_freq.get())
+            gain = _parse_number_expr_or_error(self.rx_cont_gain.get())
+            ring_seconds = _parse_number_expr_or_error(ring_text)
+            snippet_seconds = _parse_number_expr_or_error(
+                self.rx_cont_snippet_seconds.get()
+            )
+            snippet_interval = _parse_number_expr_or_error(
+                self.rx_cont_snippet_interval.get()
+            )
+        except ValueError as exc:
+            messagebox.showerror("Continuous", str(exc))
+            return
+        cmd = [
+            sys.executable,
+            "-m",
+            "transceiver.helpers.rx_continous",
+            "-a",
+            self.rx_cont_args.get(),
+            "-f",
+            str(freq),
+            "-g",
+            str(int(round(gain))),
+            "-r",
+            str(rate),
+            "--ring-seconds",
+            str(ring_seconds),
+            "--snippet-seconds",
+            str(snippet_seconds),
+            "--snippet-interval",
+            str(snippet_interval),
+            "-o",
+            output_prefix,
+            "--numpy",
+            "--cpu-format",
+            "fc32",
+        ]
+        self._cont_stop_event = threading.Event()
+        self._cmd_running = True
+        if hasattr(self, "rx_cont_start"):
+            self.rx_cont_start.configure(state="disabled")
+        if hasattr(self, "rx_cont_stop"):
+            self.rx_cont_stop.configure(state="normal")
+        threading.Thread(
+            target=self._run_continuous_cmd,
+            args=(cmd, rate, self._cont_stop_event),
+            daemon=True,
+        ).start()
+        self._process_queue()
+
+    def stop_continuous(self) -> None:
+        stop_event = getattr(self, "_cont_stop_event", None)
+        if stop_event is not None:
+            stop_event.set()
+        proc = getattr(self, "_cont_proc", None)
+        if proc:
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+        self._cont_proc = None
+        if hasattr(self, "rx_cont_stop"):
+            self.rx_cont_stop.configure(state="disabled")
+        if hasattr(self, "rx_cont_start"):
+            self.rx_cont_start.configure(state="normal")
+
+    def _run_continuous_cmd(
+        self,
+        cmd: list[str],
+        rate: float,
+        stop_event: threading.Event,
+    ) -> None:
+        proc = None
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            self._cont_proc = proc
+            for line in proc.stdout:
+                if stop_event.is_set():
+                    break
+                self._out_queue.put(line)
+                if "->" in line:
+                    parts = line.rsplit("->", 1)
+                    if len(parts) == 2:
+                        path = parts[1].strip()
+                        if path.endswith(".npy") and os.path.exists(path):
+                            try:
+                                data = np.load(path)
+                                if data.size:
+                                    self._ui(lambda d=data: self._display_rx_plots(d, rate))
+                            except Exception as exc:
+                                self._out_queue.put(f"Continuous load error: {exc}\n")
+            if stop_event.is_set() and proc.poll() is None:
+                with contextlib.suppress(Exception):
+                    proc.terminate()
+            proc.wait()
+            self._out_queue.put(f"[Continuous exited with code {proc.returncode}]\n")
+        except Exception as exc:
+            self._out_queue.put(f"Continuous error: {exc}\n")
+        finally:
+            self._cmd_running = False
+            self._cont_proc = None
+            self._ui(self._reset_cont_buttons)
+
+    def _reset_cont_buttons(self) -> None:
+        if hasattr(self, "rx_cont_stop"):
+            self.rx_cont_stop.configure(state="disabled")
+        if hasattr(self, "rx_cont_start"):
+            self.rx_cont_start.configure(state="normal")
+
     def on_close(self) -> None:
         self._closing = True
         self.stop_transmit()
         self.stop_receive()
+        self.stop_continuous()
         if getattr(self, "_plot_worker_manager", None) is not None:
             self._plot_worker_manager.stop()
         if hasattr(self, "_tx_logger") and hasattr(self, "_tx_log_handler"):
