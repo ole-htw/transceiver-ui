@@ -3107,6 +3107,8 @@ class TransceiverUI(ctk.CTk):
 
         rx_tabs = ctk.CTkTabview(rx_body)
         rx_tabs.grid(row=0, column=0, sticky="nsew")
+        rx_tabs.configure(command=self._on_rx_tab_change)
+        self.rx_tabs = rx_tabs
 
         rx_single_tab = rx_tabs.add("Single")
         rx_single_tab.columnconfigure((0, 1), weight=1)
@@ -3330,8 +3332,12 @@ class TransceiverUI(ctk.CTk):
         self.rx_vscroll.grid(row=0, column=1, sticky="ns")
         self.rx_vscroll.grid_remove()
         self.rx_canvas.configure(yscrollcommand=None)
-        self._rx_scroll_active = False
-        self.rx_canvas.bind("<Enter>", self._bind_rx_mousewheel)
+        self.rx_canvas.bind(
+            "<Enter>",
+            lambda event, tab_name="Single": self._bind_rx_mousewheel(
+                event, tab_name
+            ),
+        )
         self.rx_canvas.bind("<Leave>", self._unbind_rx_mousewheel)
 
         self.rx_plots_frame = ctk.CTkFrame(
@@ -3345,16 +3351,16 @@ class TransceiverUI(ctk.CTk):
         )
         self.rx_plots_frame.bind(
             "<Configure>",
-            lambda _e: (
+            lambda _e, tab_name="Single": (
                 self.rx_canvas.configure(scrollregion=self.rx_canvas.bbox("all")),
-                self._update_rx_scrollbar(),
+                self._update_rx_scrollbar(tab_name),
             ),
         )
         self.rx_canvas.bind(
             "<Configure>",
-            lambda _e: (
+            lambda _e, tab_name="Single": (
                 self._center_canvas_window(self.rx_canvas, self.rx_plots_window),
-                self._update_rx_scrollbar(),
+                self._update_rx_scrollbar(tab_name),
             ),
         )
         rx_single_tab.rowconfigure(7, weight=1)
@@ -3481,7 +3487,90 @@ class TransceiverUI(ctk.CTk):
             state="disabled",
         )
         self.rx_cont_stop.grid(row=0, column=1, padx=2)
-        self.rx_canvases = []
+        rx_cont_scroll_container = ctk.CTkFrame(
+            rx_continuous_tab,
+            fg_color=terminal_container_fg,
+            corner_radius=terminal_container_corner,
+        )
+        rx_cont_scroll_container.grid(row=4, column=0, columnspan=2, sticky="nsew")
+        rx_cont_scroll_container.columnconfigure(0, weight=1)
+        rx_cont_scroll_container.rowconfigure(0, weight=1)
+
+        self.rx_cont_canvas = tk.Canvas(
+            rx_cont_scroll_container,
+            bg=terminal_container_bg,
+            highlightthickness=0,
+        )
+        self.rx_cont_canvas.grid(row=0, column=0, sticky="nsew")
+        self.rx_cont_vscroll = ctk.CTkScrollbar(
+            rx_cont_scroll_container,
+            orientation="vertical",
+            command=self.rx_cont_canvas.yview,
+        )
+        self.rx_cont_vscroll.grid(row=0, column=1, sticky="ns")
+        self.rx_cont_vscroll.grid_remove()
+        self.rx_cont_canvas.configure(yscrollcommand=None)
+        self.rx_cont_canvas.bind(
+            "<Enter>",
+            lambda event, tab_name="Continuous": self._bind_rx_mousewheel(
+                event, tab_name
+            ),
+        )
+        self.rx_cont_canvas.bind("<Leave>", self._unbind_rx_mousewheel)
+
+        self.rx_cont_plots_frame = ctk.CTkFrame(
+            self.rx_cont_canvas,
+            fg_color=terminal_container_fg,
+            corner_radius=terminal_container_corner,
+        )
+        self.rx_cont_plots_frame.columnconfigure(0, weight=1)
+        self.rx_cont_plots_window = self.rx_cont_canvas.create_window(
+            (0, 0), window=self.rx_cont_plots_frame, anchor="n"
+        )
+        self.rx_cont_plots_frame.bind(
+            "<Configure>",
+            lambda _e, tab_name="Continuous": (
+                self.rx_cont_canvas.configure(
+                    scrollregion=self.rx_cont_canvas.bbox("all")
+                ),
+                self._update_rx_scrollbar(tab_name),
+            ),
+        )
+        self.rx_cont_canvas.bind(
+            "<Configure>",
+            lambda _e, tab_name="Continuous": (
+                self._center_canvas_window(
+                    self.rx_cont_canvas, self.rx_cont_plots_window
+                ),
+                self._update_rx_scrollbar(tab_name),
+            ),
+        )
+        rx_continuous_tab.rowconfigure(4, weight=1)
+
+        self._rx_scroll_active: dict[str, bool] = {
+            "Single": False,
+            "Continuous": False,
+        }
+        self._rx_plot_containers = {
+            "Single": {
+                "name": "Single",
+                "canvas": self.rx_canvas,
+                "scrollbar": self.rx_vscroll,
+                "frame": self.rx_plots_frame,
+                "window": self.rx_plots_window,
+            },
+            "Continuous": {
+                "name": "Continuous",
+                "canvas": self.rx_cont_canvas,
+                "scrollbar": self.rx_cont_vscroll,
+                "frame": self.rx_cont_plots_frame,
+                "window": self.rx_cont_plots_window,
+            },
+        }
+        self.rx_canvases: dict[str, list[object]] = {
+            "Single": [],
+            "Continuous": [],
+        }
         self.update_waveform_fields()
         self.auto_update_tx_filename()
         self.auto_update_rx_filename()
@@ -3907,7 +3996,11 @@ class TransceiverUI(ctk.CTk):
         return getattr(self, "tx_data", np.array([], dtype=np.complex64)), "TX"
 
     def _display_rx_plots(
-        self, data: np.ndarray, fs: float, reset_manual: bool = True
+        self,
+        data: np.ndarray,
+        fs: float,
+        reset_manual: bool = True,
+        target_tab: str | None = None,
     ) -> None:
         """Render preview plots below the receive parameters."""
         if reset_manual:
@@ -4028,15 +4121,23 @@ class TransceiverUI(ctk.CTk):
         self.latest_fs = fs
         self.latest_data = data
 
-        for c in self.rx_canvases:
+        target_container = self._get_rx_plot_target(target_tab)
+        target_name = target_container["name"]
+        target_frame = target_container["frame"]
+        target_canvas = target_container["canvas"]
+        target_window = target_container["window"]
+
+        for c in self.rx_canvases[target_name]:
             if hasattr(c, "get_tk_widget"):
                 c.get_tk_widget().destroy()
             else:
                 c.destroy()
-        self.rx_canvases.clear()
+        self.rx_canvases[target_name].clear()
 
         modes = ["Signal", "Freq", "Crosscorr"]
         title_suffix = f" ({channel_label})" if channel_label else ""
+
+        rx_canvas_list = self.rx_canvases[target_name]
 
         def _render_rx_preview(
             target_frame: ctk.CTkFrame,
@@ -4099,7 +4200,7 @@ class TransceiverUI(ctk.CTk):
                         )
                     )
                 widget.bind("<Button-1>", handler)
-                self.rx_canvases.append(canvas)
+                rx_canvas_list.append(canvas)
 
             stats = _calc_stats(
                 plot_data,
@@ -4164,10 +4265,10 @@ class TransceiverUI(ctk.CTk):
                 widget = canvas.get_tk_widget()
                 widget.configure(bg=_resolve_ctk_frame_bg(target_frame))
                 widget.grid(row=len(modes) + 1, column=0, sticky="n", pady=2)
-                self.rx_canvases.append(canvas)
+                rx_canvas_list.append(canvas)
 
         _render_rx_preview(
-            self.rx_plots_frame,
+            target_frame,
             data,
             fs,
             ref_data,
@@ -4177,11 +4278,42 @@ class TransceiverUI(ctk.CTk):
             cancel_info if cancel_info and cancel_info.get("applied") else None,
             data_uncanceled if self.rx_path_cancel_enable.get() else None,
         )
+        self._center_canvas_window(target_canvas, target_window)
+        self._update_rx_scrollbar(target_name)
 
         if hasattr(self, "rx_aoa_label"):
             self.rx_aoa_label.configure(text=aoa_text)
         if hasattr(self, "rx_echo_aoa_label"):
             self.rx_echo_aoa_label.configure(text=echo_aoa_text)
+
+    def _get_rx_active_tab(self) -> str:
+        if hasattr(self, "rx_tabs"):
+            try:
+                return self.rx_tabs.get()
+            except Exception:
+                pass
+        return "Single"
+
+    def _get_rx_plot_target(self, tab_name: str | None = None) -> dict[str, object]:
+        name = tab_name or self._get_rx_active_tab()
+        containers = getattr(self, "_rx_plot_containers", {})
+        if name in containers:
+            return containers[name]
+        if "Single" in containers:
+            return containers["Single"]
+        raise KeyError("RX plot containers not initialized")
+
+    def _on_rx_tab_change(self, *_args) -> None:
+        tab_name = self._get_rx_active_tab()
+        has_rx_data = hasattr(self, "raw_rx_data") and self.raw_rx_data is not None
+        if has_rx_data:
+            fs = getattr(self, "latest_fs_raw", self.latest_fs)
+            self._display_rx_plots(
+                self.raw_rx_data,
+                fs,
+                reset_manual=False,
+                target_tab=tab_name,
+            )
 
     def _trim_data(self, data: np.ndarray) -> np.ndarray:
         """Return trimmed view of *data* based on slider settings."""
@@ -4381,31 +4513,36 @@ class TransceiverUI(ctk.CTk):
             self.gen_canvas.yview_moveto(0)
             self._gen_scroll_active = False
 
-    def _update_rx_scrollbar(self) -> None:
-        if not hasattr(self, "rx_canvas"):
+    def _update_rx_scrollbar(self, tab_name: str | None = None) -> None:
+        try:
+            target = self._get_rx_plot_target(tab_name)
+        except KeyError:
             return
-        bbox = self.rx_canvas.bbox("all")
+        name = target["name"]
+        canvas = target["canvas"]
+        vscroll = target["scrollbar"]
+        bbox = canvas.bbox("all")
         if not bbox:
-            if self.rx_vscroll.winfo_ismapped():
-                self.rx_vscroll.grid_remove()
-            self.rx_canvas.configure(yscrollcommand=None)
-            self.rx_canvas.yview_moveto(0)
-            self._rx_scroll_active = False
+            if vscroll.winfo_ismapped():
+                vscroll.grid_remove()
+            canvas.configure(yscrollcommand=None)
+            canvas.yview_moveto(0)
+            self._rx_scroll_active[name] = False
             return
         content_height = bbox[3] - bbox[1]
-        canvas_height = self.rx_canvas.winfo_height()
+        canvas_height = canvas.winfo_height()
         needs_scroll = content_height > (canvas_height + 1)
         if needs_scroll:
-            if not self.rx_vscroll.winfo_ismapped():
-                self.rx_vscroll.grid(row=0, column=1, sticky="ns")
-            self.rx_canvas.configure(yscrollcommand=self.rx_vscroll.set)
-            self._rx_scroll_active = True
+            if not vscroll.winfo_ismapped():
+                vscroll.grid(row=0, column=1, sticky="ns")
+            canvas.configure(yscrollcommand=vscroll.set)
+            self._rx_scroll_active[name] = True
         else:
-            if self.rx_vscroll.winfo_ismapped():
-                self.rx_vscroll.grid_remove()
-            self.rx_canvas.configure(yscrollcommand=None)
-            self.rx_canvas.yview_moveto(0)
-            self._rx_scroll_active = False
+            if vscroll.winfo_ismapped():
+                vscroll.grid_remove()
+            canvas.configure(yscrollcommand=None)
+            canvas.yview_moveto(0)
+            self._rx_scroll_active[name] = False
 
     # ----- Mousewheel helpers -----
     def _bind_gen_mousewheel(self, _event) -> None:
@@ -4431,19 +4568,29 @@ class TransceiverUI(ctk.CTk):
         if delta:
             self.gen_canvas.yview_scroll(delta, "units")
 
-    def _bind_rx_mousewheel(self, _event) -> None:
-        self.rx_canvas.bind_all("<MouseWheel>", self._on_rx_mousewheel)
-        self.rx_canvas.bind_all("<Button-4>", self._on_rx_mousewheel)
-        self.rx_canvas.bind_all("<Button-5>", self._on_rx_mousewheel)
+    def _bind_rx_mousewheel(self, _event, tab_name: str) -> None:
+        self._rx_active_scroll_tab = tab_name
+        target = self._get_rx_plot_target(tab_name)
+        canvas = target["canvas"]
+        canvas.bind_all("<MouseWheel>", self._on_rx_mousewheel)
+        canvas.bind_all("<Button-4>", self._on_rx_mousewheel)
+        canvas.bind_all("<Button-5>", self._on_rx_mousewheel)
 
     def _unbind_rx_mousewheel(self, _event) -> None:
+        self._rx_active_scroll_tab = None
         self.rx_canvas.unbind_all("<MouseWheel>")
         self.rx_canvas.unbind_all("<Button-4>")
         self.rx_canvas.unbind_all("<Button-5>")
 
     def _on_rx_mousewheel(self, event) -> None:
-        if not self._rx_scroll_active:
+        tab_name = self._rx_active_scroll_tab or self._get_rx_active_tab()
+        try:
+            target = self._get_rx_plot_target(tab_name)
+        except KeyError:
             return
+        if not self._rx_scroll_active.get(tab_name, False):
+            return
+        canvas = target["canvas"]
         delta = 0
         if hasattr(event, "delta") and event.delta:
             delta = -1 * int(event.delta / 120)
@@ -4452,7 +4599,7 @@ class TransceiverUI(ctk.CTk):
         elif event.num == 5:
             delta = 1
         if delta:
-            self.rx_canvas.yview_scroll(delta, "units")
+            canvas.yview_scroll(delta, "units")
 
     def _process_queue(self) -> None:
         chunks: list[str] = []
@@ -4522,7 +4669,9 @@ class TransceiverUI(ctk.CTk):
                     data = rx_convert.load_iq_file(
                         path, channels=channels, layout="interleaved"
                     )
-                self._ui(lambda: self._display_rx_plots(data, rate))
+                self._ui(
+                    lambda: self._display_rx_plots(data, rate, target_tab="Single")
+                )
             except Exception as exc:
                 self._out_queue.put(f"Receive plot error: {exc}\n")
 
@@ -5502,7 +5651,11 @@ class TransceiverUI(ctk.CTk):
 
             def _callback(*, data: np.ndarray, **_info: object) -> None:
                 if data.size:
-                    self._ui(lambda d=data: self._display_rx_plots(d, rate))
+                    self._ui(
+                        lambda d=data: self._display_rx_plots(
+                            d, rate, target_tab="Continuous"
+                        )
+                    )
 
             rx_continous.main(callback=_callback, args=args, stop_event=stop_event)
         except Exception as exc:
