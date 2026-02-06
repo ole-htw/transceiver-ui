@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Simple GUI to generate, transmit and receive signals."""
 import logging
+import io
 import threading
 import queue
 import tkinter as tk
@@ -21,9 +22,10 @@ from pathlib import Path
 from datetime import datetime
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageTk
 from pyqtgraph.Qt import QtCore
 import pyqtgraph as pg
+from pyqtgraph import exporters as pg_exporters
 
 import sys
 from .helpers.tx_generator import generate_waveform
@@ -2378,6 +2380,41 @@ def _plot_on_pg(
     plot.showGrid(x=True, y=True)
 
 
+def _clear_pg_plot(plot_item: pg.PlotItem) -> None:
+    if plot_item.legend is not None:
+        legend = plot_item.legend
+        try:
+            legend.clear()
+        except Exception:
+            pass
+        legend.hide()
+    plot_item.clear()
+
+
+def _style_pg_preview_axes(plot_item: pg.PlotItem, color: str) -> None:
+    axis_pen = pg.mkPen(color)
+    for axis_name in ("bottom", "left"):
+        axis = plot_item.getAxis(axis_name)
+        axis.setPen(axis_pen)
+        axis.setTextPen(axis_pen)
+
+
+def _export_pg_plot_image(
+    plot_item: pg.PlotItem,
+    width: int,
+    height: int,
+) -> ImageTk.PhotoImage:
+    exporter = pg_exporters.ImageExporter(plot_item)
+    params = exporter.parameters()
+    if "width" in params:
+        params["width"] = width
+    if "height" in params:
+        params["height"] = height
+    png_bytes = exporter.export(toBytes=True)
+    image = Image.open(io.BytesIO(png_bytes))
+    return ImageTk.PhotoImage(image)
+
+
 def _plot_on_mpl(
     ax,
     data: np.ndarray,
@@ -4127,17 +4164,16 @@ class TransceiverUI(ctk.CTk):
         target_canvas = target_container["canvas"]
         target_window = target_container["window"]
 
-        for c in self.rx_canvases[target_name]:
-            if hasattr(c, "get_tk_widget"):
-                c.get_tk_widget().destroy()
-            else:
-                c.destroy()
-        self.rx_canvases[target_name].clear()
+        if target_name != "Continuous":
+            for c in self.rx_canvases[target_name]:
+                if hasattr(c, "get_tk_widget"):
+                    c.get_tk_widget().destroy()
+                else:
+                    c.destroy()
+            self.rx_canvases[target_name].clear()
 
         modes = ["Signal", "Freq", "Crosscorr"]
         title_suffix = f" ({channel_label})" if channel_label else ""
-
-        rx_canvas_list = self.rx_canvases[target_name]
 
         def _render_rx_preview(
             target_frame: ctk.CTkFrame,
@@ -4234,6 +4270,12 @@ class TransceiverUI(ctk.CTk):
                 value_labels.append(value_label)
             self.rx_stats_labels.append(value_labels)
             if self.rx_view.get() == "AoA (ESPRIT)":
+                aoa_plot = pg_state.get("aoa_plot")
+                if aoa_plot is not None:
+                    try:
+                        aoa_plot.get_tk_widget().destroy()
+                    except Exception:
+                        pass
                 fig = Figure(figsize=(5, 2), dpi=100)
                 ax = fig.add_subplot(111)
                 _apply_mpl_transparent(fig, ax)
@@ -4267,17 +4309,216 @@ class TransceiverUI(ctk.CTk):
                 widget.grid(row=len(modes) + 1, column=0, sticky="n", pady=2)
                 rx_canvas_list.append(canvas)
 
-        _render_rx_preview(
-            target_frame,
-            data,
-            fs,
-            ref_data,
-            ref_label,
-            aoa_time,
-            aoa_series,
-            cancel_info if cancel_info and cancel_info.get("applied") else None,
-            data_uncanceled if self.rx_path_cancel_enable.get() else None,
-        )
+        def _render_rx_preview_pg(
+            target_frame: ctk.CTkFrame,
+            plot_data: np.ndarray,
+            plot_fs: float,
+            plot_ref_data: np.ndarray,
+            plot_ref_label: str,
+            aoa_plot_time: np.ndarray | None,
+            aoa_plot_series: np.ndarray | None,
+            path_cancel_info: dict[str, object] | None,
+            crosscorr_compare: np.ndarray | None,
+        ) -> None:
+            pg.mkQApp()
+            target_frame.columnconfigure(0, weight=1)
+            preview_width = 500
+            preview_height = 200
+            bg_color = _resolve_ctk_frame_bg(target_frame)
+            axis_color = "#9E9E9E"
+
+            pg_state = getattr(self, "_rx_cont_pg_state", None)
+            plots_state = (
+                pg_state.get("plots") if isinstance(pg_state, dict) else None
+            )
+            if (
+                pg_state is None
+                or not isinstance(pg_state, dict)
+                or not plots_state
+                or any(
+                    not plot_info["label"].winfo_exists()
+                    for plot_info in plots_state.values()
+                )
+            ):
+                pg_state = {"plots": {}, "stats_frame": None, "aoa_plot": None}
+                for idx, mode in enumerate(modes):
+                    plot_widget = pg.GraphicsLayoutWidget()
+                    plot_widget.setBackground(bg_color)
+                    plot_widget.setFixedSize(preview_width, preview_height)
+                    plot_item = plot_widget.addPlot()
+                    plot_item.setMenuEnabled(False)
+                    _style_pg_preview_axes(plot_item, axis_color)
+                    label = tk.Label(target_frame, bg=bg_color)
+                    label.grid(row=idx, column=0, sticky="n", pady=2)
+                    pg_state["plots"][mode] = {
+                        "widget": plot_widget,
+                        "plot": plot_item,
+                        "label": label,
+                        "initialized": False,
+                    }
+                self._rx_cont_pg_state = pg_state
+
+            for idx, mode in enumerate(modes):
+                plot_info = pg_state["plots"][mode]
+                plot_item = plot_info["plot"]
+                _clear_pg_plot(plot_item)
+                ref = plot_ref_data if mode == "Crosscorr" else None
+                crosscorr_title = (
+                    f"RX {mode}{title_suffix} ({plot_ref_label})"
+                    if mode == "Crosscorr" and plot_ref_label
+                    else f"RX {mode}{title_suffix}"
+                )
+                _plot_on_pg(
+                    plot_item,
+                    plot_data,
+                    plot_fs,
+                    mode,
+                    crosscorr_title,
+                    ref_data=ref,
+                    crosscorr_compare=crosscorr_compare if mode == "Crosscorr" else None,
+                    manual_lags=self.manual_xcorr_lags if mode == "Crosscorr" else None,
+                )
+                if not plot_info["initialized"]:
+                    plot_item.enableAutoRange(axis="xy", enable=True)
+                    plot_item.autoRange()
+                    plot_item.enableAutoRange(axis="xy", enable=False)
+                    plot_info["initialized"] = True
+                image = _export_pg_plot_image(
+                    plot_item,
+                    preview_width,
+                    preview_height,
+                )
+                label = plot_info["label"]
+                label.configure(image=image)
+                label.image = image
+                if mode == "Crosscorr":
+                    handler = (
+                        lambda _e,
+                        m=mode,
+                        d=plot_data,
+                        s=plot_fs,
+                        r=ref,
+                        c=crosscorr_compare,
+                        t=crosscorr_title: (
+                            self._show_fullscreen(
+                                d, s, m, t, ref_data=r, crosscorr_compare=c
+                            )
+                        )
+                    )
+                else:
+                    handler = (
+                        lambda _e,
+                        m=mode,
+                        d=plot_data,
+                        s=plot_fs: self._show_fullscreen(
+                            d, s, m, f"RX {m}{title_suffix}"
+                        )
+                    )
+                label.bind("<Button-1>", handler)
+
+            stats = _calc_stats(
+                plot_data,
+                plot_fs,
+                plot_ref_data,
+                manual_lags=self.manual_xcorr_lags,
+                xcorr_reduce=True,
+                path_cancel_info=path_cancel_info,
+            )
+            stats_rows = _format_rx_stats_rows(stats)
+            stats_frame = pg_state.get("stats_frame")
+            if stats_frame is not None and stats_frame.winfo_exists():
+                stats_frame.destroy()
+            stats_frame = ctk.CTkFrame(target_frame, fg_color="transparent")
+            stats_frame.grid(row=len(modes), column=0, sticky="ew", pady=2)
+            stats_frame.columnconfigure((0, 1, 2, 3, 4, 5), weight=1)
+            value_labels: list[ctk.CTkLabel] = []
+            for idx, (label, value) in enumerate(stats_rows):
+                row = 0 if idx < 3 else 1
+                col = (idx if idx < 3 else idx - 3) * 2
+                ctk.CTkLabel(
+                    stats_frame,
+                    justify="right",
+                    anchor="e",
+                    text=f"{label}:",
+                ).grid(row=row, column=col, sticky="e", padx=6)
+                value_label = ctk.CTkLabel(
+                    stats_frame,
+                    justify="left",
+                    anchor="w",
+                    text=value,
+                )
+                value_label.grid(row=row, column=col + 1, sticky="w", padx=6)
+                value_labels.append(value_label)
+            pg_state["stats_frame"] = stats_frame
+            self.rx_stats_labels.append(value_labels)
+
+            if self.rx_view.get() == "AoA (ESPRIT)":
+                fig = Figure(figsize=(5, 2), dpi=100)
+                ax = fig.add_subplot(111)
+                _apply_mpl_transparent(fig, ax)
+                if (
+                    aoa_plot_time is None
+                    or aoa_plot_series is None
+                    or aoa_plot_series.size == 0
+                ):
+                    ax.set_title("AoA (ESPRIT)")
+                    ax.text(
+                        0.5,
+                        0.5,
+                        "Keine AoA-Daten",
+                        ha="center",
+                        va="center",
+                        color="#9E9E9E",
+                    )
+                    ax.set_axis_off()
+                else:
+                    t = aoa_plot_time / plot_fs
+                    ax.plot(t, aoa_plot_series, "b")
+                    ax.set_title("AoA (ESPRIT)")
+                    ax.set_xlabel("Time [s]")
+                    ax.set_ylabel("Angle [deg]")
+                    ax.grid(True)
+                _apply_mpl_gray_style(ax)
+                canvas = FigureCanvasTkAgg(fig, master=target_frame)
+                canvas.draw()
+                widget = canvas.get_tk_widget()
+                widget.configure(bg=_resolve_ctk_frame_bg(target_frame))
+                widget.grid(row=len(modes) + 1, column=0, sticky="n", pady=2)
+                pg_state["aoa_plot"] = canvas
+            else:
+                aoa_plot = pg_state.get("aoa_plot")
+                if aoa_plot is not None:
+                    try:
+                        aoa_plot.get_tk_widget().destroy()
+                    except Exception:
+                        pass
+                    pg_state["aoa_plot"] = None
+
+        if target_name == "Continuous":
+            _render_rx_preview_pg(
+                target_frame,
+                data,
+                fs,
+                ref_data,
+                ref_label,
+                aoa_time,
+                aoa_series,
+                cancel_info if cancel_info and cancel_info.get("applied") else None,
+                data_uncanceled if self.rx_path_cancel_enable.get() else None,
+            )
+        else:
+            rx_canvas_list = self.rx_canvases[target_name]
+            _render_rx_preview(
+                target_frame,
+                data,
+                fs,
+                ref_data,
+                ref_label,
+                aoa_time,
+                aoa_series,
+                cancel_info if cancel_info and cancel_info.get("applied") else None,
+                data_uncanceled if self.rx_path_cancel_enable.get() else None,
+            )
         self._center_canvas_window(target_canvas, target_window)
         self._update_rx_scrollbar(target_name)
 
