@@ -4505,6 +4505,7 @@ class TransceiverUI(ctk.CTk):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                errors="replace",
                 bufsize=1,
             )
             self._proc = proc
@@ -5519,6 +5520,7 @@ class TransceiverUI(ctk.CTk):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                errors="replace",
                 bufsize=1,
             )
             self._cont_proc = proc
