@@ -4909,6 +4909,7 @@ class TransceiverUI(ctk.CTk):
             "rx_cont_snippet_seconds": self.rx_cont_snippet_seconds.get(),
             "rx_cont_snippet_interval": self.rx_cont_snippet_interval.get(),
             "rx_cont_output_prefix": self.rx_cont_output_prefix.get(),
+            "rx_active_tab": self._get_rx_active_tab(),
         }
 
     def _autosave_state(self) -> None:
@@ -5039,6 +5040,12 @@ class TransceiverUI(ctk.CTk):
             0, params.get("rx_cont_output_prefix", "signals/rx/snippet")
         )
         self.rx_view.set(params.get("rx_view", "Signal"))
+        rx_active_tab = params.get("rx_active_tab", "Single")
+        if hasattr(self, "rx_tabs"):
+            try:
+                self.rx_tabs.set(rx_active_tab)
+            except Exception:
+                self.rx_tabs.set("Single")
         self.rx_ant_spacing.delete(0, tk.END)
         self.rx_ant_spacing.insert(0, params.get("rx_ant_spacing", "0.03"))
         self.rx_wavelength.delete(0, tk.END)
