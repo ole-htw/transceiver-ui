@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Simple GUI to generate, transmit and receive signals."""
 import subprocess
-import io
 import logging
 import threading
 import queue
@@ -5519,56 +5518,31 @@ class TransceiverUI(ctk.CTk):
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=0,
+                stderr=subprocess.STDOUT,
+                text=True,
+                errors="replace",
+                bufsize=1,
             )
             self._cont_proc = proc
-            stderr_thread = None
-            if proc.stderr is not None:
-                stderr_reader = io.TextIOWrapper(
-                    proc.stderr, encoding="utf-8", errors="replace"
-                )
-
-                def _drain_stderr() -> None:
-                    for line in stderr_reader:
-                        if stop_event.is_set():
-                            break
-                        self._out_queue.put(line)
-
-                stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
-                stderr_thread.start()
-
-            stdout = proc.stdout
-            if stdout is not None:
-                stdout_reader = io.BufferedReader(stdout)
-                while not stop_event.is_set():
-                    header = stdout_reader.readline()
-                    if not header:
-                        break
-                    if not header.startswith(b"SNIP "):
-                        text = header.decode("utf-8", errors="replace")
-                        if text:
-                            self._out_queue.put(text)
-                        continue
-                    parts = header.decode("utf-8", errors="replace").strip().split()
-                    if len(parts) < 5:
-                        self._out_queue.put(
-                            f"Continuous parse error: {header.decode('utf-8', errors='replace')}\n"
-                        )
-                        continue
-                    try:
-                        data = np.load(stdout_reader, allow_pickle=False)
-                    except Exception as exc:
-                        self._out_queue.put(f"Continuous load error: {exc}\n")
-                        continue
-                    if data.size:
-                        self._ui(lambda d=data: self._display_rx_plots(d, rate))
+            for line in proc.stdout:
+                if stop_event.is_set():
+                    break
+                self._out_queue.put(line)
+                if "->" in line:
+                    parts = line.rsplit("->", 1)
+                    if len(parts) == 2:
+                        path = parts[1].strip()
+                        if path.endswith(".npy") and os.path.exists(path):
+                            try:
+                                data = np.load(path)
+                                if data.size:
+                                    self._ui(lambda d=data: self._display_rx_plots(d, rate))
+                            except Exception as exc:
+                                self._out_queue.put(f"Continuous load error: {exc}\n")
             if stop_event.is_set() and proc.poll() is None:
                 with contextlib.suppress(Exception):
                     proc.terminate()
             proc.wait()
-            if stderr_thread is not None:
-                stderr_thread.join(timeout=1.0)
             self._out_queue.put(f"[Continuous exited with code {proc.returncode}]\n")
         except Exception as exc:
             self._out_queue.put(f"Continuous error: {exc}\n")
