@@ -63,9 +63,13 @@ def parse_args():
                         "Default: max(snippet+guard, 0.25*ring).")
 
     # Output
-    p.add_argument("-o", "--output-prefix", required=True,
-                   help="Prefix for snippet files (directory optional). "
-                        "Example: /data/cap/snips/run1 -> run1_s000001_ch0.npy")
+    p.add_argument("--memory-only", action="store_true",
+                   help="Disable file output; emit snippet arrays via callback "
+                        "(direct call) or stdout framing (subprocess).")
+    p.add_argument("-o", "--output-prefix", required=False,
+                   help="Prefix for snippet files (directory optional). Required unless "
+                        "--memory-only is set. Example: /data/cap/snips/run1 -> "
+                        "run1_s000001_ch0.npy")
     p.add_argument("-n", "--numpy", default=False, action="store_true",
                    help="Save snippets as .npy (default: raw .dat).")
     p.add_argument("--cpu-format", default="sc16", choices=["sc16", "fc32"],
@@ -93,6 +97,34 @@ def ensure_parent_dir(path_prefix: str):
         os.makedirs(parent, exist_ok=True)
 
 
+def log(message: str, *, memory_only: bool):
+    stream = sys.stderr if memory_only else sys.stdout
+    print(message, file=stream)
+
+
+def emit_snippet(data: np.ndarray, *, port: int, snip_idx: int, ts: str,
+                 args, callback):
+    if not args.memory_only:
+        out_fn = snippet_filename(args.output_prefix + "_" + ts, snip_idx, port, args.numpy)
+        if args.numpy:
+            with open(out_fn, "wb") as f:
+                np.save(f, data)
+        else:
+            # raw dump (native endianness)
+            data.tofile(out_fn)
+        log(f"[s{snip_idx:06d} ch{port}] wrote {len(data)} items -> {out_fn}",
+            memory_only=args.memory_only)
+        return
+
+    if callback is not None:
+        callback(data=data, port=port, snip_idx=snip_idx, timestamp=ts)
+        return
+
+    header = f"SNIP {snip_idx} {port} {ts} {len(data)}\n"
+    sys.stdout.buffer.write(header.encode("utf-8"))
+    np.save(sys.stdout.buffer, data)
+    sys.stdout.buffer.flush()
+
 # -----------------------------
 # RFNoC Graph helpers (mostly from your script)
 # -----------------------------
@@ -110,22 +142,24 @@ def enumerate_radios(graph, radio_chans):
     return radio_chan_pairs
 
 
-def connect_radios(graph, replay, radio_chan_pairs, freqs, gains, antennas, rate):
+def connect_radios(graph, replay, radio_chan_pairs, freqs, gains, antennas, rate, *, memory_only: bool):
     if rate is None:
         rate = radio_chan_pairs[0][0].get_rate()
-    print(f"Requested rate: {rate/1e6:.2f} Msps")
+    log(f"Requested rate: {rate/1e6:.2f} Msps", memory_only=memory_only)
 
     actual_rate = None
     for replay_port_idx, (radio, chan) in enumerate(radio_chan_pairs):
-        print(f"Connecting {radio.get_unique_id()}:{chan} -> {replay.get_unique_id()}:{replay_port_idx}")
+        log(f"Connecting {radio.get_unique_id()}:{chan} -> {replay.get_unique_id()}:{replay_port_idx}",
+            memory_only=memory_only)
 
         radio.set_rx_frequency(freqs[replay_port_idx % len(freqs)], chan)
         radio.set_rx_gain(gains[replay_port_idx % len(gains)], chan)
         if antennas is not None:
             radio.set_rx_antenna(antennas[replay_port_idx % len(antennas)], chan)
 
-        print(f"--> Radio settings: fc={radio.get_rx_frequency(chan)/1e6:.2f} MHz, "
-              f"gain={radio.get_rx_gain(chan)} dB, antenna={radio.get_rx_antenna(chan)}")
+        log(f"--> Radio settings: fc={radio.get_rx_frequency(chan)/1e6:.2f} MHz, "
+            f"gain={radio.get_rx_gain(chan)} dB, antenna={radio.get_rx_antenna(chan)}",
+            memory_only=memory_only)
 
         radio_to_replay_graph = uhd.rfnoc.connect_through_blocks(
             graph,
@@ -140,7 +174,7 @@ def connect_radios(graph, replay, radio_chan_pairs, freqs, gains, antennas, rate
         ), None)
 
         if ddc_block is not None:
-            print(f"Found DDC block on channel {chan}.")
+            log(f"Found DDC block on channel {chan}.", memory_only=memory_only)
             this_rate = uhd.rfnoc.DdcBlockControl(graph.get_block(ddc_block[0])).set_output_rate(rate, chan)
         else:
             this_rate = radio.set_rate(rate)
@@ -201,7 +235,8 @@ def recv_exact_1ch(rx_streamer, num_items: int, dtype, pkt_items: int):
             raise RuntimeError("Snippet download recv() timed out.")
         if md.error_code == uhd.types.RXMetadataErrorCode.overflow:
             # For host downloads from Replay this should be rare, but handle it.
-            print("WARNING: Overflow during snippet download (possible host/network bottleneck).")
+            print("WARNING: Overflow during snippet download (possible host/network bottleneck).",
+                  file=sys.stderr)
         elif md.error_code != uhd.types.RXMetadataErrorCode.none:
             raise RuntimeError(f"recv() error: {md.strerror()}")
 
@@ -263,21 +298,25 @@ def record_monitor(stop_evt: threading.Event,
                 if md.error_code != uhd.types.RXMetadataErrorCode.none:
                     print(f"[port {port}] record async md: {md.strerror()}")
         except Exception as e:
-            print(f"[port {port}] monitor error: {e}")
+            print(f"[port {port}] monitor error: {e}", file=sys.stderr)
         time.sleep(0.01)
 
 
-def main():
+def main(callback=None):
     args = parse_args()
-    ensure_parent_dir(args.output_prefix)
+    if not args.memory_only and not args.output_prefix:
+        raise RuntimeError("--output-prefix is required unless --memory-only is set.")
+    if args.output_prefix and not args.memory_only:
+        ensure_parent_dir(args.output_prefix)
 
     graph = uhd.rfnoc.RfnocGraph(args.args)
     replay = uhd.rfnoc.ReplayBlockControl(graph.get_block(args.block))
     radio_chan_pairs = enumerate_radios(graph, args.radio_channels)
 
     rate = connect_radios(graph, replay, radio_chan_pairs,
-                          args.freq, args.gain, args.antenna, args.rate)
-    print(f"Using rate: {rate/1e6:.3f} Msps")
+                          args.freq, args.gain, args.antenna, args.rate,
+                          memory_only=args.memory_only)
+    log(f"Using rate: {rate/1e6:.3f} Msps", memory_only=args.memory_only)
 
     num_ports = len(radio_chan_pairs)
 
@@ -322,7 +361,8 @@ def main():
 
     if ring_bytes > mem_stride:
         ring_bytes = (mem_stride // align) * align
-        print(f"WARNING: ring_bytes exceeds per-port stride; reducing to {ring_bytes} bytes")
+        log(f"WARNING: ring_bytes exceeds per-port stride; reducing to {ring_bytes} bytes",
+            memory_only=args.memory_only)
 
     # Snippet sizes
     snippet_bytes = int(args.snippet_seconds * rate * item_size)
@@ -348,10 +388,13 @@ def main():
     if restart_margin_bytes >= ring_bytes:
         restart_margin_bytes = ring_bytes // 2
 
-    print(f"Replay mem total: {mem_size/1024/1024:.1f} MiB, stride/port: {mem_stride/1024/1024:.1f} MiB")
-    print(f"Ring/port: {ring_bytes/1024/1024:.2f} MiB  (align={align} bytes)")
-    print(f"Snippet: {snippet_bytes} bytes ({args.snippet_seconds}s), interval: {args.snippet_interval}s, guard: {guard_bytes} bytes")
-    print(f"Restart margin: {restart_margin_bytes} bytes")
+    log(f"Replay mem total: {mem_size/1024/1024:.1f} MiB, stride/port: {mem_stride/1024/1024:.1f} MiB",
+        memory_only=args.memory_only)
+    log(f"Ring/port: {ring_bytes/1024/1024:.2f} MiB  (align={align} bytes)",
+        memory_only=args.memory_only)
+    log(f"Snippet: {snippet_bytes} bytes ({args.snippet_seconds}s), interval: {args.snippet_interval}s, guard: {guard_bytes} bytes",
+        memory_only=args.memory_only)
+    log(f"Restart margin: {restart_margin_bytes} bytes", memory_only=args.memory_only)
 
     # Configure record buffers per port (start at each stride base)
     base_offsets = []
@@ -380,7 +423,7 @@ def main():
     stream_cmd = uhd.types.StreamCMD(uhd.types.StreamMode.start_cont)
     stream_cmd.stream_now = False
     stream_cmd.time_spec = now + uhd.types.TimeSpec(args.delay)
-    print("Starting continuous RX stream into Replay...")
+    log("Starting continuous RX stream into Replay...", memory_only=args.memory_only)
     for radio, chan in radio_chan_pairs:
         radio.issue_stream_cmd(stream_cmd, chan)
 
@@ -405,7 +448,7 @@ def main():
         dtype = np.uint32
 
     # Snippet loop
-    print("Entering snippet download loop. Ctrl+C to stop.")
+    log("Entering snippet download loop. Ctrl+C to stop.", memory_only=args.memory_only)
     snip_idx = 1
     next_t = time.monotonic() + args.snippet_interval
 
@@ -435,7 +478,8 @@ def main():
                     )
 
                     if not ranges:
-                        print(f"[s{snip_idx:06d} ch{port}] not enough data yet")
+                        log(f"[s{snip_idx:06d} ch{port}] not enough data yet",
+                            memory_only=args.memory_only)
                         continue
 
                     parts = []
@@ -454,21 +498,15 @@ def main():
                         )
                     data = np.concatenate(parts) if len(parts) > 1 else parts[0]
 
-                out_fn = snippet_filename(args.output_prefix + "_" + ts, snip_idx, port, args.numpy)
-                if args.numpy:
-                    with open(out_fn, "wb") as f:
-                        np.save(f, data)
-                else:
-                    # raw dump (native endianness)
-                    data.tofile(out_fn)
-
-                print(f"[s{snip_idx:06d} ch{port}] wrote {len(data)} items -> {out_fn}")
+                emit_snippet(data, port=port, snip_idx=snip_idx, ts=ts,
+                             args=args, callback=callback)
+                del data
 
             snip_idx += 1
             next_t += args.snippet_interval
 
     except KeyboardInterrupt:
-        print("\nStopping...")
+        log("\nStopping...", memory_only=args.memory_only)
 
     finally:
         # Stop radio continuous streaming
@@ -478,7 +516,7 @@ def main():
             for radio, chan in radio_chan_pairs:
                 radio.issue_stream_cmd(stop_cmd, chan)
         except Exception as e:
-            print(f"Stop streaming error: {e}")
+            log(f"Stop streaming error: {e}", memory_only=args.memory_only)
 
         stop_evt.set()
         time.sleep(0.1)
@@ -488,4 +526,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
