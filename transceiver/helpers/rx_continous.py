@@ -593,6 +593,12 @@ def main(callback=None, args=None, stop_event=None):
         stop_evt.set()
         time.sleep(0.1)
 
+        try:
+            if graph is not None:
+                graph.release()
+        except Exception:
+            pass
+
     return 0
 
 
