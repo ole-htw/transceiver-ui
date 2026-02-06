@@ -23,7 +23,7 @@ from datetime import datetime
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageTk
-from pyqtgraph.Qt import QtCore
+from pyqtgraph.Qt import QtCore, QtGui
 import pyqtgraph as pg
 from pyqtgraph import exporters as pg_exporters
 
@@ -2421,6 +2421,14 @@ def _export_pg_plot_image(
     if "height" in params:
         params["height"] = height
     png_bytes = exporter.export(toBytes=True)
+    if isinstance(png_bytes, QtGui.QImage):
+        buffer = QtCore.QBuffer()
+        buffer.open(QtCore.QIODevice.WriteOnly)
+        png_bytes.save(buffer, "PNG")
+        png_bytes = bytes(buffer.data())
+        buffer.close()
+    elif isinstance(png_bytes, QtCore.QByteArray):
+        png_bytes = bytes(png_bytes)
     image = Image.open(io.BytesIO(png_bytes))
     return ImageTk.PhotoImage(image)
 
