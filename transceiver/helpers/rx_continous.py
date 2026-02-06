@@ -192,15 +192,20 @@ def connect_radios(graph, replay, radio_chan_pairs, freqs, gains, antennas, rate
 # Ring record + snippet download
 # -----------------------------
 def compute_snip_ranges(base: int, ring_bytes: int, record_pos: int,
-                        snippet_bytes: int, guard_bytes: int, align: int):
+                        snippet_bytes: int, guard_bytes: int, align: int,
+                        wrapped: bool):
     """
     Compute one or two (offset,size) ranges that represent the last snippet_bytes
     ending at (record_pos - guard_bytes), with wrap-around inside [base, base+ring_bytes).
     All returned offsets/sizes are aligned to `align`.
+
+    IMPORTANT: Before the first record_restart(), we do NOT allow wrap reads
+    because the end-of-ring does not contain the newest data yet.
     """
     end = record_pos - guard_bytes
     if end < base:
         return []  # not enough data yet
+
     if end > base + ring_bytes:
         end = base + ring_bytes
 
@@ -209,15 +214,21 @@ def compute_snip_ranges(base: int, ring_bytes: int, record_pos: int,
         return []
 
     have = end - base
+
+    # Before first restart: no wrap; only read when we have a full contiguous snippet
+    if have < snippet_bytes and not wrapped:
+        return []
+
     if have >= snippet_bytes:
         start = end - snippet_bytes
         return [(start, snippet_bytes)]
 
-    # wrap: take tail from end of ring + head from beginning
-    head = have                      # bytes available at beginning up to 'end'
-    tail = snippet_bytes - head      # remaining bytes from ring end
+    # wrap (only valid once wrapped==True)
+    head = have
+    tail = snippet_bytes - head
     tail_start = (base + ring_bytes) - tail
     return [(tail_start, tail), (base, head)]
+
 
 
 def recv_exact_1ch(rx_streamer, num_items: int, dtype, pkt_items: int):
@@ -259,18 +270,18 @@ def play_and_download_chunk(replay, rx_streamer, port: int,
     if size_bytes <= 0:
         return np.empty((0,), dtype=dtype)
 
-    # Configure playback window for this port
     replay.config_play(offset_bytes, size_bytes, port)
 
     num_items = size_bytes // item_size
     stream_cmd = uhd.types.StreamCMD(uhd.types.StreamMode.num_done)
     stream_cmd.num_samps = num_items
-    stream_cmd.stream_now = False
-    stream_cmd.time_spec = uhd.types.TimeSpec(0.0)
+    stream_cmd.stream_now = True
 
-    # Issue command via streamer (as in your original script)
-    rx_streamer.issue_stream_cmd(stream_cmd)
+    # Wichtig: Replay-Port steuern (nicht der Streamer)
+    replay.issue_stream_cmd(stream_cmd, port)
+
     return recv_exact_1ch(rx_streamer, num_items, dtype, pkt_items)
+
 
 
 def snippet_filename(prefix: str, snip_idx: int, port: int, use_numpy: bool):
@@ -281,7 +292,8 @@ def snippet_filename(prefix: str, snip_idx: int, port: int, use_numpy: bool):
 def record_monitor(stop_evt: threading.Event,
                    replay, port: int,
                    ring_bytes: int, restart_margin_bytes: int,
-                   lock: threading.Lock):
+                   lock: threading.Lock,
+                   wrapped_flags: list):
     """
     Restart recording before the buffer fills to emulate ring-buffer overwrite.
     Uses the same lock as snippet reads to avoid restarting mid-read.
@@ -292,33 +304,44 @@ def record_monitor(stop_evt: threading.Event,
             if fullness >= ring_bytes - restart_margin_bytes:
                 with lock:
                     replay.record_restart(port)
+                    wrapped_flags[port] = True
+
             # Optional: pull RX async metadata (overruns etc.)
             while True:
-                md = replay.get_record_async_metadata(0.0)
-                if md is None or md is False:
+                md = replay_get_record_async_md(replay, 0.0)
+                if md is None:
                     break
                 if md.error_code != uhd.types.RXMetadataErrorCode.none:
                     print(f"[port {port}] record async md: {md.strerror()}")
         except Exception as e:
             print(f"[port {port}] monitor error: {e}", file=sys.stderr)
+
         time.sleep(0.01)
 
 
-def validate_replay_async_api(replay):
+
+def replay_get_record_async_md(replay, timeout: float = 0.0):
+    """
+    UHD/pyuhd Kompatibilität:
+    - "pythonisch": md = replay.get_record_async_metadata(timeout) -> md | None | False
+    - "C++-like":   ok = replay.get_record_async_metadata(md, timeout) -> bool
+    Gibt RXMetadata zurück oder None.
+    """
+    # Versuch 1: pythonische Variante (nur timeout)
     try:
-        sig = inspect.signature(replay.get_record_async_metadata)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError(
-            "Unable to inspect ReplayBlockControl.get_record_async_metadata() signature. "
-            "Please verify your UHD/pyuhd installation."
-        ) from exc
-    params = list(sig.parameters.values())
-    if len(params) != 1 or params[0].name != "timeout":
-        raise RuntimeError(
-            "Unsupported UHD/pyuhd API detected for ReplayBlockControl.get_record_async_metadata(). "
-            "Expected signature: get_record_async_metadata(timeout: float = 0.1) -> object. "
-            "Please upgrade to a UHD/pyuhd version that matches this signature."
-        )
+        md = replay.get_record_async_metadata(timeout)
+        if md is None or md is False:
+            return None
+        if isinstance(md, bool):
+            return None
+        return md
+    except TypeError:
+        pass  # vermutlich alte Signatur
+
+    # Versuch 2: C++-artige Variante (md-out-parameter)
+    md = uhd.types.RXMetadata()
+    ok = replay.get_record_async_metadata(md, timeout)
+    return md if ok else None
 
 
 def main(callback=None):
@@ -330,7 +353,6 @@ def main(callback=None):
 
     graph = uhd.rfnoc.RfnocGraph(args.args)
     replay = uhd.rfnoc.ReplayBlockControl(graph.get_block(args.block))
-    validate_replay_async_api(replay)
     radio_chan_pairs = enumerate_radios(graph, args.radio_channels)
 
     rate = connect_radios(graph, replay, radio_chan_pairs,
@@ -339,6 +361,7 @@ def main(callback=None):
     log(f"Using rate: {rate/1e6:.3f} Msps", memory_only=args.memory_only)
 
     num_ports = len(radio_chan_pairs)
+    wrapped_flags = [False] * num_ports
 
     # Streamer args: wire format from Replay is sc16; CPU format selectable
     stream_args = uhd.usrp.StreamArgs(args.cpu_format, "sc16")
@@ -358,16 +381,15 @@ def main(callback=None):
 
     # Replay memory alignment constraints
     word_size = int(replay.get_word_size())  # bytes
-    # Replay stores sc16 in memory; item size depends on play_type/record_type
-    replay_item_size = int(replay.get_record_item_size(0))  # bytes per item (after we set type)
-    # We'll set types explicitly per port to be consistent
+
+    # Types explizit setzen, bevor item sizes abgefragt werden
     for port in range(num_ports):
         replay.set_record_type("sc16", port)
         replay.set_play_type("sc16", port)
 
-    # Item size for playback (should match record type)
-    item_size = int(replay.get_play_item_size(0))
+    item_size = int(replay.get_play_item_size(0))  # bytes per item
     align = lcm(word_size, item_size)
+
 
     # Determine ring buffer size per port
     if args.ring_seconds is not None:
@@ -454,7 +476,7 @@ def main(callback=None):
     for port in range(num_ports):
         t = threading.Thread(
             target=record_monitor,
-            args=(stop_evt, replay, port, ring_bytes, restart_margin_bytes, locks[port]),
+            args=(stop_evt, replay, port, ring_bytes, restart_margin_bytes, locks[port], wrapped_flags),
             daemon=True,
         )
         t.start()
@@ -508,6 +530,7 @@ def main(callback=None):
                         snippet_bytes=snippet_bytes,
                         guard_bytes=guard_bytes,
                         align=align,
+                        wrapped=wrapped_flags[port],
                     )
 
                     if not ranges:

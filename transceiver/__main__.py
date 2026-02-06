@@ -113,6 +113,7 @@ _STATE = _load_state()
 
 AUTOSAVE_INTERVAL = 5  # seconds
 # Arrays larger than this skip shared memory and use .npy + mmap in plot worker.
+USE_SHARED_MEMORY = False
 SHM_SIZE_THRESHOLD_BYTES = 25 * 1024 * 1024  # 25 MB
 
 
@@ -2037,7 +2038,7 @@ def _spawn_plot_worker(
         if mode != "Crosscorr":
             data_contiguous, reduction_step = _reduce_data(data_contiguous)
     fs = float(fs) / reduction_step
-    if data_contiguous.nbytes >= SHM_SIZE_THRESHOLD_BYTES:
+    if (not USE_SHARED_MEMORY) or data_contiguous.nbytes >= SHM_SIZE_THRESHOLD_BYTES:
         data_path = temp_dir / "data.npy"
         np.save(data_path, data_contiguous)
     else:
@@ -2073,7 +2074,7 @@ def _spawn_plot_worker(
         ref_shm_name = None
         ref_shm_shape = None
         ref_shm_dtype = None
-        if ref_contiguous.nbytes >= SHM_SIZE_THRESHOLD_BYTES:
+        if (not USE_SHARED_MEMORY) or  ref_contiguous.nbytes >= SHM_SIZE_THRESHOLD_BYTES:
             ref_path = temp_dir / "ref.npy"
             np.save(ref_path, ref_contiguous)
         else:
@@ -2104,7 +2105,7 @@ def _spawn_plot_worker(
         compare_shm_name = None
         compare_shm_shape = None
         compare_shm_dtype = None
-        if compare_contiguous.nbytes >= SHM_SIZE_THRESHOLD_BYTES:
+        if (not USE_SHARED_MEMORY) or compare_contiguous.nbytes >= SHM_SIZE_THRESHOLD_BYTES:
             compare_path = temp_dir / "compare.npy"
             np.save(compare_path, compare_contiguous)
         else:
