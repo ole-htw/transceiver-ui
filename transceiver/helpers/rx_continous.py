@@ -17,6 +17,7 @@ import sys
 import time
 import argparse
 import threading
+import inspect
 from datetime import datetime
 
 import numpy as np
@@ -292,14 +293,32 @@ def record_monitor(stop_evt: threading.Event,
                 with lock:
                     replay.record_restart(port)
             # Optional: pull RX async metadata (overruns etc.)
-            md = uhd.types.RXMetadata()
-            while replay.get_record_async_metadata(md, 0.0):
-                # Only print if something noteworthy
+            while True:
+                md = replay.get_record_async_metadata(0.0)
+                if md is None or md is False:
+                    break
                 if md.error_code != uhd.types.RXMetadataErrorCode.none:
                     print(f"[port {port}] record async md: {md.strerror()}")
         except Exception as e:
             print(f"[port {port}] monitor error: {e}", file=sys.stderr)
         time.sleep(0.01)
+
+
+def validate_replay_async_api(replay):
+    try:
+        sig = inspect.signature(replay.get_record_async_metadata)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "Unable to inspect ReplayBlockControl.get_record_async_metadata() signature. "
+            "Please verify your UHD/pyuhd installation."
+        ) from exc
+    params = list(sig.parameters.values())
+    if len(params) != 1 or params[0].name != "timeout":
+        raise RuntimeError(
+            "Unsupported UHD/pyuhd API detected for ReplayBlockControl.get_record_async_metadata(). "
+            "Expected signature: get_record_async_metadata(timeout: float = 0.1) -> object. "
+            "Please upgrade to a UHD/pyuhd version that matches this signature."
+        )
 
 
 def main(callback=None):
@@ -311,6 +330,7 @@ def main(callback=None):
 
     graph = uhd.rfnoc.RfnocGraph(args.args)
     replay = uhd.rfnoc.ReplayBlockControl(graph.get_block(args.block))
+    validate_replay_async_api(replay)
     radio_chan_pairs = enumerate_radios(graph, args.radio_channels)
 
     rate = connect_radios(graph, replay, radio_chan_pairs,
@@ -451,6 +471,8 @@ def main(callback=None):
     log("Entering snippet download loop. Ctrl+C to stop.", memory_only=args.memory_only)
     snip_idx = 1
     next_t = time.monotonic() + args.snippet_interval
+    last_positions = [None] * num_ports
+    no_progress_counts = [0] * num_ports
 
     try:
         while True:
@@ -466,6 +488,17 @@ def main(callback=None):
             for port in range(num_ports):
                 with locks[port]:
                     pos = int(replay.get_record_position(port))
+                    if last_positions[port] is not None and pos == last_positions[port]:
+                        no_progress_counts[port] += 1
+                        if no_progress_counts[port] == 1 or no_progress_counts[port] % 20 == 0:
+                            log(
+                                f"[s{snip_idx:06d} ch{port}] no new samples recorded yet; "
+                                "waiting for replay buffer to fill",
+                                memory_only=args.memory_only,
+                            )
+                        continue
+                    last_positions[port] = pos
+                    no_progress_counts[port] = 0
                     base = base_offsets[port]
 
                     ranges = compute_snip_ranges(
