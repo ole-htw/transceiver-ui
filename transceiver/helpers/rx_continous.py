@@ -68,6 +68,9 @@ def parse_args():
     p.add_argument("--memory-only", action="store_true",
                    help="Disable file output; emit snippet arrays via callback "
                         "(direct call) or stdout framing (subprocess).")
+    p.add_argument("--stdout-binary", action="store_true",
+                   help="When used with --memory-only, write binary snippet frames to stdout. "
+                        "Disabled by default to keep stdout text-only in subprocess mode.")
     p.add_argument("-o", "--output-prefix", required=False,
                    help="Prefix for snippet files (directory optional). Required unless "
                         "--memory-only is set. Example: /data/cap/snips/run1 -> "
@@ -120,6 +123,14 @@ def emit_snippet(data: np.ndarray, *, port: int, snip_idx: int, ts: str,
 
     if callback is not None:
         callback(data=data, port=port, snip_idx=snip_idx, timestamp=ts)
+        return
+
+    if not args.stdout_binary:
+        log(
+            "[memory-only] stdout binary disabled; no snippet data emitted "
+            "(use --stdout-binary to enable).",
+            memory_only=True,
+        )
         return
 
     header = f"SNIP {snip_idx} {port} {ts} {len(data)}\n"

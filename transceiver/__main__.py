@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Simple GUI to generate, transmit and receive signals."""
 import subprocess
+import io
 import logging
 import threading
 import queue
@@ -5473,6 +5474,7 @@ class TransceiverUI(ctk.CTk):
             "-o",
             output_prefix,
             "--memory-only",
+            "--stdout-binary",
             "--numpy",
             "--cpu-format",
             "fc32",
@@ -5515,30 +5517,73 @@ class TransceiverUI(ctk.CTk):
     ) -> None:
         proc = None
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                errors="replace",
-                bufsize=1,
-            )
+            uses_stdout_binary = "--stdout-binary" in cmd
+            if uses_stdout_binary:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    bufsize=0,
+                )
+            else:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    errors="replace",
+                    bufsize=1,
+                )
             self._cont_proc = proc
-            for line in proc.stdout:
-                if stop_event.is_set():
-                    break
-                self._out_queue.put(line)
-                if "->" in line:
-                    parts = line.rsplit("->", 1)
-                    if len(parts) == 2:
-                        path = parts[1].strip()
-                        if path.endswith(".npy") and os.path.exists(path):
-                            try:
-                                data = np.load(path)
-                                if data.size:
-                                    self._ui(lambda d=data: self._display_rx_plots(d, rate))
-                            except Exception as exc:
-                                self._out_queue.put(f"Continuous load error: {exc}\n")
+            if uses_stdout_binary:
+                stderr_stream = io.TextIOWrapper(proc.stderr, encoding="utf-8", errors="replace")
+
+                def _read_stderr() -> None:
+                    for line in stderr_stream:
+                        if stop_event.is_set():
+                            break
+                        self._out_queue.put(line)
+
+                stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+                stderr_thread.start()
+                stdout = proc.stdout
+                while not stop_event.is_set():
+                    header = stdout.readline()
+                    if not header:
+                        break
+                    header_text = header.decode("utf-8", errors="replace").strip()
+                    if not header_text:
+                        continue
+                    if not header_text.startswith("SNIP "):
+                        self._out_queue.put(header_text + "\n")
+                        continue
+                    parts = header_text.split()
+                    if len(parts) < 5:
+                        self._out_queue.put(f"Continuous parse error: {header_text}\n")
+                        continue
+                    try:
+                        data = np.load(stdout)
+                        if data.size:
+                            self._ui(lambda d=data: self._display_rx_plots(d, rate))
+                    except Exception as exc:
+                        self._out_queue.put(f"Continuous load error: {exc}\n")
+                        break
+            else:
+                for line in proc.stdout:
+                    if stop_event.is_set():
+                        break
+                    self._out_queue.put(line)
+                    if "->" in line:
+                        parts = line.rsplit("->", 1)
+                        if len(parts) == 2:
+                            path = parts[1].strip()
+                            if path.endswith(".npy") and os.path.exists(path):
+                                try:
+                                    data = np.load(path)
+                                    if data.size:
+                                        self._ui(lambda d=data: self._display_rx_plots(d, rate))
+                                except Exception as exc:
+                                    self._out_queue.put(f"Continuous load error: {exc}\n")
             if stop_event.is_set() and proc.poll() is None:
                 with contextlib.suppress(Exception):
                     proc.terminate()
