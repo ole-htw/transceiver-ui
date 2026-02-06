@@ -5007,6 +5007,37 @@ class TransceiverUI(ctk.CTk):
         self.rx_channel_view.set(params.get("rx_channel_view", "Kanal 1"))
         self.rx_file.delete(0, tk.END)
         self.rx_file.insert(0, params.get("rx_file", ""))
+        self.rx_cont_rate.delete(0, tk.END)
+        self.rx_cont_rate.insert(0, params.get("rx_cont_rate", "200e6"))
+        self.rx_cont_freq.delete(0, tk.END)
+        self.rx_cont_freq.insert(0, params.get("rx_cont_freq", "5.18e9"))
+        self.rx_cont_ring_seconds.delete(0, tk.END)
+        self.rx_cont_ring_seconds.insert(0, params.get("rx_cont_ring_seconds", "2.0"))
+        self.rx_cont_gain.delete(0, tk.END)
+        self.rx_cont_gain.insert(0, params.get("rx_cont_gain", "80"))
+        self.rx_cont_restart_margin.delete(0, tk.END)
+        self.rx_cont_restart_margin.insert(
+            0, params.get("rx_cont_restart_margin", "0.8")
+        )
+        self.rx_cont_args.delete(0, tk.END)
+        self.rx_cont_args.insert(
+            0,
+            params.get(
+                "rx_cont_args", "addr=192.168.20.2,clock_source=external"
+            ),
+        )
+        self.rx_cont_snippet_seconds.delete(0, tk.END)
+        self.rx_cont_snippet_seconds.insert(
+            0, params.get("rx_cont_snippet_seconds", "0.1")
+        )
+        self.rx_cont_snippet_interval.delete(0, tk.END)
+        self.rx_cont_snippet_interval.insert(
+            0, params.get("rx_cont_snippet_interval", "1.0")
+        )
+        self.rx_cont_output_prefix.delete(0, tk.END)
+        self.rx_cont_output_prefix.insert(
+            0, params.get("rx_cont_output_prefix", "signals/rx/snippet")
+        )
         self.rx_view.set(params.get("rx_view", "Signal"))
         self.rx_ant_spacing.delete(0, tk.END)
         self.rx_ant_spacing.insert(0, params.get("rx_ant_spacing", "0.03"))
