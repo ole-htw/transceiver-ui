@@ -22,7 +22,7 @@ from datetime import datetime
 
 import numpy as np
 from PIL import Image, ImageDraw
-from pyqtgraph.Qt import QtCore
+from pyqtgraph.Qt import QtCore, QtWidgets
 import pyqtgraph as pg
 
 import sys
@@ -3571,6 +3571,15 @@ class TransceiverUI(ctk.CTk):
             "Single": [],
             "Continuous": [],
         }
+        self.rx_pg_widgets: dict[str, dict[str, object]] = {
+            "Continuous": {},
+        }
+        self.rx_pg_items: dict[str, dict[str, dict[str, object]]] = {
+            "Continuous": {},
+        }
+        self.rx_pg_stats_labels: dict[str, list[ctk.CTkLabel]] = {
+            "Continuous": [],
+        }
         self.update_waveform_fields()
         self.auto_update_tx_filename()
         self.auto_update_rx_filename()
@@ -3995,6 +4004,230 @@ class TransceiverUI(ctk.CTk):
         """Return TX reference data and a label for cross-correlation."""
         return getattr(self, "tx_data", np.array([], dtype=np.complex64)), "TX"
 
+    def _init_rx_continuous_pg_widgets(
+        self, target_frame: ctk.CTkFrame, modes: list[str]
+    ) -> None:
+        pg_widgets = self.rx_pg_widgets.get("Continuous", {})
+        if pg_widgets:
+            return
+        pg.mkQApp()
+        container = ctk.CTkFrame(target_frame, fg_color="transparent")
+        container.grid(row=0, column=0, sticky="nsew", pady=2)
+        container.columnconfigure(0, weight=1)
+        target_frame.columnconfigure(0, weight=1)
+        layout_widget = pg.GraphicsLayoutWidget()
+        layout_widget.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
+        )
+        layout_widget.setMinimumHeight(200)
+        layout_widget.show()
+        plot_items: dict[str, pg.PlotItem] = {}
+        plot_data_items: dict[str, dict[str, object]] = {}
+        for idx, mode in enumerate(modes):
+            plot = layout_widget.addPlot(row=idx, col=0)
+            plot.showGrid(x=True, y=True)
+            plot_items[mode] = plot
+            plot_data_items[mode] = self._init_rx_pg_plot_items(plot, mode)
+        aoa_plot = layout_widget.addPlot(row=len(modes), col=0)
+        aoa_plot.showGrid(x=True, y=True)
+        aoa_plot.hide()
+        plot_items["AoA"] = aoa_plot
+        plot_data_items["AoA"] = self._init_rx_pg_plot_items(aoa_plot, "AoA")
+        pg_widgets.update(
+            {
+                "container": container,
+                "layout": layout_widget,
+                "plots": plot_items,
+            }
+        )
+        self.rx_pg_widgets["Continuous"] = pg_widgets
+        self.rx_pg_items["Continuous"] = plot_data_items
+
+    def _init_rx_pg_plot_items(
+        self, plot: pg.PlotItem, mode: str
+    ) -> dict[str, object]:
+        colors = PLOT_COLORS
+        plot.addLegend()
+        if mode == "Signal":
+            plot.setLabel("bottom", "Time [s]")
+            plot.setLabel("left", "Amplitude")
+            return {
+                "real": plot.plot(
+                    [], pen=pg.mkPen(colors["real"]), name="Real"
+                ),
+                "imag": plot.plot(
+                    [], pen=pg.mkPen(colors["imag"], style=QtCore.Qt.DashLine), name="Imag"
+                ),
+            }
+        if mode == "Freq":
+            plot.setLabel("bottom", "Frequency [Hz]")
+            plot.setLabel("left", "Magnitude [dB]")
+            return {
+                "spectrum": plot.plot([], pen=pg.mkPen(colors["freq"]))
+            }
+        if mode == "Crosscorr":
+            plot.setLabel("bottom", "Lag")
+            plot.setLabel("left", "Magnitude")
+            return {
+                "main": plot.plot(
+                    [], pen=pg.mkPen(colors["crosscorr"]), name="Kreuzkorrelation"
+                ),
+                "compare": plot.plot(
+                    [],
+                    pen=pg.mkPen(colors["compare"], style=QtCore.Qt.DashLine),
+                    name="ohne Pfad-Cancellation",
+                ),
+                "los": plot.plot(
+                    [],
+                    [],
+                    pen=None,
+                    symbol="o",
+                    symbolBrush=pg.mkBrush(colors["los"]),
+                    symbolPen=pg.mkPen(colors["los"]),
+                ),
+                "echo": plot.plot(
+                    [],
+                    [],
+                    pen=None,
+                    symbol="o",
+                    symbolBrush=pg.mkBrush(colors["echo"]),
+                    symbolPen=pg.mkPen(colors["echo"]),
+                ),
+            }
+        if mode == "AoA":
+            plot.setLabel("bottom", "Time [s]")
+            plot.setLabel("left", "Angle [deg]")
+            text = pg.TextItem(color=colors["text"], anchor=(0.5, 0.5))
+            plot.addItem(text, ignoreBounds=True)
+            return {
+                "line": plot.plot([], pen=pg.mkPen(colors["freq"])),
+                "text": text,
+            }
+        return {}
+
+    def _update_rx_continuous_pg_plots(
+        self,
+        plot_data: np.ndarray,
+        plot_fs: float,
+        plot_ref_data: np.ndarray,
+        plot_ref_label: str,
+        aoa_plot_time: np.ndarray | None,
+        aoa_plot_series: np.ndarray | None,
+        crosscorr_compare: np.ndarray | None,
+        title_suffix: str,
+    ) -> None:
+        pg_widgets = self.rx_pg_widgets.get("Continuous", {})
+        plot_items = pg_widgets.get("plots", {})
+        data_items = self.rx_pg_items.get("Continuous", {})
+        if not plot_items or not data_items:
+            return
+        # Signal
+        signal_data, step = _reduce_data(plot_data)
+        fs = plot_fs / step
+        t = np.arange(len(signal_data)) / fs if fs else np.arange(len(signal_data))
+        signal_items = data_items.get("Signal", {})
+        if "real" in signal_items:
+            signal_items["real"].setData(t, np.real(signal_data))
+        if "imag" in signal_items:
+            signal_items["imag"].setData(t, np.imag(signal_data))
+        if "Signal" in plot_items:
+            plot_items["Signal"].setTitle(f"RX Signal{title_suffix}")
+        # Freq
+        freq_data, step = _reduce_data(plot_data)
+        fs_freq = plot_fs / step
+        spec = np.fft.fftshift(np.fft.fft(freq_data))
+        freqs = np.fft.fftshift(np.fft.fftfreq(len(freq_data), d=1 / fs_freq))
+        freq_items = data_items.get("Freq", {})
+        if "spectrum" in freq_items:
+            freq_items["spectrum"].setData(
+                freqs, 20 * np.log10(np.abs(spec) + 1e-9)
+            )
+        if "Freq" in plot_items:
+            plot_items["Freq"].setTitle(f"RX Freq{title_suffix}")
+        # Crosscorr
+        crosscorr_items = data_items.get("Crosscorr", {})
+        plot_cc = plot_items.get("Crosscorr")
+        if plot_ref_data is None or plot_ref_data.size == 0:
+            if plot_cc is not None:
+                plot_cc.setTitle("No TX data")
+            for key in ("main", "compare", "los", "echo"):
+                if key in crosscorr_items:
+                    crosscorr_items[key].setData([], [])
+        else:
+            data_cc, ref_cc, step_r = _reduce_pair(plot_data, plot_ref_data)
+            n = min(len(data_cc), len(ref_cc))
+            cc = _xcorr_fft(data_cc[:n], ref_cc[:n])
+            lags = np.arange(-n + 1, n) * step_r
+            mag = np.abs(cc)
+            if "main" in crosscorr_items:
+                crosscorr_items["main"].setData(lags, mag)
+            compare_lags = None
+            compare_mag = None
+            if crosscorr_compare is not None and crosscorr_compare.size:
+                n2 = min(len(crosscorr_compare), len(ref_cc))
+                cc2 = _xcorr_fft(crosscorr_compare[:n2], ref_cc[:n2])
+                compare_lags = np.arange(-n2 + 1, n2) * step_r
+                compare_mag = np.abs(cc2)
+                if "compare" in crosscorr_items:
+                    crosscorr_items["compare"].setData(compare_lags, compare_mag)
+            else:
+                if "compare" in crosscorr_items:
+                    crosscorr_items["compare"].setData([], [])
+            base_los_idx, base_echo_idx = _find_los_echo(cc)
+            los_lags = lags
+            los_mag = mag
+            if compare_lags is not None and compare_mag is not None:
+                base_los_idx, _ = _find_los_echo(cc2)
+                los_lags = compare_lags
+                los_mag = compare_mag
+            los_idx, _ = _apply_manual_lags(
+                los_lags, base_los_idx, None, self.manual_xcorr_lags
+            )
+            _, echo_idx = _apply_manual_lags(
+                lags, None, base_echo_idx, self.manual_xcorr_lags
+            )
+            if "los" in crosscorr_items:
+                if los_idx is None:
+                    crosscorr_items["los"].setData([], [])
+                else:
+                    crosscorr_items["los"].setData(
+                        [los_lags[los_idx]], [los_mag[los_idx]]
+                    )
+            if "echo" in crosscorr_items:
+                if echo_idx is None:
+                    crosscorr_items["echo"].setData([], [])
+                else:
+                    crosscorr_items["echo"].setData(
+                        [lags[echo_idx]], [mag[echo_idx]]
+                    )
+            if plot_cc is not None:
+                title = (
+                    f"RX Crosscorr{title_suffix} ({plot_ref_label})"
+                    if plot_ref_label
+                    else f"RX Crosscorr{title_suffix}"
+                )
+                plot_cc.setTitle(title)
+        # AoA
+        aoa_plot = plot_items.get("AoA")
+        aoa_items = data_items.get("AoA", {})
+        if aoa_plot is not None:
+            if (
+                aoa_plot_time is None
+                or aoa_plot_series is None
+                or aoa_plot_series.size == 0
+            ):
+                aoa_plot.hide()
+                if "text" in aoa_items:
+                    aoa_items["text"].setText("Keine AoA-Daten")
+            else:
+                aoa_plot.show()
+                t = aoa_plot_time / plot_fs
+                if "line" in aoa_items:
+                    aoa_items["line"].setData(t, aoa_plot_series)
+                if "text" in aoa_items:
+                    aoa_items["text"].setText("")
+                aoa_plot.setTitle("AoA (ESPRIT)")
+
     def _display_rx_plots(
         self,
         data: np.ndarray,
@@ -4127,13 +4360,6 @@ class TransceiverUI(ctk.CTk):
         target_canvas = target_container["canvas"]
         target_window = target_container["window"]
 
-        for c in self.rx_canvases[target_name]:
-            if hasattr(c, "get_tk_widget"):
-                c.get_tk_widget().destroy()
-            else:
-                c.destroy()
-        self.rx_canvases[target_name].clear()
-
         modes = ["Signal", "Freq", "Crosscorr"]
         title_suffix = f" ({channel_label})" if channel_label else ""
 
@@ -4150,57 +4376,76 @@ class TransceiverUI(ctk.CTk):
             path_cancel_info: dict[str, object] | None,
             crosscorr_compare: np.ndarray | None,
         ) -> None:
-            target_frame.columnconfigure(0, weight=1)
-            for idx, mode in enumerate(modes):
-                fig = Figure(figsize=(5, 2), dpi=100)
-                ax = fig.add_subplot(111)
-                _apply_mpl_transparent(fig, ax)
-                ref = plot_ref_data if mode == "Crosscorr" else None
-                crosscorr_title = (
-                    f"RX {mode}{title_suffix} ({plot_ref_label})"
-                    if mode == "Crosscorr" and plot_ref_label
-                    else f"RX {mode}{title_suffix}"
-                )
-                _plot_on_mpl(
-                    ax,
+            if target_name == "Continuous":
+                self._init_rx_continuous_pg_widgets(target_frame, modes)
+                self._update_rx_continuous_pg_plots(
                     plot_data,
                     plot_fs,
-                    mode,
-                    crosscorr_title,
-                    ref,
-                    crosscorr_compare if mode == "Crosscorr" else None,
-                    manual_lags=self.manual_xcorr_lags,
+                    plot_ref_data,
+                    plot_ref_label,
+                    aoa_plot_time,
+                    aoa_plot_series,
+                    crosscorr_compare if crosscorr_compare is not None else None,
+                    title_suffix,
                 )
-                canvas = FigureCanvasTkAgg(fig, master=target_frame)
-                canvas.draw()
-                widget = canvas.get_tk_widget()
-                widget.configure(bg=_resolve_ctk_frame_bg(target_frame))
-                widget.grid(row=idx, column=0, sticky="n", pady=2)
-                if mode == "Crosscorr":
-                    handler = (
-                        lambda _e,
-                        m=mode,
-                        d=plot_data,
-                        s=plot_fs,
-                        r=ref,
-                        c=crosscorr_compare,
-                        t=crosscorr_title: (
-                            self._show_fullscreen(
-                                d, s, m, t, ref_data=r, crosscorr_compare=c
+            else:
+                for c in self.rx_canvases[target_name]:
+                    if hasattr(c, "get_tk_widget"):
+                        c.get_tk_widget().destroy()
+                    else:
+                        c.destroy()
+                self.rx_canvases[target_name].clear()
+                target_frame.columnconfigure(0, weight=1)
+                for idx, mode in enumerate(modes):
+                    fig = Figure(figsize=(5, 2), dpi=100)
+                    ax = fig.add_subplot(111)
+                    _apply_mpl_transparent(fig, ax)
+                    ref = plot_ref_data if mode == "Crosscorr" else None
+                    crosscorr_title = (
+                        f"RX {mode}{title_suffix} ({plot_ref_label})"
+                        if mode == "Crosscorr" and plot_ref_label
+                        else f"RX {mode}{title_suffix}"
+                    )
+                    _plot_on_mpl(
+                        ax,
+                        plot_data,
+                        plot_fs,
+                        mode,
+                        crosscorr_title,
+                        ref,
+                        crosscorr_compare if mode == "Crosscorr" else None,
+                        manual_lags=self.manual_xcorr_lags,
+                    )
+                    canvas = FigureCanvasTkAgg(fig, master=target_frame)
+                    canvas.draw()
+                    widget = canvas.get_tk_widget()
+                    widget.configure(bg=_resolve_ctk_frame_bg(target_frame))
+                    widget.grid(row=idx, column=0, sticky="n", pady=2)
+                    if mode == "Crosscorr":
+                        handler = (
+                            lambda _e,
+                            m=mode,
+                            d=plot_data,
+                            s=plot_fs,
+                            r=ref,
+                            c=crosscorr_compare,
+                            t=crosscorr_title: (
+                                self._show_fullscreen(
+                                    d, s, m, t, ref_data=r, crosscorr_compare=c
+                                )
                             )
                         )
-                    )
-                else:
-                    handler = (
-                        lambda _e,
-                        m=mode,
-                        d=plot_data,
-                        s=plot_fs: self._show_fullscreen(
-                            d, s, m, f"RX {m}{title_suffix}"
+                    else:
+                        handler = (
+                            lambda _e,
+                            m=mode,
+                            d=plot_data,
+                            s=plot_fs: self._show_fullscreen(
+                                d, s, m, f"RX {m}{title_suffix}"
+                            )
                         )
-                    )
-                widget.bind("<Button-1>", handler)
-                rx_canvas_list.append(canvas)
+                    widget.bind("<Button-1>", handler)
+                    rx_canvas_list.append(canvas)
 
             stats = _calc_stats(
                 plot_data,
@@ -4211,29 +4456,64 @@ class TransceiverUI(ctk.CTk):
                 path_cancel_info=path_cancel_info,
             )
             stats_rows = _format_rx_stats_rows(stats)
-            stats_frame = ctk.CTkFrame(target_frame, fg_color="transparent")
-            stats_frame.grid(row=len(modes), column=0, sticky="ew", pady=2)
-            stats_frame.columnconfigure((0, 1, 2, 3, 4, 5), weight=1)
             value_labels: list[ctk.CTkLabel] = []
-            for idx, (label, value) in enumerate(stats_rows):
-                row = 0 if idx < 3 else 1
-                col = (idx if idx < 3 else idx - 3) * 2
-                ctk.CTkLabel(
-                    stats_frame,
-                    justify="right",
-                    anchor="e",
-                    text=f"{label}:",
-                ).grid(row=row, column=col, sticky="e", padx=6)
-                value_label = ctk.CTkLabel(
-                    stats_frame,
-                    justify="left",
-                    anchor="w",
-                    text=value,
-                )
-                value_label.grid(row=row, column=col + 1, sticky="w", padx=6)
-                value_labels.append(value_label)
+            if target_name == "Continuous":
+                value_labels = self.rx_pg_stats_labels.get("Continuous", [])
+                if not value_labels:
+                    stats_frame = ctk.CTkFrame(
+                        target_frame, fg_color="transparent"
+                    )
+                    stats_frame.grid(row=1, column=0, sticky="ew", pady=2)
+                    stats_frame.columnconfigure(
+                        (0, 1, 2, 3, 4, 5), weight=1
+                    )
+                    for idx, (label, value) in enumerate(stats_rows):
+                        row = 0 if idx < 3 else 1
+                        col = (idx if idx < 3 else idx - 3) * 2
+                        ctk.CTkLabel(
+                            stats_frame,
+                            justify="right",
+                            anchor="e",
+                            text=f"{label}:",
+                        ).grid(row=row, column=col, sticky="e", padx=6)
+                        value_label = ctk.CTkLabel(
+                            stats_frame,
+                            justify="left",
+                            anchor="w",
+                            text=value,
+                        )
+                        value_label.grid(
+                            row=row, column=col + 1, sticky="w", padx=6
+                        )
+                        value_labels.append(value_label)
+                    self.rx_pg_stats_labels["Continuous"] = value_labels
+                else:
+                    for idx, (_label, value) in enumerate(stats_rows):
+                        if idx < len(value_labels):
+                            value_labels[idx].configure(text=value)
+            else:
+                stats_frame = ctk.CTkFrame(target_frame, fg_color="transparent")
+                stats_frame.grid(row=len(modes), column=0, sticky="ew", pady=2)
+                stats_frame.columnconfigure((0, 1, 2, 3, 4, 5), weight=1)
+                for idx, (label, value) in enumerate(stats_rows):
+                    row = 0 if idx < 3 else 1
+                    col = (idx if idx < 3 else idx - 3) * 2
+                    ctk.CTkLabel(
+                        stats_frame,
+                        justify="right",
+                        anchor="e",
+                        text=f"{label}:",
+                    ).grid(row=row, column=col, sticky="e", padx=6)
+                    value_label = ctk.CTkLabel(
+                        stats_frame,
+                        justify="left",
+                        anchor="w",
+                        text=value,
+                    )
+                    value_label.grid(row=row, column=col + 1, sticky="w", padx=6)
+                    value_labels.append(value_label)
             self.rx_stats_labels.append(value_labels)
-            if self.rx_view.get() == "AoA (ESPRIT)":
+            if target_name != "Continuous" and self.rx_view.get() == "AoA (ESPRIT)":
                 fig = Figure(figsize=(5, 2), dpi=100)
                 ax = fig.add_subplot(111)
                 _apply_mpl_transparent(fig, ax)
