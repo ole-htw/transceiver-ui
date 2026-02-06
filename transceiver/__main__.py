@@ -3102,10 +3102,17 @@ class TransceiverUI(ctk.CTk):
         # ----- Column 3: Receive -----
         rx_frame, rx_body = _make_section(self, "Receive")
         rx_frame.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
-        rx_body.columnconfigure(1, weight=1)
+        rx_body.columnconfigure(0, weight=1)
+        rx_body.rowconfigure(0, weight=1)
+
+        rx_tabs = ctk.CTkTabview(rx_body)
+        rx_tabs.grid(row=0, column=0, sticky="nsew")
+
+        rx_single_tab = rx_tabs.add("Single")
+        rx_single_tab.columnconfigure((0, 1), weight=1)
 
         rx_params_frame, rx_params_body, _ = _make_side_bordered_group(
-            rx_body,
+            rx_single_tab,
             "Parameters",
         )
         rx_params_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
@@ -3158,7 +3165,7 @@ class TransceiverUI(ctk.CTk):
 
         self.rx_channel_2 = tk.BooleanVar(value=False)
         rx_ant_frame, rx_ant_body, _ = _make_side_bordered_group(
-            rx_body,
+            rx_single_tab,
             "Antenne 2",
             toggle_var=self.rx_channel_2,
         )
@@ -3209,7 +3216,7 @@ class TransceiverUI(ctk.CTk):
         self.rx_ant_spacing.grid(row=1, column=3, sticky="ew", padx=(0, 8), pady=(4, 0))
 
         rx_output_frame, rx_output_body, _ = _make_side_bordered_group(
-            rx_body,
+            rx_single_tab,
             "Output",
         )
         rx_output_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 6))
@@ -3224,7 +3231,7 @@ class TransceiverUI(ctk.CTk):
         self.trim_dirty = False
 
         trim_frame, trim_body, _ = _make_side_bordered_group(
-            rx_body,
+            rx_single_tab,
             "Trim",
             toggle_var=self.trim_var,
             toggle_command=self._on_trim_change,
@@ -3260,7 +3267,7 @@ class TransceiverUI(ctk.CTk):
             self.rx_magnitude_body,
             self.rx_magnitude_check,
         ) = _make_side_bordered_group(
-            rx_body,
+            rx_single_tab,
             "Betrag",
             toggle_var=self.rx_magnitude_enable,
             toggle_command=self._on_rx_magnitude_toggle,
@@ -3275,7 +3282,7 @@ class TransceiverUI(ctk.CTk):
             self.rx_path_cancel_body,
             self.rx_path_cancel_check,
         ) = _make_side_bordered_group(
-            rx_body,
+            rx_single_tab,
             "LOS Cancellation",
             toggle_var=self.rx_path_cancel_enable,
             toggle_command=self._on_rx_path_cancel_toggle,
@@ -3284,7 +3291,7 @@ class TransceiverUI(ctk.CTk):
             row=5, column=0, columnspan=2, sticky="ew", pady=(0, 6)
         )
 
-        rx_btn_frame = ctk.CTkFrame(rx_body)
+        rx_btn_frame = ctk.CTkFrame(rx_single_tab)
         rx_btn_frame.grid(row=6, column=0, columnspan=2, pady=(0, 5))
         rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
@@ -3303,7 +3310,7 @@ class TransceiverUI(ctk.CTk):
         )
 
         rx_scroll_container = ctk.CTkFrame(
-            rx_body,
+            rx_single_tab,
             fg_color=terminal_container_fg,
             corner_radius=terminal_container_corner,
         )
@@ -3350,7 +3357,104 @@ class TransceiverUI(ctk.CTk):
                 self._update_rx_scrollbar(),
             ),
         )
-        rx_body.rowconfigure(7, weight=1)
+        rx_single_tab.rowconfigure(7, weight=1)
+
+        rx_continuous_tab = rx_tabs.add("Continuous")
+        rx_continuous_tab.columnconfigure((0, 1), weight=1)
+
+        rx_cont_params_frame, rx_cont_params_body, _ = _make_side_bordered_group(
+            rx_continuous_tab,
+            "Parameters",
+        )
+        rx_cont_params_frame.grid(
+            row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6)
+        )
+        rx_cont_params_left = ctk.CTkFrame(rx_cont_params_body, fg_color="transparent")
+        rx_cont_params_left.grid(row=0, column=1, sticky="nsew")
+        rx_cont_params_left.columnconfigure(1, weight=1)
+        rx_cont_params_right = ctk.CTkFrame(rx_cont_params_body, fg_color="transparent")
+        rx_cont_params_right.grid(row=0, column=2, sticky="nsew", padx=(12, 0))
+        rx_cont_params_right.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(rx_cont_params_left, text="Rate", anchor="e").grid(
+            row=0, column=0, sticky="e", padx=label_padx
+        )
+        self.rx_cont_rate = SuggestEntry(rx_cont_params_left, "rx_cont_rate")
+        self.rx_cont_rate.insert(0, "200e6")
+        self.rx_cont_rate.grid(row=0, column=1, sticky="ew")
+
+        ctk.CTkLabel(rx_cont_params_right, text="Freq", anchor="e").grid(
+            row=0, column=0, sticky="e", padx=label_padx
+        )
+        self.rx_cont_freq = SuggestEntry(rx_cont_params_right, "rx_cont_freq")
+        self.rx_cont_freq.insert(0, "5.18e9")
+        self.rx_cont_freq.grid(row=0, column=1, sticky="ew")
+
+        ctk.CTkLabel(rx_cont_params_left, text="Ring (s)", anchor="e").grid(
+            row=1, column=0, sticky="e", padx=label_padx
+        )
+        self.rx_cont_ring_seconds = SuggestEntry(
+            rx_cont_params_left, "rx_cont_ring_seconds"
+        )
+        self.rx_cont_ring_seconds.insert(0, "2.0")
+        self.rx_cont_ring_seconds.grid(row=1, column=1, sticky="ew")
+
+        ctk.CTkLabel(rx_cont_params_right, text="Gain", anchor="e").grid(
+            row=1, column=0, sticky="e", padx=label_padx
+        )
+        self.rx_cont_gain = SuggestEntry(rx_cont_params_right, "rx_cont_gain")
+        self.rx_cont_gain.insert(0, "80")
+        self.rx_cont_gain.grid(row=1, column=1, sticky="ew")
+
+        ctk.CTkLabel(rx_cont_params_body, text="Args", anchor="e").grid(
+            row=1, column=0, sticky="e", padx=label_padx
+        )
+        self.rx_cont_args = SuggestEntry(rx_cont_params_body, "rx_cont_args")
+        self.rx_cont_args.insert(0, "addr=192.168.20.2,clock_source=external")
+        self.rx_cont_args.grid(row=1, column=1, columnspan=2, sticky="ew")
+
+        rx_cont_snippet_frame, rx_cont_snippet_body, _ = _make_side_bordered_group(
+            rx_continuous_tab,
+            "Snippet",
+        )
+        rx_cont_snippet_frame.grid(
+            row=1, column=0, columnspan=2, sticky="ew", pady=(0, 6)
+        )
+        rx_cont_snippet_body.columnconfigure(1, weight=1)
+        rx_cont_snippet_body.columnconfigure(3, weight=1)
+
+        ctk.CTkLabel(rx_cont_snippet_body, text="Snippet (s)", anchor="e").grid(
+            row=0, column=0, sticky="e", padx=label_padx
+        )
+        self.rx_cont_snippet_seconds = SuggestEntry(
+            rx_cont_snippet_body, "rx_cont_snippet_seconds"
+        )
+        self.rx_cont_snippet_seconds.insert(0, "0.1")
+        self.rx_cont_snippet_seconds.grid(row=0, column=1, sticky="ew", padx=(0, 8))
+
+        ctk.CTkLabel(rx_cont_snippet_body, text="Interval (s)", anchor="e").grid(
+            row=0, column=2, sticky="e", padx=label_padx
+        )
+        self.rx_cont_snippet_interval = SuggestEntry(
+            rx_cont_snippet_body, "rx_cont_snippet_interval"
+        )
+        self.rx_cont_snippet_interval.insert(0, "1.0")
+        self.rx_cont_snippet_interval.grid(
+            row=0, column=3, sticky="ew", padx=(0, 8)
+        )
+
+        rx_cont_output_frame, rx_cont_output_body, _ = _make_side_bordered_group(
+            rx_continuous_tab,
+            "Output",
+        )
+        rx_cont_output_frame.grid(
+            row=2, column=0, columnspan=2, sticky="ew", pady=(0, 6)
+        )
+        self.rx_cont_output_prefix = SuggestEntry(
+            rx_cont_output_body, "rx_cont_output_prefix"
+        )
+        self.rx_cont_output_prefix.insert(0, "signals/rx/snippet")
+        self.rx_cont_output_prefix.grid(row=0, column=1, columnspan=2, sticky="ew")
         self.rx_canvases = []
         self.update_waveform_fields()
         self.auto_update_tx_filename()
