@@ -4898,6 +4898,17 @@ class TransceiverUI(ctk.CTk):
             "trim": self.trim_var.get(),
             "trim_start": self.trim_start.get(),
             "trim_end": self.trim_end.get(),
+            "pn_chip_rate": self.pn_chip_entry.get(),
+            "pn_seed": self.pn_seed_entry.get(),
+            "rx_cont_rate": self.rx_cont_rate.get(),
+            "rx_cont_freq": self.rx_cont_freq.get(),
+            "rx_cont_ring_seconds": self.rx_cont_ring_seconds.get(),
+            "rx_cont_gain": self.rx_cont_gain.get(),
+            "rx_cont_restart_margin": self.rx_cont_restart_margin.get(),
+            "rx_cont_args": self.rx_cont_args.get(),
+            "rx_cont_snippet_seconds": self.rx_cont_snippet_seconds.get(),
+            "rx_cont_snippet_interval": self.rx_cont_snippet_interval.get(),
+            "rx_cont_output_prefix": self.rx_cont_output_prefix.get(),
         }
 
     def _autosave_state(self) -> None:
