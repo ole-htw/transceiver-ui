@@ -4345,6 +4345,63 @@ class TransceiverUI(ctk.CTk):
             bg_color = _resolve_ctk_frame_bg(target_frame)
             pg_bg_color = _tk_color_to_rgb(target_frame, bg_color)
             axis_color = "#9E9E9E"
+            zoom_half_window = 50
+
+            def _crosscorr_zoom_range(
+                preview_data: np.ndarray,
+                preview_ref: np.ndarray,
+                preview_compare: np.ndarray | None,
+                manual_lags: dict[str, int | None] | None,
+            ) -> tuple[float, float] | None:
+                if preview_ref is None or preview_ref.size == 0:
+                    return None
+                preview_data, preview_ref, step_r = _reduce_pair(
+                    preview_data, preview_ref
+                )
+                compare = preview_compare
+                if compare is not None and compare.size:
+                    compare = compare[::step_r]
+                cc = _xcorr_fft(preview_data, preview_ref)
+                lags = np.arange(
+                    -(len(preview_ref) - 1), len(preview_data)
+                ) * step_r
+                base_los_idx, base_echo_idx = _find_los_echo(cc)
+                los_lags = lags
+                if compare is not None and compare.size:
+                    cc2 = _xcorr_fft(compare, preview_ref)
+                    lags2 = np.arange(
+                        -(len(preview_ref) - 1), len(compare)
+                    ) * step_r
+                    base_los_idx, _ = _find_los_echo(cc2)
+                    los_lags = lags2
+                los_idx, _ = _apply_manual_lags(
+                    los_lags, base_los_idx, None, manual_lags
+                )
+                _, echo_idx = _apply_manual_lags(
+                    lags, None, base_echo_idx, manual_lags
+                )
+
+                def _lag_value(source_lags: np.ndarray, idx: int | None) -> float | None:
+                    if idx is None or source_lags.size == 0:
+                        return None
+                    return float(
+                        source_lags[int(np.clip(idx, 0, len(source_lags) - 1))]
+                    )
+
+                los_lag = _lag_value(los_lags, los_idx)
+                echo_lag = _lag_value(lags, echo_idx)
+                if los_lag is None and echo_lag is None:
+                    return None
+                if los_lag is None:
+                    center = echo_lag
+                elif echo_lag is None:
+                    center = los_lag
+                else:
+                    center = (los_lag + echo_lag) / 2.0
+                return (
+                    center - zoom_half_window,
+                    center + zoom_half_window,
+                )
 
             pg_state = getattr(self, "_rx_cont_pg_state", None)
             plots_state = (
@@ -4402,6 +4459,15 @@ class TransceiverUI(ctk.CTk):
                     plot_item.autoRange()
                     plot_item.enableAutoRange(axis="xy", enable=False)
                     plot_info["initialized"] = True
+                if mode == "Crosscorr":
+                    zoom_range = _crosscorr_zoom_range(
+                        plot_data,
+                        plot_ref_data,
+                        crosscorr_compare,
+                        self.manual_xcorr_lags,
+                    )
+                    if zoom_range is not None:
+                        plot_item.setXRange(*zoom_range, padding=0.0)
                 image = _export_pg_plot_image(
                     plot_item,
                     preview_width,
