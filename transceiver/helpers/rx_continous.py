@@ -28,7 +28,7 @@ import uhd
 # -----------------------------
 # Args / Utilities
 # -----------------------------
-def parse_args():
+def parse_args(argv=None):
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -88,7 +88,7 @@ def parse_args():
     p.add_argument("--delay", type=float, default=0.5,
                    help="Start streaming after this delay (seconds).")
 
-    return p.parse_args()
+    return p.parse_args(argv)
 
 
 def lcm(a: int, b: int) -> int:
@@ -358,8 +358,8 @@ def replay_get_record_async_md(replay, timeout: float = 0.0):
     return md if ok else None
 
 
-def main(callback=None):
-    args = parse_args()
+def main(callback=None, args=None, stop_event=None):
+    args = parse_args() if args is None else args
     if not args.memory_only and not args.output_prefix:
         raise RuntimeError("--output-prefix is required unless --memory-only is set.")
     if args.output_prefix and not args.memory_only:
@@ -484,7 +484,7 @@ def main(callback=None):
         radio.issue_stream_cmd(stream_cmd, chan)
 
     # Background record monitors (wrap before full)
-    stop_evt = threading.Event()
+    stop_evt = stop_event or threading.Event()
     locks = [threading.Lock() for _ in range(num_ports)]
     monitors = []
     for port in range(num_ports):
@@ -512,6 +512,8 @@ def main(callback=None):
 
     try:
         while True:
+            if stop_evt.is_set():
+                break
             if args.max_snippets and snip_idx > args.max_snippets:
                 break
 

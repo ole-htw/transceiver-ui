@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Simple GUI to generate, transmit and receive signals."""
 import subprocess
-import io
 import logging
 import threading
 import queue
@@ -5424,7 +5423,7 @@ class TransceiverUI(ctk.CTk):
         self._process_queue()
 
     def start_continuous(self) -> None:
-        if getattr(self, "_cont_proc", None):
+        if getattr(self, "_cont_thread", None):
             return
         output_prefix = self.rx_cont_output_prefix.get().strip()
         if not output_prefix:
@@ -5452,9 +5451,6 @@ class TransceiverUI(ctk.CTk):
             messagebox.showerror("Continuous", str(exc))
             return
         cmd = [
-            sys.executable,
-            "-m",
-            "transceiver.helpers.rx_continous",
             "-a",
             self.rx_cont_args.get(),
             "-f",
@@ -5485,115 +5481,48 @@ class TransceiverUI(ctk.CTk):
             self.rx_cont_start.configure(state="disabled")
         if hasattr(self, "rx_cont_stop"):
             self.rx_cont_stop.configure(state="normal")
-        threading.Thread(
-            target=self._run_continuous_cmd,
+        self._cont_thread = threading.Thread(
+            target=self._run_continuous_thread,
             args=(cmd, rate, self._cont_stop_event),
             daemon=True,
-        ).start()
+        )
+        self._cont_thread.start()
         self._process_queue()
 
     def stop_continuous(self) -> None:
         stop_event = getattr(self, "_cont_stop_event", None)
         if stop_event is not None:
             stop_event.set()
-        proc = getattr(self, "_cont_proc", None)
-        if proc:
-            try:
-                proc.terminate()
-                proc.wait(timeout=5)
-            except Exception:
-                pass
-        self._cont_proc = None
+        cont_thread = getattr(self, "_cont_thread", None)
+        if cont_thread and cont_thread.is_alive():
+            cont_thread.join(timeout=5)
+        self._cont_thread = None
         if hasattr(self, "rx_cont_stop"):
             self.rx_cont_stop.configure(state="disabled")
         if hasattr(self, "rx_cont_start"):
             self.rx_cont_start.configure(state="normal")
 
-    def _run_continuous_cmd(
+    def _run_continuous_thread(
         self,
-        cmd: list[str],
+        arg_list: list[str],
         rate: float,
         stop_event: threading.Event,
     ) -> None:
-        proc = None
         try:
-            uses_stdout_binary = "--stdout-binary" in cmd
-            if uses_stdout_binary:
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    bufsize=0,
-                )
-            else:
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    errors="replace",
-                    bufsize=1,
-                )
-            self._cont_proc = proc
-            if uses_stdout_binary:
-                stderr_stream = io.TextIOWrapper(proc.stderr, encoding="utf-8", errors="replace")
+            from .helpers import rx_continous
 
-                def _read_stderr() -> None:
-                    for line in stderr_stream:
-                        if stop_event.is_set():
-                            break
-                        self._out_queue.put(line)
+            args = rx_continous.parse_args(arg_list)
 
-                stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
-                stderr_thread.start()
-                stdout = proc.stdout
-                while not stop_event.is_set():
-                    header = stdout.readline()
-                    if not header:
-                        break
-                    header_text = header.decode("utf-8", errors="replace").strip()
-                    if not header_text:
-                        continue
-                    if not header_text.startswith("SNIP "):
-                        self._out_queue.put(header_text + "\n")
-                        continue
-                    parts = header_text.split()
-                    if len(parts) < 5:
-                        self._out_queue.put(f"Continuous parse error: {header_text}\n")
-                        continue
-                    try:
-                        data = np.load(stdout)
-                        if data.size:
-                            self._ui(lambda d=data: self._display_rx_plots(d, rate))
-                    except Exception as exc:
-                        self._out_queue.put(f"Continuous load error: {exc}\n")
-                        break
-            else:
-                for line in proc.stdout:
-                    if stop_event.is_set():
-                        break
-                    self._out_queue.put(line)
-                    if "->" in line:
-                        parts = line.rsplit("->", 1)
-                        if len(parts) == 2:
-                            path = parts[1].strip()
-                            if path.endswith(".npy") and os.path.exists(path):
-                                try:
-                                    data = np.load(path)
-                                    if data.size:
-                                        self._ui(lambda d=data: self._display_rx_plots(d, rate))
-                                except Exception as exc:
-                                    self._out_queue.put(f"Continuous load error: {exc}\n")
-            if stop_event.is_set() and proc.poll() is None:
-                with contextlib.suppress(Exception):
-                    proc.terminate()
-            proc.wait()
-            self._out_queue.put(f"[Continuous exited with code {proc.returncode}]\n")
+            def _callback(*, data: np.ndarray, **_info: object) -> None:
+                if data.size:
+                    self._ui(lambda d=data: self._display_rx_plots(d, rate))
+
+            rx_continous.main(callback=_callback, args=args, stop_event=stop_event)
         except Exception as exc:
             self._out_queue.put(f"Continuous error: {exc}\n")
         finally:
             self._cmd_running = False
-            self._cont_proc = None
+            self._cont_thread = None
             self._ui(self._reset_cont_buttons)
 
     def _reset_cont_buttons(self) -> None:
