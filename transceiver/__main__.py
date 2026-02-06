@@ -3406,6 +3406,15 @@ class TransceiverUI(ctk.CTk):
         self.rx_cont_gain.insert(0, "80")
         self.rx_cont_gain.grid(row=1, column=1, sticky="ew")
 
+        ctk.CTkLabel(rx_cont_params_left, text="Restart margin (s)", anchor="e").grid(
+            row=2, column=0, sticky="e", padx=label_padx
+        )
+        self.rx_cont_restart_margin = SuggestEntry(
+            rx_cont_params_left, "rx_cont_restart_margin"
+        )
+        self.rx_cont_restart_margin.insert(0, "0.8")
+        self.rx_cont_restart_margin.grid(row=2, column=1, sticky="ew")
+
         ctk.CTkLabel(rx_cont_params_body, text="Args", anchor="e").grid(
             row=1, column=0, sticky="e", padx=label_padx
         )
@@ -5433,6 +5442,9 @@ class TransceiverUI(ctk.CTk):
             snippet_interval = _parse_number_expr_or_error(
                 self.rx_cont_snippet_interval.get()
             )
+            restart_margin = _parse_number_expr_or_error(
+                self.rx_cont_restart_margin.get()
+            )
         except ValueError as exc:
             messagebox.showerror("Continuous", str(exc))
             return
@@ -5454,6 +5466,8 @@ class TransceiverUI(ctk.CTk):
             str(snippet_seconds),
             "--snippet-interval",
             str(snippet_interval),
+            "--restart-margin-seconds",
+            str(restart_margin),
             "-o",
             output_prefix,
             "--numpy",
