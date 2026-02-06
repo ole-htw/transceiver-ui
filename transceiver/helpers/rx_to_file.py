@@ -18,7 +18,7 @@ from uhd.usrp import dram_utils
 from uhd.types import StreamCMD, StreamMode
 
 
-def parse_args():
+def parse_args(argv=None):
     """Parse the command line arguments"""
     parser = argparse.ArgumentParser()
     parser.add_argument("-a", "--args", default="", type=str)
@@ -51,7 +51,7 @@ def parse_args():
         action="store_true",
         help="If given, will attempt to stream via DRAM",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.output_file is None:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
@@ -159,9 +159,9 @@ def rfnoc_dram_rx(args):
             data.tofile(out_file)
 
 
-def main():
+def main(args=None):
     """RX samples and write to file"""
-    args = parse_args()
+    args = args or parse_args()
     args.args = ensure_uhd_frame_sizes(args.args)
 
     if args.dram:
