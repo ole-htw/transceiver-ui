@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Simple GUI to generate, transmit and receive signals."""
-import subprocess
 import logging
 import threading
 import queue
@@ -4643,34 +4642,25 @@ class TransceiverUI(ctk.CTk):
             self.tx_retrans.configure(state="disabled")
         self._set_tx_indicator_state("idle")
 
-    def _run_rx_cmd(
-        self, cmd: list[str], out_file: str, channels: int, rate: float
+    def _run_rx_thread(
+        self, arg_list: list[str], channels: int, rate: float
     ) -> None:
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                errors="replace",
-                bufsize=1,
-            )
-            self._proc = proc
-            for line in proc.stdout:
-                self._out_queue.put(line)
-            proc.wait()
-            self._out_queue.put(f"[Exited with code {proc.returncode}]\n")
+            from .helpers import rx_to_file
+
+            args = rx_to_file.parse_args(arg_list)
+            rx_to_file.main(args=args)
         except Exception as exc:
-            self._out_queue.put(f"Error: {exc}\n")
-            proc = None
+            self._out_queue.put(f"Receive error: {exc}\n")
+            args = None
         finally:
             self._cmd_running = False
             self._proc = None
             self._ui(self._reset_rx_buttons)
 
-        if proc is not None and proc.returncode == 0:
+        if args is not None:
             try:
-                path = Path(out_file)
+                path = Path(args.output_file)
                 try:
                     data = rx_convert.load_iq_file(
                         path, channels=channels, layout="blocked"
@@ -4683,7 +4673,7 @@ class TransceiverUI(ctk.CTk):
                     lambda: self._display_rx_plots(data, rate, target_tab="Single")
                 )
             except Exception as exc:
-                self._out_queue.put(f"Error: {exc}\n")
+                self._out_queue.put(f"Receive plot error: {exc}\n")
 
     def _reset_rx_buttons(self) -> None:
         if hasattr(self, "rx_stop"):
@@ -5532,17 +5522,14 @@ class TransceiverUI(ctk.CTk):
             self.rx_button.configure(state="normal")
 
     def receive(self):
-        out_file = self.rx_file.get()
+        out_file = self.rx_file.get().strip()
         channels = 2 if self.rx_channel_2.get() else 1
         try:
             rate = _parse_number_expr_or_error(self.rx_rate.get())
         except ValueError as exc:
             messagebox.showerror("Receive", str(exc))
             return
-        cmd = [
-            sys.executable,
-            "-m",
-            "transceiver.helpers.rx_to_file",
+        arg_list = [
             "-a",
             self.rx_args.get(),
             "-f",
@@ -5554,19 +5541,19 @@ class TransceiverUI(ctk.CTk):
             "-g",
             self.rx_gain.get(),
             "--dram",
-            "--output-file",
-            out_file,
         ]
+        if out_file:
+            arg_list += ["--output-file", out_file]
         if self.rx_channel_2.get():
-            cmd += ["--channels", "0", "1"]
+            arg_list += ["--channels", "0", "1"]
         self._cmd_running = True
         if hasattr(self, "rx_stop"):
             self.rx_stop.configure(state="normal")
         if hasattr(self, "rx_button"):
             self.rx_button.configure(state="disabled")
         threading.Thread(
-            target=self._run_rx_cmd,
-            args=(cmd, out_file, channels, rate),
+            target=self._run_rx_thread,
+            args=(arg_list, channels, rate),
             daemon=True,
         ).start()
         self._process_queue()
