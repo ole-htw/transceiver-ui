@@ -17,12 +17,15 @@ import os
 import sys
 import time
 import argparse
+import inspect
 import threading
 import queue
 from datetime import datetime
 
 import numpy as np
 import uhd
+
+from .shared_memory_utils import SharedMemoryRegistry
 
 
 # -----------------------------
@@ -87,9 +90,44 @@ def parse_args(argv=None):
 
     p.add_argument("--delay", type=float, default=0.5,
                    help="Start streaming after this delay (seconds).")
+    p.add_argument("--shm-slots", type=int, default=4,
+                   help="Shared-memory ring slots per port for callback mode.")
+    p.add_argument("--max-pending-jobs", type=int, default=2,
+                   help="Bounded queue depth per port before dropping oldest job.")
 
     return p.parse_args(argv)
 
+
+
+
+class SharedSnippetSlots:
+    """Preallocated shared-memory ring for snippet handoff metadata callbacks."""
+
+    def __init__(self, *, num_ports: int, slot_count: int, slot_nbytes: int, dtype):
+        self._registry = SharedMemoryRegistry()
+        self._dtype = np.dtype(dtype)
+        self._slot_len = slot_nbytes // self._dtype.itemsize
+        self._slot_count = max(1, int(slot_count))
+        self._slots: dict[int, list[tuple[object, np.ndarray]]] = {}
+        self._next_slot = [0] * num_ports
+
+        for port in range(num_ports):
+            per_port_slots = []
+            for _ in range(self._slot_count):
+                shm = self._registry.create(slot_nbytes)
+                arr = np.ndarray((self._slot_len,), dtype=self._dtype, buffer=shm.buf)
+                per_port_slots.append((shm, arr))
+            self._slots[port] = per_port_slots
+
+    def write(self, *, port: int, data: np.ndarray):
+        slot_idx = self._next_slot[port]
+        shm, shm_arr = self._slots[port][slot_idx]
+        np.copyto(shm_arr[: data.size], data, casting="no")
+        self._next_slot[port] = (slot_idx + 1) % self._slot_count
+        return shm.name, slot_idx
+
+    def cleanup(self) -> None:
+        self._registry.cleanup()
 
 def lcm(a: int, b: int) -> int:
     import math
@@ -107,8 +145,16 @@ def log(message: str, *, memory_only: bool):
     print(message, file=stream)
 
 
-def emit_snippet(data: np.ndarray, *, port: int, snip_idx: int, ts: str,
-                 args, callback):
+def emit_snippet(
+    data: np.ndarray,
+    *,
+    port: int,
+    snip_idx: int,
+    ts: str,
+    args,
+    callback,
+    shared_slots: SharedSnippetSlots | None,
+):
     if not args.memory_only:
         out_fn = snippet_filename(args.output_prefix + "_" + ts, snip_idx, port, args.numpy)
         if args.numpy:
@@ -122,7 +168,18 @@ def emit_snippet(data: np.ndarray, *, port: int, snip_idx: int, ts: str,
         return
 
     if callback is not None:
-        callback(data=data, port=port, snip_idx=snip_idx, timestamp=ts)
+        if shared_slots is None:
+            raise RuntimeError("shared memory slots are required for memory-only callback mode")
+        shm_name, slot_idx = shared_slots.write(port=port, data=data)
+        callback(
+            shm_name=shm_name,
+            shape=tuple(data.shape),
+            dtype=str(data.dtype),
+            snip_idx=snip_idx,
+            port=port,
+            slot_idx=slot_idx,
+            timestamp=ts,
+        )
         return
 
     if not args.stdout_binary:
@@ -297,6 +354,27 @@ def play_and_download_chunk(replay, rx_streamer, port: int,
     return recv_exact_1ch(rx_streamer, num_items, dtype, pkt_items)
 
 
+def _bounded_put_latest(target_queue: queue.Queue, item, *, memory_only: bool) -> bool:
+    """Put item into bounded queue, dropping the oldest entry when full."""
+    try:
+        target_queue.put_nowait(item)
+        return True
+    except queue.Full:
+        pass
+
+    try:
+        target_queue.get_nowait()
+    except queue.Empty:
+        pass
+
+    try:
+        target_queue.put_nowait(item)
+        return True
+    except queue.Full:
+        log("[backpressure] queue remained full; dropping newest item", memory_only=memory_only)
+        return False
+
+
 def port_download_worker(
     *,
     port: int,
@@ -351,29 +429,41 @@ def port_download_worker(
                     ]
 
                 data = np.concatenate(parts) if len(parts) > 1 else parts[0]
-                result_queue.put({
-                    "ok": True,
-                    "port": port,
-                    "snip_idx": job["snip_idx"],
-                    "ts": job["ts"],
-                    "data": data,
-                })
+                _bounded_put_latest(
+                    result_queue,
+                    {
+                        "ok": True,
+                        "port": port,
+                        "snip_idx": job["snip_idx"],
+                        "ts": job["ts"],
+                        "data": data,
+                    },
+                    memory_only=worker_args["memory_only"],
+                )
             except Exception as e:
-                result_queue.put({
-                    "ok": False,
-                    "port": port,
-                    "snip_idx": job["snip_idx"],
-                    "ts": job["ts"],
-                    "error": str(e),
-                })
+                _bounded_put_latest(
+                    result_queue,
+                    {
+                        "ok": False,
+                        "port": port,
+                        "snip_idx": job["snip_idx"],
+                        "ts": job["ts"],
+                        "error": str(e),
+                    },
+                    memory_only=worker_args["memory_only"],
+                )
     except Exception as e:
-        result_queue.put({
-            "ok": False,
-            "port": port,
-            "snip_idx": -1,
-            "ts": "",
-            "error": f"worker init failed: {e}",
-        })
+        _bounded_put_latest(
+            result_queue,
+            {
+                "ok": False,
+                "port": port,
+                "snip_idx": -1,
+                "ts": "",
+                "error": f"worker init failed: {e}",
+            },
+            memory_only=worker_args.get("memory_only", False),
+        )
     finally:
         try:
             rx_streamer = locals().get("rx_streamer")
@@ -393,7 +483,7 @@ def record_monitor(stop_evt: threading.Event,
                    replay, port: int,
                    ring_bytes: int, restart_margin_bytes: int,
                    lock: threading.Lock,
-                   wrapped_flags: list):
+                   wrapped_flags: list | None = None):
     """
     Restart recording before the buffer fills to emulate ring-buffer overwrite.
     Uses the same lock as snippet reads to avoid restarting mid-read.
@@ -404,7 +494,8 @@ def record_monitor(stop_evt: threading.Event,
             if fullness >= ring_bytes - restart_margin_bytes:
                 with lock:
                     replay.record_restart(port)
-                    wrapped_flags[port] = True
+                    if wrapped_flags is not None:
+                        wrapped_flags[port] = True
 
             # Optional: pull RX async metadata (overruns etc.)
             while True:
@@ -444,6 +535,21 @@ def replay_get_record_async_md(replay, timeout: float = 0.0):
     return md if ok else None
 
 
+def validate_replay_async_api(replay) -> None:
+    """Reject old pyuhd replay async metadata signatures early."""
+    method = replay.get_record_async_metadata
+    params = list(inspect.signature(method).parameters.values())
+    required = [
+        p for p in params
+        if p.default is inspect._empty
+        and p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    if len(required) > 0:
+        raise RuntimeError(
+            "Replay get_record_async_metadata must support timeout-only signature"
+        )
+
+
 def main(callback=None, args=None, stop_event=None):
     args = parse_args() if args is None else args
     if not args.memory_only and not args.output_prefix:
@@ -453,6 +559,7 @@ def main(callback=None, args=None, stop_event=None):
 
     graph = uhd.rfnoc.RfnocGraph(args.args)
     replay = uhd.rfnoc.ReplayBlockControl(graph.get_block(args.block))
+    validate_replay_async_api(replay)
     radio_chan_pairs = enumerate_radios(graph, args.radio_channels)
 
     rate = connect_radios(graph, replay, radio_chan_pairs,
@@ -577,9 +684,11 @@ def main(callback=None, args=None, stop_event=None):
         "replay": replay,
         "cpu_format": args.cpu_format,
         "pkt_size": args.pkt_size,
+        "memory_only": args.memory_only,
     }
-    job_queues = [queue.Queue() for _ in range(num_ports)]
-    result_queue = queue.Queue()
+    max_pending_jobs = max(1, int(args.max_pending_jobs))
+    job_queues = [queue.Queue(maxsize=max_pending_jobs) for _ in range(num_ports)]
+    result_queue = queue.Queue(maxsize=max_pending_jobs * max(1, num_ports))
     workers = []
     for port in range(num_ports):
         p = threading.Thread(
@@ -598,6 +707,16 @@ def main(callback=None, args=None, stop_event=None):
         )
         p.start()
         workers.append(p)
+
+    callback_dtype = np.complex64 if args.cpu_format == "fc32" else np.uint32
+    shared_slots = None
+    if args.memory_only and callback is not None:
+        shared_slots = SharedSnippetSlots(
+            num_ports=num_ports,
+            slot_count=max(1, int(args.shm_slots)),
+            slot_nbytes=snippet_bytes,
+            dtype=callback_dtype,
+        )
 
     # Snippet loop
     log("Entering snippet download loop. Ctrl+C to stop.", memory_only=args.memory_only)
@@ -653,13 +772,18 @@ def main(callback=None, args=None, stop_event=None):
                         log(f"[s{snip_idx:06d} ch{port}] not enough data yet",
                             memory_only=args.memory_only)
                         continue
-                job_queues[port].put({
-                    "port": port,
-                    "snip_idx": snip_idx,
-                    "ts": ts,
-                    "ranges": ranges,
-                })
-                pending_results += 1
+                enqueued = _bounded_put_latest(
+                    job_queues[port],
+                    {
+                        "port": port,
+                        "snip_idx": snip_idx,
+                        "ts": ts,
+                        "ranges": ranges,
+                    },
+                    memory_only=args.memory_only,
+                )
+                if enqueued:
+                    pending_results += 1
 
             received_results = 0
             while received_results < pending_results and not stop_evt.is_set():
@@ -681,6 +805,7 @@ def main(callback=None, args=None, stop_event=None):
                         ts=result["ts"],
                         args=args,
                         callback=callback,
+                        shared_slots=shared_slots,
                     )
                     del data
                 else:
@@ -719,6 +844,9 @@ def main(callback=None, args=None, stop_event=None):
             p.join(timeout=5.0)
 
         time.sleep(0.1)
+
+        if shared_slots is not None:
+            shared_slots.cleanup()
 
         try:
             if graph is not None:
