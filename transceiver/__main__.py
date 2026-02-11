@@ -2324,6 +2324,8 @@ def _plot_on_pg(
         except (TypeError, RuntimeError):
             pass
         delattr(plot, "_xcorr_click_handler")
+    if hasattr(plot, "_crosscorr_peak"):
+        delattr(plot, "_crosscorr_peak")
     if reduce_data and mode != "Crosscorr":
         data, step = _reduce_data(data)
         fs /= step
@@ -2379,6 +2381,7 @@ def _plot_on_pg(
             else "Kreuzkorrelation"
         )
         plot.plot(lags, mag, pen=pg.mkPen(colors["crosscorr"]), name=main_label)
+        max_peak = float(np.max(mag)) if mag.size else 0.0
         if crosscorr_compare is not None and crosscorr_compare.size:
             cc2 = _xcorr_fft(crosscorr_compare, ref_data)
             lags2 = np.arange(
@@ -2391,6 +2394,8 @@ def _plot_on_pg(
                 pen=pg.mkPen(colors["compare"], style=QtCore.Qt.DashLine),
                 name="ohne Pfad-Cancellation",
             )
+            if mag2.size:
+                max_peak = max(max_peak, float(np.max(mag2)))
         if legend is None:
             legend = plot.addLegend()
         if legend is not None:
@@ -2531,7 +2536,32 @@ def _plot_on_pg(
         plot.setTitle(f"Crosscorr. with TX: {title}")
         plot.setLabel("bottom", "Lag")
         plot.setLabel("left", "Magnitude")
+        plot._crosscorr_peak = max_peak
     plot.showGrid(x=True, y=True)
+
+
+def _crosscorr_dynamic_y_range(
+    current_range: tuple[float, float],
+    peak: float,
+    *,
+    low_threshold: float = 0.2,
+    headroom_ratio: float = 0.2,
+) -> tuple[float, float] | None:
+    """Return a new Y-range for cross-correlation previews when needed."""
+    y_min, y_max = current_range
+    if not np.isfinite(peak):
+        return None
+    peak = float(max(0.0, peak))
+    if y_max <= y_min:
+        return (0.0, max(1.0, peak * (1.0 + headroom_ratio)))
+    visible_span = y_max - y_min
+    lower_trigger = y_min + visible_span * low_threshold
+    outside_visible = peak > y_max or peak < y_min
+    too_low = peak < lower_trigger
+    if not outside_visible and not too_low:
+        return None
+    target_top = peak * (1.0 + headroom_ratio)
+    return (0.0, max(target_top, 1e-9))
 
 
 def _clear_pg_plot(plot_item: pg.PlotItem) -> None:
@@ -4679,6 +4709,15 @@ class TransceiverUI(ctk.CTk):
                 )
                 if zoom_range is not None:
                     plot_item.setXRange(*zoom_range, padding=0.0)
+                peak = getattr(plot_item, "_crosscorr_peak", None)
+                if peak is not None:
+                    current_y = plot_item.getViewBox().viewRange()[1]
+                    y_range = _crosscorr_dynamic_y_range(
+                        (float(current_y[0]), float(current_y[1])),
+                        float(peak),
+                    )
+                    if y_range is not None:
+                        plot_item.setYRange(*y_range, padding=0.0)
             image = _export_pg_plot_image(
                 plot_item,
                 preview_width,
