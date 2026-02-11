@@ -41,6 +41,7 @@ from .helpers.correlation_utils import (
     xcorr_fft as _xcorr_fft,
 )
 from .helpers.path_cancellation import apply_path_cancellation
+from .helpers.continuous_processing import continuous_processing_worker
 from .helpers.number_parser import parse_number_expr
 from .helpers.plot_colors import PLOT_COLORS
 from .tx_controller import TxController
@@ -6268,7 +6269,7 @@ class TransceiverUI(ctk.CTk):
         self._cont_last_end_to_end_ms = 0.0
         self._cont_worker_result_drops = 0
         self._cont_worker_process = Process(
-            target=_continuous_processing_worker,
+            target=continuous_processing_worker,
             args=(self._cont_task_queue, self._cont_result_queue),
             daemon=True,
         )
