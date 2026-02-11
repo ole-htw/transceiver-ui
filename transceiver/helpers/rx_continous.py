@@ -19,6 +19,7 @@ import time
 import argparse
 import threading
 import inspect
+from _thread import LockType
 from datetime import datetime
 
 import numpy as np
@@ -292,7 +293,7 @@ def recv_exact_1ch(rx_streamer, num_items: int, dtype, pkt_items: int):
 def play_and_download_chunk(replay, rx_streamer, port: int,
                             offset_bytes: int, size_bytes: int,
                             item_size: int, dtype, pkt_items: int,
-                            replay_ctrl_lock: threading.Lock | None = None):
+                            replay_ctrl_lock: LockType | None = None):
     """
     Configure Replay playback for (offset,size) on output port `port`,
     then download exactly that chunk through rx_streamer (1ch).
