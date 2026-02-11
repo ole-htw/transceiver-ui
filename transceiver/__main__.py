@@ -2736,6 +2736,8 @@ class TransceiverUI(ctk.CTk):
         self._tx_running = False
         self._last_tx_end = 0.0
         self._filtered_tx_file = None
+        self._last_generated_tx_file: str | None = None
+        self._active_tx_file: str | None = None
         self._tx_controller = None
         self._tx_output_capture: _FDCapture | None = None
         self._closing = False
@@ -3890,6 +3892,13 @@ class TransceiverUI(ctk.CTk):
         if self._rrc_active():
             return self._filtered_tx_file or self.tx_file.get()
         return self.tx_file.get()
+
+    def _tx_transmit_file_for_start(self) -> str:
+        """Return the newest generated TX file when starting a transmission."""
+        preferred = self._last_generated_tx_file
+        if preferred:
+            return preferred
+        return self._tx_transmit_file()
 
     def _on_rrc_toggle(self) -> None:
         state = "normal" if self.rrc_enable.get() else "disabled"
@@ -5905,6 +5914,8 @@ class TransceiverUI(ctk.CTk):
                 if not self.tx_file.get():
                     self.tx_file.insert(0, self._tx_transmit_file())
 
+            self._last_generated_tx_file = self._tx_transmit_file()
+
             def _scale_for_display(signal: np.ndarray) -> np.ndarray:
                 max_abs = np.max(np.abs(signal)) if np.any(signal) else 1.0
                 scale = amp / max_abs if max_abs > 1e-9 else 1.0
@@ -6022,9 +6033,11 @@ class TransceiverUI(ctk.CTk):
             self.tx_retrans.configure(state="normal")
         self._start_tx_output_capture()
         started = False
+        tx_file = self._tx_transmit_file_for_start()
+        self._active_tx_file = tx_file
         try:
             started = controller.start_tx(
-                self._tx_transmit_file(),
+                tx_file,
                 repeat=True,
                 rate=rate,
                 freq=freq,
@@ -6033,6 +6046,7 @@ class TransceiverUI(ctk.CTk):
             )
         finally:
             if not started:
+                self._active_tx_file = None
                 self._stop_tx_output_capture()
         if not started:
             self._out_queue.put("TX start failed; controller still running.\n")
@@ -6055,6 +6069,7 @@ class TransceiverUI(ctk.CTk):
         self._stop_tx_output_capture()
         self._cmd_running = False
         self._tx_running = False
+        self._active_tx_file = None
         self._last_tx_end = controller.last_end_monotonic or time.monotonic()
         self._ui(self._reset_tx_buttons)
 
@@ -6065,6 +6080,7 @@ class TransceiverUI(ctk.CTk):
         if controller is None:
             self._tx_running = False
             self._cmd_running = False
+            self._active_tx_file = None
             self._last_tx_end = time.monotonic()
             self._stop_tx_output_capture()
             if reset_ui:
@@ -6075,6 +6091,8 @@ class TransceiverUI(ctk.CTk):
             self._out_queue.put("TX stop timed out; controller still running.\n")
         self._tx_running = controller.is_running
         self._cmd_running = controller.is_running
+        if not controller.is_running:
+            self._active_tx_file = None
         self._last_tx_end = controller.last_end_monotonic or time.monotonic()
         if not controller.is_running:
             self._stop_tx_output_capture()
