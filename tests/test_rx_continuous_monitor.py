@@ -68,6 +68,22 @@ def test_validate_replay_async_api_rejects_old_signature():
         raise AssertionError("Expected validate_replay_async_api to raise RuntimeError")
 
 
+def test_validate_replay_async_api_handles_uninspectable_method_signature():
+    module = load_module_with_stubbed_uhd()
+    replay = FakeReplay()
+
+    original_signature = module.inspect.signature
+
+    def raise_value_error(*_args, **_kwargs):
+        raise ValueError("no signature found")
+
+    module.inspect.signature = raise_value_error
+    try:
+        module.validate_replay_async_api(replay)
+    finally:
+        module.inspect.signature = original_signature
+
+
 def test_record_monitor_handles_metadata_and_restart():
     module = load_module_with_stubbed_uhd()
     metadata = [FakeRXMetadata(), FakeRXMetadata(FakeErrorCodes.overflow)]
