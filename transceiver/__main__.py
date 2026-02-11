@@ -2564,6 +2564,59 @@ def _crosscorr_dynamic_y_range(
     return (0.0, max(target_top, 1e-9))
 
 
+def _animate_pg_y_range(
+    plot_item: pg.PlotItem,
+    target_range: tuple[float, float],
+    *,
+    duration_ms: int = 220,
+    steps: int = 12,
+) -> None:
+    """Animate transitions of the Y-axis range for smoother scale changes."""
+    view_box = plot_item.getViewBox()
+    current_range = view_box.viewRange()[1]
+    start_min, start_max = float(current_range[0]), float(current_range[1])
+    end_min, end_max = float(target_range[0]), float(target_range[1])
+
+    if (
+        not np.isfinite(start_min)
+        or not np.isfinite(start_max)
+        or not np.isfinite(end_min)
+        or not np.isfinite(end_max)
+        or end_max <= end_min
+    ):
+        plot_item.setYRange(end_min, end_max, padding=0.0)
+        return
+
+    if abs(start_min - end_min) < 1e-12 and abs(start_max - end_max) < 1e-12:
+        return
+
+    existing_timer = getattr(plot_item, "_y_range_anim_timer", None)
+    if existing_timer is not None:
+        existing_timer.stop()
+
+    tick_count = max(1, int(steps))
+    timer = QtCore.QTimer()
+    timer.setSingleShot(False)
+    interval = max(1, int(duration_ms / tick_count))
+
+    state = {"step": 0}
+
+    def _tick() -> None:
+        state["step"] += 1
+        t = min(1.0, state["step"] / tick_count)
+        # Ease-out interpolation for a less mechanical zoom feel.
+        eased = 1.0 - (1.0 - t) ** 3
+        y_min = start_min + (end_min - start_min) * eased
+        y_max = start_max + (end_max - start_max) * eased
+        plot_item.setYRange(y_min, y_max, padding=0.0)
+        if t >= 1.0:
+            timer.stop()
+
+    timer.timeout.connect(_tick)
+    timer.start(interval)
+    plot_item._y_range_anim_timer = timer
+
+
 def _clear_pg_plot(plot_item: pg.PlotItem) -> None:
     if plot_item.legend is not None:
         legend = plot_item.legend
@@ -4717,7 +4770,7 @@ class TransceiverUI(ctk.CTk):
                         float(peak),
                     )
                     if y_range is not None:
-                        plot_item.setYRange(*y_range, padding=0.0)
+                        _animate_pg_y_range(plot_item, y_range)
             image = _export_pg_plot_image(
                 plot_item,
                 preview_width,
