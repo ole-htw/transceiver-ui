@@ -201,6 +201,7 @@ def _read_worker_loop(
     res_q,
     replay,
     rx_streamer,
+    replay_port_lock: LockType,
     *,
     cpu_format: str,
     memory_only: bool,
@@ -242,8 +243,8 @@ def _read_worker_loop(
                             item_size=item_size,
                             dtype=dtype,
                             pkt_items=pkt_items,
-                            replay_port_lock=None,
-                            lock_path=None,
+                            replay_port_lock=replay_port_lock,
+                            lock_path=f"port{port}/config_play+issue_stream_cmd.read_worker",
                             memory_only=memory_only,
                         )
                     )
@@ -882,7 +883,14 @@ def main(callback=None, args=None, stop_event=None):
     for port in range(num_ports):
         proc = threading.Thread(
             target=_read_worker_loop,
-            args=(port, read_req_queues[port], read_result_queue, replay, read_streamers[port]),
+            args=(
+                port,
+                read_req_queues[port],
+                read_result_queue,
+                replay,
+                read_streamers[port],
+                replay_port_locks[port],
+            ),
             kwargs={
                 "cpu_format": args.cpu_format,
                 "memory_only": args.memory_only,
