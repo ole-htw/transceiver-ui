@@ -538,29 +538,7 @@ def replay_get_record_async_md(replay, timeout: float = 0.0):
 def validate_replay_async_api(replay) -> None:
     """Reject old pyuhd replay async metadata signatures early."""
     method = replay.get_record_async_metadata
-    try:
-        params = list(inspect.signature(method).parameters.values())
-    except (TypeError, ValueError):
-        # Some pybind/PyCapsule methods do not expose an inspectable signature.
-        # In that case, probe the API directly instead of failing early.
-        try:
-            method(0.0)
-            return
-        except TypeError as exc:
-            try:
-                md = uhd.types.RXMetadata()
-                method(md, 0.0)
-            except Exception:
-                # Unknown failure mode; keep behavior permissive and let runtime
-                # metadata reads decide what works for this UHD build.
-                return
-            raise RuntimeError(
-                "Replay get_record_async_metadata must support timeout-only signature"
-            ) from exc
-        except Exception:
-            # Any other exception indicates the method can be called with timeout-only
-            # but failed internally for a different reason.
-            return
+    params = list(inspect.signature(method).parameters.values())
     required = [
         p for p in params
         if p.default is inspect._empty
