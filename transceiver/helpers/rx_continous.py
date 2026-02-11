@@ -45,7 +45,7 @@ def parse_args(argv=None):
     p.add_argument("-r", "--rate", type=float, help="Sampling rate (defaults to radio rate)")
 
     # Ring buffer params (per port)
-    grp = p.add_mutually_exclusive_group(required=True)
+    grp = p.add_mutually_exclusive_group(required=False)
     grp.add_argument("--ring-seconds", type=float,
                      help="Ring buffer length in seconds (per port).")
     grp.add_argument("--ring-bytes", type=int,
@@ -62,7 +62,7 @@ def parse_args(argv=None):
                    help="Safety guard behind current write pointer before reading (seconds).")
     p.add_argument("--restart-margin-seconds", type=float, default=None,
                    help="Restart recording this many seconds before the buffer fills. "
-                        "Default: max(snippet+guard, 0.25*ring).")
+                        "Default: max(snippet+guard, 0.33*ring).")
 
     # Output
     p.add_argument("--memory-only", action="store_true",
@@ -276,7 +276,8 @@ def recv_exact_1ch(rx_streamer, num_items: int, dtype, pkt_items: int):
 
 def play_and_download_chunk(replay, rx_streamer, port: int,
                             offset_bytes: int, size_bytes: int,
-                            item_size: int, dtype, pkt_items: int):
+                            item_size: int, dtype, pkt_items: int,
+                            control_lock: threading.Lock):
     """
     Configure Replay playback for (offset,size) on output port `port`,
     then download exactly that chunk through rx_streamer (1ch).
@@ -284,15 +285,16 @@ def play_and_download_chunk(replay, rx_streamer, port: int,
     if size_bytes <= 0:
         return np.empty((0,), dtype=dtype)
 
-    replay.config_play(offset_bytes, size_bytes, port)
-
     num_items = size_bytes // item_size
     stream_cmd = uhd.types.StreamCMD(uhd.types.StreamMode.num_done)
     stream_cmd.num_samps = num_items
     stream_cmd.stream_now = True
 
     # Wichtig: Replay-Port steuern (nicht der Streamer)
-    replay.issue_stream_cmd(stream_cmd, port)
+    # Replay-Control-Aufrufe seriell halten, damit sie sich nicht überlappen.
+    with control_lock:
+        replay.config_play(offset_bytes, size_bytes, port)
+        replay.issue_stream_cmd(stream_cmd, port)
 
     return recv_exact_1ch(rx_streamer, num_items, dtype, pkt_items)
 
@@ -307,6 +309,7 @@ def port_download_worker(
     result_queue,
     stop_event,
     port_lock,
+    control_lock,
 ):
     """Per-port producer/consumer worker that downloads snippets in-process."""
     try:
@@ -346,6 +349,7 @@ def port_download_worker(
                             item_size=item_size,
                             dtype=dtype,
                             pkt_items=pkt_items,
+                            control_lock=control_lock,
                         )
                         for off, sz in job["ranges"]
                     ]
@@ -392,19 +396,37 @@ def snippet_filename(prefix: str, snip_idx: int, port: int, use_numpy: bool):
 def record_monitor(stop_evt: threading.Event,
                    replay, port: int,
                    ring_bytes: int, restart_margin_bytes: int,
-                   lock: threading.Lock,
+                   control_lock: threading.Lock,
                    wrapped_flags: list):
     """
     Restart recording before the buffer fills to emulate ring-buffer overwrite.
-    Uses the same lock as snippet reads to avoid restarting mid-read.
+    Uses a global control lock so replay control calls never overlap.
     """
+    poll_interval_s = 0.025
+    min_restart_interval_s = max(0.1, 4 * poll_interval_s)
+    # Hysterese: erst wieder scharf schalten, wenn klar unter der Triggergrenze.
+    hysteresis_bytes = max(restart_margin_bytes // 2, ring_bytes // 20)
+    low_watermark = max(0, ring_bytes - restart_margin_bytes - hysteresis_bytes)
+
+    restart_armed = True
+    last_restart_ts = 0.0
+
     while not stop_evt.is_set():
         try:
             fullness = replay.get_record_fullness(port)
-            if fullness >= ring_bytes - restart_margin_bytes:
-                with lock:
+            now = time.monotonic()
+            trigger_level = ring_bytes - restart_margin_bytes
+
+            if fullness <= low_watermark:
+                restart_armed = True
+
+            if (restart_armed and fullness >= trigger_level and
+                    (now - last_restart_ts) >= min_restart_interval_s):
+                with control_lock:
                     replay.record_restart(port)
-                    wrapped_flags[port] = True
+                wrapped_flags[port] = True
+                last_restart_ts = now
+                restart_armed = False
 
             # Optional: pull RX async metadata (overruns etc.)
             while True:
@@ -416,7 +438,7 @@ def record_monitor(stop_evt: threading.Event,
         except Exception as e:
             print(f"[port {port}] monitor error: {e}", file=sys.stderr)
 
-        time.sleep(0.01)
+        time.sleep(poll_interval_s)
 
 
 
@@ -482,6 +504,11 @@ def main(callback=None, args=None, stop_event=None):
 
 
     # Determine ring buffer size per port
+    if args.ring_seconds is None and args.ring_bytes is None:
+        args.ring_seconds = 12.0
+        log("ring size not specified; defaulting to --ring-seconds=12.0",
+            memory_only=args.memory_only)
+
     if args.ring_seconds is not None:
         ring_bytes = int(args.ring_seconds * rate * item_size)
     else:
@@ -511,14 +538,26 @@ def main(callback=None, args=None, stop_event=None):
 
     # Restart margin (bytes)
     if args.restart_margin_seconds is None:
-        # default: enough room for one full snippet read + guard, but at least 25% of ring
-        restart_margin_bytes = max(snippet_bytes + guard_bytes, ring_bytes // 4)
+        # default: enough room for one full snippet read + guard, but at least 33% of ring
+        restart_margin_bytes = max(snippet_bytes + guard_bytes, ring_bytes // 3)
     else:
         restart_margin_bytes = int(args.restart_margin_seconds * rate * item_size)
         restart_margin_bytes = max(align, (restart_margin_bytes // align) * align)
 
     if restart_margin_bytes >= ring_bytes:
         restart_margin_bytes = ring_bytes // 2
+
+    # Schutz gegen zu aggressives Polling/Downloads unter Last.
+    min_snippet_interval = 0.02
+    if num_ports > 1 or rate >= 50e6:
+        min_snippet_interval = 0.05
+    if args.snippet_interval < min_snippet_interval:
+        log(
+            f"snippet interval {args.snippet_interval}s too small for current load; "
+            f"raising to {min_snippet_interval}s",
+            memory_only=args.memory_only,
+        )
+        args.snippet_interval = min_snippet_interval
 
     log(f"Replay mem total: {mem_size/1024/1024:.1f} MiB, stride/port: {mem_stride/1024/1024:.1f} MiB",
         memory_only=args.memory_only)
@@ -561,13 +600,14 @@ def main(callback=None, args=None, stop_event=None):
 
     # Background record monitors (wrap before full)
     stop_evt = stop_event or threading.Event()
+    control_lock = threading.Lock()
     locks = [threading.Lock() for _ in range(num_ports)]
 
     monitors = []
     for port in range(num_ports):
         t = threading.Thread(
             target=record_monitor,
-            args=(stop_evt, replay, port, ring_bytes, restart_margin_bytes, locks[port], wrapped_flags),
+            args=(stop_evt, replay, port, ring_bytes, restart_margin_bytes, control_lock, wrapped_flags),
         )
         t.start()
         monitors.append(t)
@@ -593,6 +633,7 @@ def main(callback=None, args=None, stop_event=None):
                 "result_queue": result_queue,
                 "stop_event": stop_evt,
                 "port_lock": locks[port],
+                "control_lock": control_lock,
             },
             daemon=True,
         )
