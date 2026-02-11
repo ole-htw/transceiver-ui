@@ -18,15 +18,7 @@ import sys
 import time
 import argparse
 import threading
-<<<<<<< HEAD
-<<<<<<< HEAD
-import queue
-=======
 import inspect
->>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
-=======
-import inspect
->>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
 from datetime import datetime
 
 import numpy as np
@@ -305,98 +297,6 @@ def play_and_download_chunk(replay, rx_streamer, port: int,
     return recv_exact_1ch(rx_streamer, num_items, dtype, pkt_items)
 
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-def port_download_worker(
-    *,
-    port: int,
-    worker_args: dict,
-    item_size: int,
-    pkt_items: int,
-    job_queue,
-    result_queue,
-    stop_event,
-    port_lock,
-):
-    """Per-port producer/consumer worker that downloads snippets in-process."""
-    try:
-        graph = worker_args["graph"]
-        replay = worker_args["replay"]
-        stream_args = uhd.usrp.StreamArgs(worker_args["cpu_format"], "sc16")
-
-        rx_streamer = graph.create_rx_streamer(1, stream_args)
-        graph.connect(replay.get_unique_id(), port, rx_streamer, 0)
-        graph.commit()
-
-        replay.set_play_type("sc16", port)
-        if worker_args["pkt_size"] is not None:
-            ipp = max(1, int(worker_args["pkt_size"]) // item_size)
-            replay.set_max_items_per_packet(ipp, port)
-
-        dtype = np.complex64 if worker_args["cpu_format"] == "fc32" else np.uint32
-
-        while not stop_event.is_set():
-            try:
-                job = job_queue.get(timeout=0.1)
-            except queue.Empty:
-                continue
-
-            if job is None:
-                break
-
-            try:
-                with port_lock:
-                    parts = [
-                        play_and_download_chunk(
-                            replay=replay,
-                            rx_streamer=rx_streamer,
-                            port=port,
-                            offset_bytes=off,
-                            size_bytes=sz,
-                            item_size=item_size,
-                            dtype=dtype,
-                            pkt_items=pkt_items,
-                        )
-                        for off, sz in job["ranges"]
-                    ]
-
-                data = np.concatenate(parts) if len(parts) > 1 else parts[0]
-                result_queue.put({
-                    "ok": True,
-                    "port": port,
-                    "snip_idx": job["snip_idx"],
-                    "ts": job["ts"],
-                    "data": data,
-                })
-            except Exception as e:
-                result_queue.put({
-                    "ok": False,
-                    "port": port,
-                    "snip_idx": job["snip_idx"],
-                    "ts": job["ts"],
-                    "error": str(e),
-                })
-    except Exception as e:
-        result_queue.put({
-            "ok": False,
-            "port": port,
-            "snip_idx": -1,
-            "ts": "",
-            "error": f"worker init failed: {e}",
-        })
-    finally:
-        try:
-            rx_streamer = locals().get("rx_streamer")
-            if rx_streamer is not None:
-                del rx_streamer
-        except Exception:
-            pass
-
-
-=======
->>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
-=======
->>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
 
 def snippet_filename(prefix: str, snip_idx: int, port: int, use_numpy: bool):
     ext = "npy" if use_numpy else "dat"
@@ -586,9 +486,6 @@ def main(callback=None, args=None, stop_event=None):
     # Background record monitors (wrap before full)
     stop_evt = stop_event or threading.Event()
     locks = [threading.Lock() for _ in range(num_ports)]
-
-
-
     monitors = []
     for port in range(num_ports):
         t = threading.Thread(
@@ -599,45 +496,12 @@ def main(callback=None, args=None, stop_event=None):
         t.start()
         monitors.append(t)
 
-    worker_args = {
-        "graph": graph,
-        "replay": replay,
-        "cpu_format": args.cpu_format,
-        "pkt_size": args.pkt_size,
-    }
-    job_queues = [queue.Queue() for _ in range(num_ports)]
-    result_queue = queue.Queue()
-    workers = []
-    for port in range(num_ports):
-        p = threading.Thread(
-            target=port_download_worker,
-            kwargs={
-                "port": port,
-                "worker_args": worker_args,
-                "item_size": item_size,
-                "pkt_items": pkt_items[port],
-                "job_queue": job_queues[port],
-                "result_queue": result_queue,
-                "stop_event": stop_evt,
-                "port_lock": locks[port],
-            },
-            daemon=True,
-        )
-        p.start()
-        workers.append(p)
-=======
-=======
->>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
     # Host dtype for snippet arrays
     # (Keep original behavior: sc16 as packed uint32; fc32 as complex64)
     if args.cpu_format == "fc32":
         dtype = np.complex64
     else:
         dtype = np.uint32
-<<<<<<< HEAD
->>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
-=======
->>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
 
     # Snippet loop
     log("Entering snippet download loop. Ctrl+C to stop.", memory_only=args.memory_only)
@@ -706,37 +570,9 @@ def main(callback=None, args=None, stop_event=None):
                         )
                     data = np.concatenate(parts) if len(parts) > 1 else parts[0]
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-                if result.get("ok"):
-                    data = result["data"]
-
-                    emit_snippet(
-                        data,
-                        port=result["port"],
-                        snip_idx=result["snip_idx"],
-                        ts=result["ts"],
-                        args=args,
-                        callback=callback,
-                    )
-                    del data
-                else:
-                    log(
-                        f"[s{result.get('snip_idx', -1):06d} ch{result.get('port', -1)}] "
-                        f"worker error: {result.get('error', 'unknown error')}",
-                        memory_only=args.memory_only,
-                    )
-                received_results += 1
-=======
                 emit_snippet(data, port=port, snip_idx=snip_idx, ts=ts,
                              args=args, callback=callback)
                 del data
->>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
-=======
-                emit_snippet(data, port=port, snip_idx=snip_idx, ts=ts,
-                             args=args, callback=callback)
-                del data
->>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
 
             snip_idx += 1
             next_t += args.snippet_interval
