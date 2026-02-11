@@ -20,6 +20,7 @@ import os
 from multiprocessing import shared_memory, Pipe, Process
 from pathlib import Path
 from datetime import datetime
+from queue import Empty as ThreadQueueEmpty
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageTk
@@ -1640,6 +1641,144 @@ def _format_amp(val: float) -> str:
     return f"{val:.2e}"
 
 
+def _decimate_for_display(data: np.ndarray, max_points: int = 4096) -> np.ndarray:
+    """Return a decimated copy of *data* suitable for quick UI rendering."""
+    arr = np.asarray(data)
+    if arr.size <= max_points:
+        return arr
+    step = max(1, int(np.ceil(arr.size / max_points)))
+    return arr[::step]
+
+
+def _continuous_processing_worker(
+    task_queue: multiprocessing.Queue,
+    result_queue: multiprocessing.Queue,
+) -> None:
+    """Process continuous RX frames and emit preprocessed UI payloads."""
+    cached_tx_path: str | None = None
+    cached_tx_data = np.array([], dtype=np.complex64)
+
+    while True:
+        task = task_queue.get()
+        if task is None:
+            break
+
+        started = time.monotonic()
+        data = np.asarray(task.get("data", np.array([], dtype=np.complex64)))
+        fs = float(task.get("fs", 1.0))
+        tx_path = task.get("tx_path")
+        trim_enabled = bool(task.get("trim_enabled", False))
+        trim_start = float(task.get("trim_start", 0.0))
+        trim_end = float(task.get("trim_end", 100.0))
+        antenna_spacing = task.get("antenna_spacing")
+        wavelength = task.get("wavelength")
+        magnitude_enabled = bool(task.get("magnitude_enabled", False))
+        rx_channel_view = str(task.get("rx_channel_view", "Kanal 1"))
+        path_cancel_enabled = bool(task.get("path_cancel_enabled", False))
+
+        if tx_path != cached_tx_path:
+            cached_tx_path = tx_path
+            cached_tx_data = np.array([], dtype=np.complex64)
+            if tx_path:
+                try:
+                    raw = np.fromfile(tx_path, dtype=np.int16)
+                    if raw.size % 2:
+                        raw = raw[:-1]
+                    raw = raw.reshape(-1, 2).astype(np.float32)
+                    cached_tx_data = raw[:, 0] + 1j * raw[:, 1]
+                except Exception:
+                    cached_tx_data = np.array([], dtype=np.complex64)
+
+        aoa_text = "AoA (ESPRIT): --"
+        echo_aoa_text = "Echo AoA: --"
+        aoa_series = None
+        aoa_time = None
+
+        if data.ndim == 2 and data.shape[0] >= 2:
+            aoa_raw = data[:2]
+            if trim_enabled:
+                s = int(round(aoa_raw.shape[1] * trim_start / 100.0))
+                e = int(round(aoa_raw.shape[1] * trim_end / 100.0))
+                e = max(s + 1, min(aoa_raw.shape[1], e))
+                aoa_raw = aoa_raw[:, s:e]
+            if antenna_spacing and wavelength:
+                try:
+                    aoa_angle = doa_esprit.estimate_aoa_esprit(
+                        aoa_raw, float(antenna_spacing), float(wavelength)
+                    )
+                    if not np.isnan(aoa_angle):
+                        aoa_text = f"AoA (ESPRIT): {aoa_angle:.1f}°"
+                        aoa_time, aoa_series = doa_esprit.estimate_aoa_esprit_series(
+                            aoa_raw,
+                            float(antenna_spacing),
+                            float(wavelength),
+                        )
+                except Exception as exc:
+                    aoa_text = f"AoA (ESPRIT): Fehler ({exc})"
+
+                if cached_tx_data.size > 0:
+                    try:
+                        echo_out = _correlate_and_estimate_echo_aoa(
+                            aoa_raw,
+                            cached_tx_data,
+                            antenna_spacing=float(antenna_spacing),
+                            wavelength=float(wavelength),
+                        )
+                        results = echo_out.get("results", [])
+                        if results:
+                            echo_aoa_text = "Echo AoA: " + ", ".join(
+                                f"{item['lag_samp']}→{item['theta_deg']:.1f}°"
+                                for item in results[:3]
+                            )
+                        else:
+                            echo_aoa_text = "Echo AoA: keine Peaks"
+                    except Exception:
+                        echo_aoa_text = "Echo AoA: Berechnung fehlgeschlagen"
+
+        plot_data = data
+        if plot_data.ndim == 2 and plot_data.shape[0] >= 2:
+            if rx_channel_view == "Kanal 2":
+                plot_data = plot_data[1]
+            elif rx_channel_view == "Differenz":
+                plot_data = plot_data[0] - plot_data[1]
+            else:
+                plot_data = plot_data[0]
+        if trim_enabled and plot_data.size:
+            s = int(round(plot_data.size * trim_start / 100.0))
+            e = int(round(plot_data.size * trim_end / 100.0))
+            e = max(s + 1, min(plot_data.size, e))
+            plot_data = plot_data[s:e]
+        if magnitude_enabled:
+            plot_data = np.abs(plot_data)
+
+        if path_cancel_enabled and cached_tx_data.size and plot_data.size:
+            try:
+                plot_data, _ = apply_path_cancellation(plot_data, cached_tx_data)
+            except Exception:
+                pass
+
+        plot_data = _decimate_for_display(np.asarray(plot_data))
+        aoa_series_plot = (
+            None if aoa_series is None else _decimate_for_display(np.asarray(aoa_series))
+        )
+        aoa_time_plot = (
+            None if aoa_time is None else _decimate_for_display(np.asarray(aoa_time))
+        )
+
+        result_queue.put(
+            {
+                "frame_ts": float(task.get("frame_ts", started)),
+                "fs": fs,
+                "plot_data": plot_data,
+                "aoa_text": aoa_text,
+                "echo_aoa_text": echo_aoa_text,
+                "aoa_series": aoa_series_plot,
+                "aoa_time": aoa_time_plot,
+                "processing_ms": (time.monotonic() - started) * 1000.0,
+            }
+        )
+
+
 def _try_parse_number_expr(text: str, default: float = 0.0) -> float:
     try:
         return parse_number_expr(text)
@@ -2611,6 +2750,15 @@ class TransceiverUI(ctk.CTk):
         self._tx_indicator_spinner_frames: list[ctk.CTkImage] = []
         self._tx_indicator_blink_frames: list[ctk.CTkImage] = []
         self._tx_indicator_blank: ctk.CTkImage | None = None
+        self._cont_task_queue: multiprocessing.Queue | None = None
+        self._cont_result_queue: multiprocessing.Queue | None = None
+        self._cont_worker_process: Process | None = None
+        self._cont_task_queue_drops = 0
+        self._cont_rendered_frames = 0
+        self._cont_last_processing_ms = 0.0
+        self._cont_last_end_to_end_ms = 0.0
+        self._cont_worker_result_drops = 0
+        self._cont_runtime_config: dict[str, object] = {}
         self._build_tx_indicator_assets()
         self.create_widgets()
         try:
@@ -3562,12 +3710,29 @@ class TransceiverUI(ctk.CTk):
             state="disabled",
         )
         self.rx_cont_stop.grid(row=0, column=1, padx=2)
+        self.rx_cont_telemetry_label = ctk.CTkLabel(
+            rx_continuous_tab,
+            text=(
+                "Telemetry: proc -- ms | e2e -- ms | queue drops 0 | "
+                "worker drops 0 | rendered 0"
+            ),
+            anchor="w",
+            justify="left",
+            text_color="gray70",
+        )
+        self.rx_cont_telemetry_label.grid(
+            row=4,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(0, 4),
+        )
         rx_cont_scroll_container = ctk.CTkFrame(
             rx_continuous_tab,
             fg_color=terminal_container_fg,
             corner_radius=terminal_container_corner,
         )
-        rx_cont_scroll_container.grid(row=4, column=0, columnspan=2, sticky="nsew")
+        rx_cont_scroll_container.grid(row=5, column=0, columnspan=2, sticky="nsew")
         rx_cont_scroll_container.columnconfigure(0, weight=1)
         rx_cont_scroll_container.rowconfigure(0, weight=1)
 
@@ -3620,7 +3785,7 @@ class TransceiverUI(ctk.CTk):
                 self._update_rx_scrollbar(tab_name),
             ),
         )
-        rx_continuous_tab.rowconfigure(4, weight=1)
+        rx_continuous_tab.rowconfigure(5, weight=1)
 
         self._rx_scroll_active: dict[str, bool] = {
             "Single": False,
@@ -6027,6 +6192,26 @@ class TransceiverUI(ctk.CTk):
         except ValueError as exc:
             messagebox.showerror("Continuous", str(exc))
             return
+        tx_reference_path = _strip_zeros_tx_filename(self.tx_file.get())
+        antenna_spacing = None
+        wavelength = None
+        try:
+            antenna_spacing = _parse_number_expr_or_error(self.rx_ant_spacing.get())
+            wavelength = _parse_number_expr_or_error(self.rx_wavelength.get())
+        except ValueError:
+            pass
+        self._cont_runtime_config = {
+            'trim_enabled': bool(self.trim_var.get()),
+            'trim_start': float(self.trim_start.get()),
+            'trim_end': float(self.trim_end.get()),
+            'antenna_spacing': antenna_spacing,
+            'wavelength': wavelength,
+            'rx_channel_view': self.rx_channel_view.get(),
+            'magnitude_enabled': bool(self.rx_magnitude_enable.get()),
+            'path_cancel_enabled': bool(self.rx_path_cancel_enable.get()),
+            'tx_path': tx_reference_path,
+        }
+
         cmd = [
             "-a",
             self.rx_cont_args.get(),
@@ -6065,6 +6250,7 @@ class TransceiverUI(ctk.CTk):
             self.rx_cont_start.configure(state="disabled")
         if hasattr(self, "rx_cont_stop"):
             self.rx_cont_stop.configure(state="normal")
+        self._start_continuous_pipeline()
         self._cont_thread = threading.Thread(
             target=self._run_continuous_thread,
             args=(cmd, rate, self._cont_stop_event),
@@ -6072,6 +6258,117 @@ class TransceiverUI(ctk.CTk):
         )
         self._cont_thread.start()
         self._process_queue()
+
+    def _start_continuous_pipeline(self) -> None:
+        self._cont_task_queue = multiprocessing.Queue(maxsize=2)
+        self._cont_result_queue = multiprocessing.Queue(maxsize=2)
+        self._cont_task_queue_drops = 0
+        self._cont_rendered_frames = 0
+        self._cont_last_processing_ms = 0.0
+        self._cont_last_end_to_end_ms = 0.0
+        self._cont_worker_result_drops = 0
+        self._cont_worker_process = Process(
+            target=_continuous_processing_worker,
+            args=(self._cont_task_queue, self._cont_result_queue),
+            daemon=True,
+        )
+        self._cont_worker_process.start()
+        self.after(25, self._poll_continuous_results)
+
+    def _stop_continuous_pipeline(self) -> None:
+        if self._cont_task_queue is not None:
+            with contextlib.suppress(Exception):
+                self._cont_task_queue.put_nowait(None)
+        if self._cont_worker_process is not None and self._cont_worker_process.is_alive():
+            self._cont_worker_process.join(timeout=2)
+            if self._cont_worker_process.is_alive():
+                self._cont_worker_process.terminate()
+                self._cont_worker_process.join(timeout=1)
+        for q in (self._cont_task_queue, self._cont_result_queue):
+            if q is None:
+                continue
+            with contextlib.suppress(Exception):
+                q.close()
+            with contextlib.suppress(Exception):
+                q.join_thread()
+        self._cont_task_queue = None
+        self._cont_result_queue = None
+        self._cont_worker_process = None
+
+    def _enqueue_continuous_task(self, task: dict[str, object]) -> None:
+        q = self._cont_task_queue
+        if q is None:
+            return
+        try:
+            q.put_nowait(task)
+            return
+        except Exception:
+            pass
+        self._cont_task_queue_drops += 1
+        try:
+            q.get_nowait()
+        except Exception:
+            return
+        try:
+            q.put_nowait(task)
+        except Exception:
+            pass
+
+    def _poll_continuous_results(self) -> None:
+        q = self._cont_result_queue
+        if q is not None:
+            latest = None
+            worker_drops = 0
+            while True:
+                try:
+                    item = q.get_nowait()
+                except ThreadQueueEmpty:
+                    break
+                except Exception:
+                    break
+                if latest is not None:
+                    worker_drops += 1
+                latest = item
+            self._cont_worker_result_drops += worker_drops
+            if latest is not None:
+                self._render_continuous_payload(latest)
+        if getattr(self, '_cont_thread', None) is not None or q is not None:
+            self.after(25, self._poll_continuous_results)
+
+    def _render_continuous_payload(
+        self,
+        payload: dict[str, object],
+    ) -> None:
+        plot_data = np.asarray(payload.get('plot_data', np.array([], dtype=np.complex64)))
+        fs = float(payload.get('fs', self.latest_fs))
+        self.raw_rx_data = plot_data
+        self.latest_fs_raw = fs
+        self._cont_rendered_frames += 1
+        self._cont_last_processing_ms = float(payload.get('processing_ms', 0.0))
+        frame_ts = float(payload.get('frame_ts', time.monotonic()))
+        self._cont_last_end_to_end_ms = (time.monotonic() - frame_ts) * 1000.0
+
+        self._display_rx_plots(plot_data, fs, reset_manual=False, target_tab='Continuous')
+
+        if hasattr(self, 'rx_aoa_label'):
+            self.rx_aoa_label.configure(text=str(payload.get('aoa_text', 'AoA (ESPRIT): --')))
+        if hasattr(self, 'rx_echo_aoa_label'):
+            self.rx_echo_aoa_label.configure(
+                text=str(payload.get('echo_aoa_text', 'Echo AoA: --'))
+            )
+        if hasattr(self, 'rx_cont_telemetry_label'):
+            self.rx_cont_telemetry_label.configure(
+                text=(
+                    'Telemetry: proc {proc:.1f} ms | e2e {e2e:.1f} ms | '
+                    'queue drops {qd} | worker drops {wd} | rendered {rf}'
+                ).format(
+                    proc=self._cont_last_processing_ms,
+                    e2e=self._cont_last_end_to_end_ms,
+                    qd=self._cont_task_queue_drops,
+                    wd=self._cont_worker_result_drops,
+                    rf=self._cont_rendered_frames,
+                )
+            )
 
     def _wait_for_continuous_stop(
         self, cont_thread: threading.Thread, timeout: float = 10.0
@@ -6118,6 +6415,8 @@ class TransceiverUI(ctk.CTk):
                     )
                     return
         self._cont_thread = None
+        self._cont_runtime_config = {}
+        self._stop_continuous_pipeline()
         if hasattr(self, "rx_cont_stop"):
             self.rx_cont_stop.configure(state="disabled")
         if hasattr(self, "rx_cont_start"):
@@ -6135,12 +6434,15 @@ class TransceiverUI(ctk.CTk):
             args = rx_continous.parse_args(arg_list)
 
             def _callback(*, data: np.ndarray, **_info: object) -> None:
-                if data.size:
-                    self._ui(
-                        lambda d=data: self._display_rx_plots(
-                            d, rate, target_tab="Continuous"
-                        )
-                    )
+                if not data.size:
+                    return
+                payload = {
+                    'data': np.array(data, copy=True),
+                    'fs': rate,
+                    'frame_ts': time.monotonic(),
+                }
+                payload.update(self._cont_runtime_config)
+                self._enqueue_continuous_task(payload)
 
             rx_continous.main(callback=_callback, args=args, stop_event=stop_event)
         except Exception as exc:
@@ -6148,6 +6450,7 @@ class TransceiverUI(ctk.CTk):
         finally:
             self._cmd_running = False
             self._cont_thread = None
+            self._stop_continuous_pipeline()
             self._ui(self._reset_cont_buttons)
 
     def _reset_cont_buttons(self) -> None:
