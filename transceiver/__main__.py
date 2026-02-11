@@ -1290,24 +1290,6 @@ def _reduce_data(
     return data, step
 
 
-def _downsample_iq_for_preview(data: np.ndarray, max_points: int) -> np.ndarray:
-    """Return a lightweight preview slice while preserving channel layout."""
-    arr = np.asarray(data)
-    if arr.size == 0 or max_points <= 0:
-        return arr
-
-    if arr.ndim == 1:
-        step = max(1, int(np.ceil(arr.size / max_points)))
-        return arr[::step]
-
-    sample_axis = arr.ndim - 1
-    total_samples = arr.shape[sample_axis]
-    step = max(1, int(np.ceil(total_samples / max_points)))
-    slicer: list[slice | int] = [slice(None)] * arr.ndim
-    slicer[sample_axis] = slice(None, None, step)
-    return arr[tuple(slicer)]
-
-
 def _reduce_pair(
     a: np.ndarray, b: np.ndarray, max_bytes: int = 1_000_000
 ) -> tuple[np.ndarray, np.ndarray, int]:
