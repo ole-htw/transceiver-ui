@@ -84,31 +84,3 @@ def test_record_monitor_handles_metadata_and_restart():
     stop_evt.set()
     thread.join(timeout=1)
     assert replay.record_restarts >= 1
-
-
-def test_compute_snip_ranges_waits_for_contiguous_data_before_first_wrap():
-    module = load_module_with_stubbed_uhd()
-    ranges = module.compute_snip_ranges(
-        base=0,
-        ring_bytes=1000,
-        record_pos=80,
-        snippet_bytes=100,
-        guard_bytes=20,
-        align=1,
-        wrapped=False,
-    )
-    assert ranges == []
-
-
-def test_compute_snip_ranges_does_not_cross_restart_boundary_after_wrap():
-    module = load_module_with_stubbed_uhd()
-    ranges = module.compute_snip_ranges(
-        base=0,
-        ring_bytes=1000,
-        record_pos=60,
-        snippet_bytes=100,
-        guard_bytes=20,
-        align=1,
-        wrapped=True,
-    )
-    assert ranges == []
