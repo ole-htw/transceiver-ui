@@ -19,7 +19,11 @@ import time
 import argparse
 import threading
 <<<<<<< HEAD
+<<<<<<< HEAD
 import queue
+=======
+import inspect
+>>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
 =======
 import inspect
 >>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
@@ -302,6 +306,7 @@ def play_and_download_chunk(replay, rx_streamer, port: int,
 
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 def port_download_worker(
     *,
     port: int,
@@ -388,6 +393,8 @@ def port_download_worker(
             pass
 
 
+=======
+>>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
 =======
 >>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
 
@@ -579,10 +586,9 @@ def main(callback=None, args=None, stop_event=None):
     # Background record monitors (wrap before full)
     stop_evt = stop_event or threading.Event()
     locks = [threading.Lock() for _ in range(num_ports)]
-<<<<<<< HEAD
 
-=======
->>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
+
+
     monitors = []
     for port in range(num_ports):
         t = threading.Thread(
@@ -593,7 +599,6 @@ def main(callback=None, args=None, stop_event=None):
         t.start()
         monitors.append(t)
 
-<<<<<<< HEAD
     worker_args = {
         "graph": graph,
         "replay": replay,
@@ -621,12 +626,17 @@ def main(callback=None, args=None, stop_event=None):
         p.start()
         workers.append(p)
 =======
+=======
+>>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
     # Host dtype for snippet arrays
     # (Keep original behavior: sc16 as packed uint32; fc32 as complex64)
     if args.cpu_format == "fc32":
         dtype = np.complex64
     else:
         dtype = np.uint32
+<<<<<<< HEAD
+>>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
+=======
 >>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
 
     # Snippet loop
@@ -697,6 +707,7 @@ def main(callback=None, args=None, stop_event=None):
                     data = np.concatenate(parts) if len(parts) > 1 else parts[0]
 
 <<<<<<< HEAD
+<<<<<<< HEAD
                 if result.get("ok"):
                     data = result["data"]
 
@@ -716,6 +727,11 @@ def main(callback=None, args=None, stop_event=None):
                         memory_only=args.memory_only,
                     )
                 received_results += 1
+=======
+                emit_snippet(data, port=port, snip_idx=snip_idx, ts=ts,
+                             args=args, callback=callback)
+                del data
+>>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
 =======
                 emit_snippet(data, port=port, snip_idx=snip_idx, ts=ts,
                              args=args, callback=callback)
