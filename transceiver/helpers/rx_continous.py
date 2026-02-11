@@ -117,6 +117,14 @@ def parse_args(argv=None):
                    help="During recovery also re-arm Replay recording via replay.record(...).")
     p.add_argument("--graph-reset-after-recovery-failures", type=int, default=0,
                    help="Optional full streaming reset after N failed recovery attempts per port (0=disabled).")
+    p.add_argument("--record-stability-sample-delay-ms", type=float, default=3.0,
+                   help="Delay between two record-position reads before snippet planning (milliseconds).")
+    p.add_argument("--record-stability-max-forward-jump-factor", type=float, default=8.0,
+                   help="Reject record-position jumps larger than this multiple of bytes expected per snippet interval.")
+    p.add_argument("--record-stability-fullness-min", type=float, default=0.02,
+                   help="Lower normalized fullness bound for snippet planning stability checks (0.0..1.0).")
+    p.add_argument("--record-stability-fullness-max", type=float, default=0.98,
+                   help="Upper normalized fullness bound for snippet planning stability checks (0.0..1.0).")
 
     return p.parse_args(argv)
 
@@ -446,6 +454,54 @@ def compute_snip_ranges(base: int, ring_bytes: int, record_pos: int,
     tail = snippet_bytes - head
     tail_start = (base + ring_bytes) - tail
     return [(tail_start, tail), (base, head)]
+
+
+def check_record_position_stability(*, replay, port: int, last_position: int | None,
+                                    ring_bytes: int, expected_interval_bytes: int,
+                                    delay_s: float, max_forward_jump_factor: float,
+                                    fullness_min: float, fullness_max: float):
+    """Read record position twice and validate monotonic/plausible progress.
+
+    Returns (is_stable: bool, chosen_position: int, reason: str | None, stats: dict)
+    where stats includes the sampled positions and fullness values for debug logging.
+    """
+    pos_a = int(replay.get_record_position(port))
+    full_a = int(replay.get_record_fullness(port))
+    if delay_s > 0.0:
+        time.sleep(delay_s)
+    pos_b = int(replay.get_record_position(port))
+    full_b = int(replay.get_record_fullness(port))
+
+    stats = {
+        "pos_a": pos_a,
+        "pos_b": pos_b,
+        "full_a": full_a,
+        "full_b": full_b,
+    }
+
+    safe_min = int(max(0.0, min(1.0, fullness_min)) * ring_bytes)
+    safe_max = int(max(0.0, min(1.0, fullness_max)) * ring_bytes)
+    if safe_min > safe_max:
+        safe_min, safe_max = safe_max, safe_min
+
+    for fullness in (full_a, full_b):
+        if fullness < safe_min or fullness > safe_max:
+            return False, pos_b, "fullness_out_of_window", stats
+
+    if pos_b < pos_a:
+        return False, pos_b, "backward_jump", stats
+
+    if last_position is not None and pos_b < last_position:
+        return False, pos_b, "restart_or_wrap_detected", stats
+
+    max_jump = int(max_forward_jump_factor * max(1, expected_interval_bytes))
+    if pos_b - pos_a > max_jump:
+        return False, pos_b, "implausible_forward_jump", stats
+
+    if last_position is not None and pos_b - last_position > max_jump:
+        return False, pos_b, "implausible_vs_last_position", stats
+
+    return True, pos_b, None, stats
 
 
 
@@ -984,6 +1040,7 @@ def main(callback=None, args=None, stop_event=None):
     recovery_attempts = [0] * num_ports
     recovery_failures = [0] * num_ports
     pending = {}
+    stability_skips = [0] * num_ports
 
     def handle_read_result(result_msg):
         port = int(result_msg.get("port", -1))
@@ -1068,7 +1125,29 @@ def main(callback=None, args=None, stop_event=None):
             ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             for port in range(num_ports):
                 with state_locks[port]:
-                    pos = int(replay.get_record_position(port))
+                    stable, pos, unstable_reason, stability_stats = check_record_position_stability(
+                        replay=replay,
+                        port=port,
+                        last_position=last_positions[port],
+                        ring_bytes=ring_bytes,
+                        expected_interval_bytes=snippet_interval_bytes,
+                        delay_s=max(0.0, args.record_stability_sample_delay_ms) / 1000.0,
+                        max_forward_jump_factor=max(1.0, args.record_stability_max_forward_jump_factor),
+                        fullness_min=args.record_stability_fullness_min,
+                        fullness_max=args.record_stability_fullness_max,
+                    )
+                    if not stable:
+                        stability_skips[port] += 1
+                        if stability_skips[port] <= 3 or stability_skips[port] % 20 == 0:
+                            log(
+                                f"[s{snip_idx:06d} ch{port}] skipping unstable record position "
+                                f"(reason={unstable_reason}, skips={stability_skips[port]}, "
+                                f"pos_a={stability_stats['pos_a']}, pos_b={stability_stats['pos_b']}, "
+                                f"full_a={stability_stats['full_a']}, full_b={stability_stats['full_b']})",
+                                memory_only=args.memory_only,
+                            )
+                        continue
+
                     if last_positions[port] is not None and pos == last_positions[port]:
                         no_progress_counts[port] += 1
                         if no_progress_counts[port] == 1 or no_progress_counts[port] % 20 == 0:
