@@ -5,6 +5,7 @@ import pyqtgraph as pg
 import argparse
 import os # For basename in title
 import time # To measure correlation time
+from transceiver.helpers.correlation_utils import magnitude_for_log_axis
 from transceiver.helpers.plot_colors import PLOT_COLORS
 
 def read_signal_file(filename):
@@ -105,7 +106,7 @@ def main():
     plot_title = f'Kreuzkorrelation ({N1}×{N2} Samples)'
     plot_title_suffix = ""
     ylabel_text = 'Kreuzkorrelations-Magnitude'
-    plot_data = np.abs(cross_corr)
+    plot_data = magnitude_for_log_axis(cross_corr)
 
 
     # dB-Skala (optional)
@@ -121,6 +122,8 @@ def main():
             plot_data = plot_data_db # Überschreibe die zu plottenden Daten
             ylabel_text = 'Normalisierte Kreuzkorr.-Magnitude [dB]'
             plot_title_suffix = ' [dB]'
+    else:
+        ylabel_text = 'Kreuzkorrelations-Magnitude (logarithmische Y-Achse)'
 
 
     los_idx = los_idx_full
@@ -137,6 +140,8 @@ def main():
     win.setWindowTitle(f"Kreuzkorrelation - {fname1_base} vs {fname2_base}")
     win.setLabel("bottom", "Lag / Verschiebung von Signal 2 zu Signal 1 [Samples]")
     win.setLabel("left", ylabel_text)
+    if not args.db:
+        win.setLogMode(x=False, y=True)
     if los_idx is not None:
         win.plot(
             [lags[los_idx]],
