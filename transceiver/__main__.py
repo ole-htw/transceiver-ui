@@ -4348,7 +4348,7 @@ class TransceiverUI(ctk.CTk):
             pg.mkQApp()
             target_frame.columnconfigure(0, weight=1)
             preview_width = 500
-            preview_height = 200
+            preview_height = 240
             bg_color = _resolve_ctk_frame_bg(target_frame)
             pg_bg_color = _tk_color_to_rgb(target_frame, bg_color)
             axis_color = "#9E9E9E"
@@ -4441,7 +4441,7 @@ class TransceiverUI(ctk.CTk):
                     "X-Corr": ("Crosscorr", "LOS-Echo:"),
                 }
                 tabview = ctk.CTkTabview(target_frame)
-                tabview.grid(row=0, column=0, sticky="n", pady=2)
+                tabview.grid(row=0, column=0, sticky="n", pady=(8, 2))
                 tabview.configure(command=self._on_rx_cont_plot_tab_change)
                 for tab_name in tabs_map:
                     tab = tabview.add(tab_name)
@@ -4456,7 +4456,7 @@ class TransceiverUI(ctk.CTk):
                     plot_item.setMenuEnabled(False)
                     _style_pg_preview_axes(plot_item, axis_color)
                     label = tk.Label(tabview.tab(tab_name), bg=bg_color)
-                    label.grid(row=0, column=0, sticky="n", pady=2)
+                    label.grid(row=0, column=0, sticky="n", pady=(8, 2))
                     stats_frame = ctk.CTkFrame(tabview.tab(tab_name), fg_color="transparent")
                     stats_frame.grid(row=1, column=0, sticky="ew", pady=2)
                     stats_frame.columnconfigure((0, 1), weight=1)
