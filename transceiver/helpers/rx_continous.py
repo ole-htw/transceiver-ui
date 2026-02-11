@@ -22,6 +22,7 @@ import multiprocessing as mp
 import queue
 import inspect
 import traceback
+import contextlib
 from _thread import LockType
 from datetime import datetime
 
@@ -124,6 +125,30 @@ def log(message: str, *, memory_only: bool):
     print(message, file=stream)
 
 
+@contextlib.contextmanager
+def timed_lock(lock: LockType, *, path: str, memory_only: bool,
+               contention_threshold_s: float = 0.001):
+    """
+    Acquire `lock` and log observed contention per lock path.
+
+    Thread-safety assumption:
+    - We only serialize the minimal UHD Replay calls that mutate per-port replay state.
+    - Waiting time is measured around lock acquire to validate real-world parallelism gains.
+    """
+    wait_start = time.monotonic()
+    lock.acquire()
+    wait_s = time.monotonic() - wait_start
+    if wait_s >= contention_threshold_s:
+        log(
+            f"[lock:{path}] contention observed, waited {wait_s * 1e3:.2f} ms",
+            memory_only=memory_only,
+        )
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 def emit_snippet(data: np.ndarray, *, port: int, snip_idx: int, ts: str,
                  args, callback):
     if not args.memory_only:
@@ -216,7 +241,9 @@ def _read_worker_loop(port: int, req_q, res_q, worker_args):
                             item_size=item_size,
                             dtype=dtype,
                             pkt_items=pkt_items,
-                            replay_ctrl_lock=None,
+                            replay_port_lock=None,
+                            lock_path=None,
+                            memory_only=worker_args["memory_only"],
                         )
                     )
                 if not parts:
@@ -443,10 +470,16 @@ def recv_exact_1ch(rx_streamer, num_items: int, dtype, pkt_items: int):
 def play_and_download_chunk(replay, rx_streamer, port: int,
                             offset_bytes: int, size_bytes: int,
                             item_size: int, dtype, pkt_items: int,
-                            replay_ctrl_lock: LockType | None = None):
+                            replay_port_lock: LockType | None = None,
+                            lock_path: str | None = None,
+                            memory_only: bool = False):
     """
     Configure Replay playback for (offset,size) on output port `port`,
     then download exactly that chunk through rx_streamer (1ch).
+
+    Thread-safety assumption:
+    - `config_play()` + `issue_stream_cmd()` are serialized per Replay output port.
+    - Different ports may run these calls concurrently.
     """
     if size_bytes <= 0:
         return np.empty((0,), dtype=dtype)
@@ -456,12 +489,13 @@ def play_and_download_chunk(replay, rx_streamer, port: int,
     stream_cmd.num_samps = num_items
     stream_cmd.stream_now = True
 
-    if replay_ctrl_lock is None:
+    if replay_port_lock is None:
         replay.config_play(offset_bytes, size_bytes, port)
         # Wichtig: Replay-Port steuern (nicht der Streamer)
         replay.issue_stream_cmd(stream_cmd, port)
     else:
-        with replay_ctrl_lock:
+        path = lock_path or f"port{port}/config_play+issue_stream_cmd"
+        with timed_lock(replay_port_lock, path=path, memory_only=memory_only):
             replay.config_play(offset_bytes, size_bytes, port)
             # Wichtig: Replay-Port steuern (nicht der Streamer)
             replay.issue_stream_cmd(stream_cmd, port)
@@ -480,19 +514,26 @@ def record_monitor(stop_evt: threading.Event,
                    ring_bytes: int, restart_margin_bytes: int,
                    wrapped_flags: list,
                    state_lock: threading.Lock,
-                   replay_ctrl_lock: threading.Lock,
+                   replay_port_lock: threading.Lock,
                    restart_times: list,
                    memory_only: bool):
     """
     Restart recording before the buffer fills to emulate ring-buffer overwrite.
-    Uses a short replay-control lock only around record_restart().
+
+    Thread-safety assumption:
+    - `record_restart(port)` is scoped to one Replay port and only needs a per-port lock.
+    - Global serialization is intentionally avoided to allow independent port progress.
     """
     while not stop_evt.is_set():
         try:
             fullness = replay.get_record_fullness(port)
             if fullness >= ring_bytes - restart_margin_bytes:
                 now_m = time.monotonic()
-                with replay_ctrl_lock:
+                with timed_lock(
+                    replay_port_lock,
+                    path=f"port{port}/record_restart.monitor",
+                    memory_only=memory_only,
+                ):
                     replay.record_restart(port)
                 with state_lock:
                     wrapped_flags[port] = True
@@ -558,9 +599,15 @@ def log_recovery_event(*, port: int, reason: str, position: int, fullness: int,
 
 def recover_port(*, replay, port: int, base: int, ring_bytes: int,
                  restart_margin_bytes: int, snippet_bytes: int, guard_bytes: int,
-                 replay_ctrl_lock: threading.Lock, wrapped_flags: list,
+                 replay_port_lock: threading.Lock, wrapped_flags: list,
                  args, reason: str,
                  recovery_attempts: list, recovery_failures: list):
+    """Recover one Replay port after stalled capture.
+
+    Thread-safety assumption:
+    - `record_restart(port)` and optional `record(base, ring_bytes, port)` only mutate one port.
+      They are therefore protected by the same per-port lock.
+    """
     recovery_attempts[port] += 1
     attempts = recovery_attempts[port]
     position = int(replay.get_record_position(port))
@@ -579,7 +626,11 @@ def recover_port(*, replay, port: int, base: int, ring_bytes: int,
     )
 
     try:
-        with replay_ctrl_lock:
+        with timed_lock(
+            replay_port_lock,
+            path=f"port{port}/recover.record_restart+record",
+            memory_only=args.memory_only,
+        ):
             replay.record_restart(port)
             if args.recovery_rearm_record:
                 replay.record(base, ring_bytes, port)
@@ -598,17 +649,34 @@ def recover_port(*, replay, port: int, base: int, ring_bytes: int,
 
 
 def reset_rfnoc_streaming(*, graph, replay, radio_chan_pairs, base_offsets,
-                          ring_bytes: int, args, replay_ctrl_lock: threading.Lock):
-    """Best-effort clean restart of continuous streaming and Replay record arming."""
+                          ring_bytes: int, args,
+                          replay_global_lock: threading.Lock,
+                          replay_port_locks: list[LockType]):
+    """Best-effort clean restart of continuous streaming and Replay record arming.
+
+    Thread-safety assumption:
+    - Graph stop/start is a global control-plane transition.
+    - During replay re-arm we hold a short global lock and then each per-port lock to
+      keep the global section minimal while avoiding races with per-port monitor/recovery.
+    """
     log("[recovery] resetting RFNoC streaming graph state", memory_only=args.memory_only)
     stop_cmd = uhd.types.StreamCMD(uhd.types.StreamMode.stop_cont)
     stop_cmd.stream_now = True
     for radio, chan in radio_chan_pairs:
         radio.issue_stream_cmd(stop_cmd, chan)
 
-    with replay_ctrl_lock:
+    with timed_lock(
+        replay_global_lock,
+        path="global/reset_rfnoc_streaming",
+        memory_only=args.memory_only,
+    ):
         for port, base in enumerate(base_offsets):
-            replay.record(base, ring_bytes, port)
+            with timed_lock(
+                replay_port_locks[port],
+                path=f"port{port}/reset.record",
+                memory_only=args.memory_only,
+            ):
+                replay.record(base, ring_bytes, port)
 
     now = graph.get_mb_controller().get_timekeeper(0).get_time_now()
     start_cmd = uhd.types.StreamCMD(uhd.types.StreamMode.start_cont)
@@ -777,7 +845,8 @@ def main(callback=None, args=None, stop_event=None):
     # Background record monitors (wrap before full)
     stop_evt = stop_event or threading.Event()
     state_locks = [threading.Lock() for _ in range(num_ports)]
-    replay_ctrl_lock = threading.Lock()
+    replay_global_lock = threading.Lock()
+    replay_port_locks = [threading.Lock() for _ in range(num_ports)]
     restart_times = [None] * num_ports
     monitors = []
     for port in range(num_ports):
@@ -791,7 +860,7 @@ def main(callback=None, args=None, stop_event=None):
                 restart_margin_bytes,
                 wrapped_flags,
                 state_locks[port],
-                replay_ctrl_lock,
+                replay_port_locks[port],
                 restart_times,
                 args.memory_only,
             ),
@@ -866,7 +935,7 @@ def main(callback=None, args=None, stop_event=None):
             restart_margin_bytes=restart_margin_bytes,
             snippet_bytes=snippet_bytes,
             guard_bytes=guard_bytes,
-            replay_ctrl_lock=replay_ctrl_lock,
+            replay_port_lock=replay_port_locks[port],
             wrapped_flags=wrapped_flags,
             args=args,
             reason="worker_error",
@@ -884,7 +953,8 @@ def main(callback=None, args=None, stop_event=None):
                 base_offsets=base_offsets,
                 ring_bytes=ring_bytes,
                 args=args,
-                replay_ctrl_lock=replay_ctrl_lock,
+                replay_global_lock=replay_global_lock,
+                replay_port_locks=replay_port_locks,
             )
             recovery_failures[port] = 0
 
@@ -926,7 +996,7 @@ def main(callback=None, args=None, stop_event=None):
                                 restart_margin_bytes=restart_margin_bytes,
                                 snippet_bytes=snippet_bytes,
                                 guard_bytes=guard_bytes,
-                                replay_ctrl_lock=replay_ctrl_lock,
+                                replay_port_lock=replay_port_locks[port],
                                 wrapped_flags=wrapped_flags,
                                 args=args,
                                 reason="no_progress_threshold",
@@ -945,7 +1015,8 @@ def main(callback=None, args=None, stop_event=None):
                                     base_offsets=base_offsets,
                                     ring_bytes=ring_bytes,
                                     args=args,
-                                    replay_ctrl_lock=replay_ctrl_lock,
+                                    replay_global_lock=replay_global_lock,
+                                    replay_port_locks=replay_port_locks,
                                 )
                                 recovery_failures[port] = 0
                         continue
