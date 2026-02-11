@@ -6143,6 +6143,24 @@ class TransceiverUI(ctk.CTk):
         except queue.Full:
             self._release_continuous_shm_payload(payload)
 
+    @staticmethod
+    def _downsample_iq_preview(data: np.ndarray, max_points: int) -> np.ndarray:
+        """Return a lightweight preview slice while preserving channel layout."""
+        arr = np.asarray(data)
+        if arr.size == 0 or max_points <= 0:
+            return arr
+
+        if arr.ndim == 1:
+            step = max(1, int(np.ceil(arr.size / max_points)))
+            return arr[::step]
+
+        sample_axis = arr.ndim - 1
+        total_samples = arr.shape[sample_axis]
+        step = max(1, int(np.ceil(total_samples / max_points)))
+        slicer: list[slice | int] = [slice(None)] * arr.ndim
+        slicer[sample_axis] = slice(None, None, step)
+        return arr[tuple(slicer)]
+
     def _run_continuous_analysis_worker(
         self,
         rate: float,
@@ -6180,7 +6198,7 @@ class TransceiverUI(ctk.CTk):
                 continue
 
             try:
-                reduced = _downsample_iq_for_preview(np.asarray(shm_view), CONTINUOUS_MAX_POINTS)
+                reduced = self._downsample_iq_preview(np.asarray(shm_view), CONTINUOUS_MAX_POINTS)
                 reduced = np.array(reduced, copy=True)
             finally:
                 with contextlib.suppress(Exception):
