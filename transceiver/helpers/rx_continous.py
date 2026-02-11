@@ -67,8 +67,15 @@ def parse_args(argv=None):
                    help="How often to download snippets (seconds).")
 
     # Safety / alignment
-    p.add_argument("--guard-seconds", type=float, default=0.01,
-                   help="Safety guard behind current write pointer before reading (seconds).")
+    p.add_argument("--guard-seconds", type=float, default=None,
+                   help="Safety guard behind current write pointer before reading (seconds). "
+                        "If omitted, an adaptive value is derived from snippet length.")
+    p.add_argument("--guard-min-seconds", type=float, default=1e-4,
+                   help="Lower bound for adaptive guard-seconds.")
+    p.add_argument("--guard-max-seconds", type=float, default=0.01,
+                   help="Upper bound for adaptive guard-seconds.")
+    p.add_argument("--guard-scale", type=float, default=0.2,
+                   help="Adaptive guard factor k: guard=max(min_guard, min(max_guard, k*snippet_seconds)).")
     p.add_argument("--restart-margin-seconds", type=float, default=None,
                    help="Restart recording this many seconds before the buffer fills. "
                         "Default: max(snippet+guard+safety, 0.25*ring), "
@@ -97,6 +104,8 @@ def parse_args(argv=None):
 
     p.add_argument("--delay", type=float, default=0.5,
                    help="Start streaming after this delay (seconds).")
+    p.add_argument("--monitor-period", type=float, default=0.01,
+                   help="Polling period for record monitor loop in seconds.")
     p.add_argument("--no-progress-recovery-threshold", type=int, default=50,
                    help="Trigger recovery if record position does not advance this many checks.")
     p.add_argument("--recovery-retry-delay", type=float, default=0.05,
@@ -512,7 +521,8 @@ def record_monitor(stop_evt: threading.Event,
                    state_lock: threading.Lock,
                    replay_port_lock: threading.Lock,
                    restart_times: list,
-                   memory_only: bool):
+                   memory_only: bool,
+                   monitor_period: float):
     """
     Restart recording before the buffer fills to emulate ring-buffer overwrite.
 
@@ -554,7 +564,7 @@ def record_monitor(stop_evt: threading.Event,
         except Exception as e:
             print(f"[port {port}] monitor error: {e}", file=sys.stderr)
 
-        time.sleep(0.01)
+        time.sleep(max(0.0, monitor_period))
 
 
 
@@ -749,11 +759,47 @@ def main(callback=None, args=None, stop_event=None):
             memory_only=args.memory_only)
 
     # Snippet sizes
+    if args.guard_min_seconds <= 0.0:
+        raise RuntimeError("guard-min-seconds must be > 0.")
+    if args.guard_max_seconds <= 0.0:
+        raise RuntimeError("guard-max-seconds must be > 0.")
+    if args.guard_scale <= 0.0:
+        raise RuntimeError("guard-scale must be > 0.")
+    if args.guard_min_seconds > args.guard_max_seconds:
+        raise RuntimeError("guard-min-seconds must be <= guard-max-seconds.")
+    if args.monitor_period <= 0.0:
+        raise RuntimeError("monitor-period must be > 0.")
+
+    adaptive_guard_seconds = max(
+        args.guard_min_seconds,
+        min(args.guard_max_seconds, args.guard_scale * args.snippet_seconds),
+    )
+    guard_seconds = adaptive_guard_seconds if args.guard_seconds is None else args.guard_seconds
+    if guard_seconds < 0.0:
+        raise RuntimeError("guard-seconds must be >= 0.")
+
     snippet_bytes = int(args.snippet_seconds * rate * item_size)
-    guard_bytes = int(args.guard_seconds * rate * item_size)
+    guard_bytes = int(guard_seconds * rate * item_size)
 
     snippet_bytes = max(align, (snippet_bytes // align) * align)
     guard_bytes = max(0, (guard_bytes // align) * align)
+
+    snippet_seconds_eff = snippet_bytes / (rate * item_size)
+    guard_seconds_eff = guard_bytes / (rate * item_size)
+
+    if guard_seconds_eff > 10.0 * snippet_seconds_eff:
+        recommended_guard_seconds = adaptive_guard_seconds
+        recommended_snippet_seconds = max(snippet_seconds_eff, guard_seconds_eff / 10.0)
+        log(
+            "WARNING: guard_seconds is implausibly large relative to snippet_seconds "
+            f"({guard_seconds_eff:.6f}s vs {snippet_seconds_eff:.6f}s, "
+            f"factor={guard_seconds_eff / max(snippet_seconds_eff, 1e-12):.1f}). "
+            "Recommended: "
+            f"--guard-seconds {recommended_guard_seconds:.6f} "
+            "or "
+            f"--snippet-seconds >= {recommended_snippet_seconds:.6f}.",
+            memory_only=args.memory_only,
+        )
 
     if snippet_bytes + guard_bytes > ring_bytes:
         raise RuntimeError(
@@ -818,14 +864,32 @@ def main(callback=None, args=None, stop_event=None):
             memory_only=args.memory_only,
         )
 
+    restart_margin_seconds_eff = restart_margin_bytes / (rate * item_size)
+    restart_margin_samples = restart_margin_bytes // item_size
+    snippet_samples = snippet_bytes // item_size
+    guard_samples = guard_bytes // item_size
+
     log(f"Replay mem total: {mem_size/1024/1024:.1f} MiB, stride/port: {mem_stride/1024/1024:.1f} MiB",
         memory_only=args.memory_only)
     log(f"Ring/port: {ring_bytes/1024/1024:.2f} MiB  (align={align} bytes)",
         memory_only=args.memory_only)
-    log(f"Snippet: {snippet_bytes} bytes ({args.snippet_seconds}s), interval: {args.snippet_interval}s, guard: {guard_bytes} bytes",
-        memory_only=args.memory_only)
+    log(f"Snippet interval: {args.snippet_interval:.6f}s", memory_only=args.memory_only)
+    log(
+        "Effective timings/sizes: "
+        f"snippet={snippet_seconds_eff:.6f}s ({snippet_samples} samples, {snippet_bytes} bytes), "
+        f"guard={guard_seconds_eff:.6f}s ({guard_samples} samples, {guard_bytes} bytes), "
+        f"restart_margin={restart_margin_seconds_eff:.6f}s "
+        f"({restart_margin_samples} samples, {restart_margin_bytes} bytes)",
+        memory_only=args.memory_only,
+    )
+    if args.guard_seconds is None:
+        log(
+            "Guard seconds derived adaptively as "
+            f"max({args.guard_min_seconds:.6f}, min({args.guard_max_seconds:.6f}, "
+            f"{args.guard_scale:.3f} * snippet_seconds)).",
+            memory_only=args.memory_only,
+        )
     log(f"Safety bytes: {safety_bytes} bytes (15% of ring)", memory_only=args.memory_only)
-    log(f"Restart margin: {restart_margin_bytes} bytes", memory_only=args.memory_only)
 
     # Configure record buffers per port (start at each stride base)
     base_offsets = []
@@ -871,6 +935,7 @@ def main(callback=None, args=None, stop_event=None):
                 replay_port_locks[port],
                 restart_times,
                 args.memory_only,
+                args.monitor_period,
             ),
             daemon=True,
         )
