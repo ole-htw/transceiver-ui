@@ -4,6 +4,7 @@ from pyqtgraph.Qt import QtCore
 import pyqtgraph as pg
 import argparse
 import time # Um die Berechnungszeit zu messen
+from transceiver.helpers.correlation_utils import magnitude_for_log_axis
 from transceiver.helpers.plot_colors import PLOT_COLORS
 
 def main():
@@ -77,20 +78,20 @@ def main():
         # Prüfe, ob Peak existiert und nicht (nahe) Null ist
         if np.abs(peak_value) < 1e-9:
              print("Warnung: Peak-Wert bei Lag 0 ist nahe Null. Normalisierung/dB-Plot nicht möglich.")
-             plot_data = np.abs(autocorr) # Zeige unnormalisierte Magnitude
+             plot_data = magnitude_for_log_axis(autocorr) # Zeige unnormalisierte Magnitude
              ylabel_text = 'Magnitude (Unnormalisiert)'
              args.normalize = False # Deaktiviere Flags intern
              args.db = False
         else:
              # Normalisiere, sodass der Peak bei Lag 0 den Wert 1 hat
              autocorr = autocorr / peak_value
-             plot_data = np.abs(autocorr)
+             plot_data = magnitude_for_log_axis(autocorr)
              ylabel_text = 'Normalisierte Magnitude'
              if not args.normalize: # Wenn nur --db aktiv war
                  print("Info: Autokorrelation für dB-Plot normalisiert.")
     else:
         # Keine Normalisierung
-        plot_data = np.abs(autocorr)
+        plot_data = magnitude_for_log_axis(autocorr)
         ylabel_text = 'Magnitude'
 
     # dB-Skala (optional)
@@ -100,6 +101,8 @@ def main():
          plot_data = plot_data_db # Überschreibe die zu plottenden Daten
          ylabel_text = 'Normalisierte Magnitude [dB]'
          plot_title += ' [dB]' # Füge dB zum Titel hinzu
+    else:
+         ylabel_text += ' (logarithmische Y-Achse)'
 
 
     # Datenreduktion bei sehr großen Datenmengen (>1 MB)
@@ -117,6 +120,8 @@ def main():
     win.setWindowTitle(f"Autokorrelation - {args.filename}")
     win.setLabel("bottom", "Lag / Verschiebung [Samples]")
     win.setLabel("left", ylabel_text)
+    if not args.db:
+        win.setLogMode(x=False, y=True)
     win.showGrid(x=True, y=True)
     win.setTitle(plot_title)
 

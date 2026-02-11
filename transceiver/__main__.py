@@ -37,6 +37,7 @@ from .helpers.correlation_utils import (
     autocorr_fft as _autocorr_fft,
     find_los_echo as _find_los_echo,
     lag_overlap as _lag_overlap,
+    magnitude_for_log_axis as _magnitude_for_log_axis,
     xcorr_fft as _xcorr_fft,
 )
 from .helpers.path_cancellation import apply_path_cancellation
@@ -2190,6 +2191,7 @@ def _plot_on_pg(
     if reduce_data and mode != "Crosscorr":
         data, step = _reduce_data(data)
         fs /= step
+    plot.setLogMode(x=False, y=False)
     if mode == "Signal":
         legend = plot.addLegend()
         if legend is not None:
@@ -2217,10 +2219,12 @@ def _plot_on_pg(
     elif mode == "Autocorr":
         ac = _autocorr_fft(data)
         lags = np.arange(-len(data) + 1, len(data))
-        plot.plot(lags, np.abs(ac), pen=pg.mkPen(colors["autocorr"]))
+        mag = _magnitude_for_log_axis(ac)
+        plot.plot(lags, mag, pen=pg.mkPen(colors["autocorr"]))
+        plot.setLogMode(x=False, y=True)
         plot.setTitle(f"Autocorrelation: {title}")
         plot.setLabel("bottom", "Lag")
-        plot.setLabel("left", "Magnitude")
+        plot.setLabel("left", "Magnitude (log scale)")
     elif mode == "Crosscorr":
         if ref_data is None or ref_data.size == 0:
             plot.setTitle("No TX data")
@@ -2234,7 +2238,7 @@ def _plot_on_pg(
                 crosscorr_compare = crosscorr_compare[::step_r]
         cc = _xcorr_fft(data, ref_data)
         lags = np.arange(-(len(ref_data) - 1), len(data)) * step_r
-        mag = np.abs(cc)
+        mag = _magnitude_for_log_axis(cc)
         legend = plot.addLegend()
         main_label = (
             "mit Pfad-Cancellation"
@@ -2247,7 +2251,7 @@ def _plot_on_pg(
             lags2 = np.arange(
                 -(len(ref_data) - 1), len(crosscorr_compare)
             ) * step_r
-            mag2 = np.abs(cc2)
+            mag2 = _magnitude_for_log_axis(cc2)
             plot.plot(
                 lags2,
                 mag2,
@@ -2258,6 +2262,7 @@ def _plot_on_pg(
             legend = plot.addLegend()
         if legend is not None:
             legend.show()
+        plot.setLogMode(x=False, y=True)
         base_los_idx, base_echo_idx = _find_los_echo(cc)
         los_lags = lags
         los_mag = mag
@@ -2393,7 +2398,7 @@ def _plot_on_pg(
             scene.sigMouseClicked.connect(_handle_click)
         plot.setTitle(f"Crosscorr. with TX: {title}")
         plot.setLabel("bottom", "Lag")
-        plot.setLabel("left", "Magnitude")
+        plot.setLabel("left", "Magnitude (log scale)")
     plot.showGrid(x=True, y=True)
 
 
@@ -2481,9 +2486,11 @@ def _plot_on_mpl(
     elif mode == "Autocorr":
         ac = _autocorr_fft(data)
         lags = np.arange(-len(data) + 1, len(data))
-        ax.plot(lags, np.abs(ac), color=mpl_colors["autocorr"])
+        mag = _magnitude_for_log_axis(ac)
+        ax.plot(lags, mag, color=mpl_colors["autocorr"])
+        ax.set_yscale("log")
         ax.set_xlabel("Lag")
-        ax.set_ylabel("Magnitude")
+        ax.set_ylabel("Magnitude (log scale)")
     elif mode == "Crosscorr":
         if ref_data is None or ref_data.size == 0:
             ax.set_title("No TX data")
@@ -2498,14 +2505,15 @@ def _plot_on_mpl(
         n = min(len(data), len(ref_data))
         cc = _xcorr_fft(data[:n], ref_data[:n])
         lags = np.arange(-n + 1, n) * step_r
-        mag = np.abs(cc)
+        mag = _magnitude_for_log_axis(cc)
         ax.plot(lags, mag, color=mpl_colors["crosscorr"])
+        ax.set_yscale("log")
         compare_handles: list[Line2D] = []
         if crosscorr_compare is not None and crosscorr_compare.size:
             n2 = min(len(crosscorr_compare), len(ref_data))
             cc2 = _xcorr_fft(crosscorr_compare[:n2], ref_data[:n2])
             lags2 = np.arange(-n2 + 1, n2) * step_r
-            mag2 = np.abs(cc2)
+            mag2 = _magnitude_for_log_axis(cc2)
             ax.plot(
                 lags2,
                 mag2,
@@ -2558,7 +2566,7 @@ def _plot_on_mpl(
                 color=mpl_colors["echo"],
             )
         ax.set_xlabel("Lag")
-        ax.set_ylabel("Magnitude")
+        ax.set_ylabel("Magnitude (log scale)")
     ax.set_title(title)
     ax.grid(True)
     _apply_mpl_gray_style(ax)
