@@ -195,23 +195,24 @@ def _build_worker_args_dict(args):
     }
 
 
-def _read_worker_loop(port: int, req_q, res_q, worker_args):
-    graph = None
+def _read_worker_loop(
+    port: int,
+    req_q,
+    res_q,
+    replay,
+    rx_streamer,
+    *,
+    cpu_format: str,
+    memory_only: bool,
+):
     try:
-        graph = uhd.rfnoc.RfnocGraph(worker_args["args"])
-        replay = uhd.rfnoc.ReplayBlockControl(graph.get_block(worker_args["block"]))
-        stream_args = uhd.usrp.StreamArgs(worker_args["cpu_format"], "sc16")
-        rx_streamer = graph.create_rx_streamer(1, stream_args)
-        graph.connect(replay.get_unique_id(), port, rx_streamer, 0)
-        graph.commit()
-
         item_size = int(replay.get_play_item_size(0))
         replay.set_play_type("sc16", port)
         ipp = int(replay.get_max_items_per_packet(port))
         if ipp <= 0:
             ipp = int(replay.get_max_packet_size(port)) // item_size
         pkt_items = max(1, ipp)
-        dtype = np.complex64 if worker_args["cpu_format"] == "fc32" else np.uint32
+        dtype = np.complex64 if cpu_format == "fc32" else np.uint32
 
         while True:
             msg = req_q.get()
@@ -243,7 +244,7 @@ def _read_worker_loop(port: int, req_q, res_q, worker_args):
                             pkt_items=pkt_items,
                             replay_port_lock=None,
                             lock_path=None,
-                            memory_only=worker_args["memory_only"],
+                            memory_only=memory_only,
                         )
                     )
                 if not parts:
@@ -272,12 +273,6 @@ def _read_worker_loop(port: int, req_q, res_q, worker_args):
                 "data": None,
             }
         )
-    finally:
-        if graph is not None:
-            try:
-                graph.release()
-            except Exception:
-                pass
 
 
 def _emitter_worker_loop(emit_q, worker_args):
@@ -709,6 +704,18 @@ def main(callback=None, args=None, stop_event=None):
 
     graph.commit()
 
+    # Build Replay->Host playback streamers in-process. Multiprocess workers would
+    # each open a separate UHD/RFNoC session and can fail to claim the same device
+    # (e.g. worker_init_failed: No devices found for addr=...).
+    read_streamers = []
+    for port in range(num_ports):
+        stream_args = uhd.usrp.StreamArgs(args.cpu_format, "sc16")
+        rx_streamer = graph.create_rx_streamer(1, stream_args)
+        graph.connect(replay.get_unique_id(), port, rx_streamer, 0)
+        read_streamers.append(rx_streamer)
+
+    graph.commit()
+
     # Replay memory layout: split memory into per-port strides (like your original script)
     mem_size = replay.get_mem_size()
     mem_stride = mem_size // num_ports
@@ -869,15 +876,17 @@ def main(callback=None, args=None, stop_event=None):
         t.start()
         monitors.append(t)
 
-    worker_ctx = mp.get_context("spawn")
-    read_req_queues = [worker_ctx.Queue(maxsize=2) for _ in range(num_ports)]
-    read_result_queue = worker_ctx.Queue(maxsize=max(8, num_ports * 4))
+    read_req_queues = [queue.Queue(maxsize=2) for _ in range(num_ports)]
+    read_result_queue = queue.Queue(maxsize=max(8, num_ports * 4))
     read_workers = []
-    worker_args = _build_worker_args_dict(args)
     for port in range(num_ports):
-        proc = worker_ctx.Process(
+        proc = threading.Thread(
             target=_read_worker_loop,
-            args=(port, read_req_queues[port], read_result_queue, worker_args),
+            args=(port, read_req_queues[port], read_result_queue, replay, read_streamers[port]),
+            kwargs={
+                "cpu_format": args.cpu_format,
+                "memory_only": args.memory_only,
+            },
             daemon=True,
         )
         proc.start()
@@ -1094,7 +1103,7 @@ def main(callback=None, args=None, stop_event=None):
         for proc in read_workers:
             proc.join(timeout=2.0)
             if proc.is_alive():
-                proc.terminate()
+                log("WARNING: read worker thread did not exit cleanly", memory_only=args.memory_only)
 
         if emitter_kind == "process":
             emitter.join(timeout=2.0)
