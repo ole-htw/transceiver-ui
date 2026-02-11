@@ -66,7 +66,8 @@ def parse_args(argv=None):
                    help="Safety guard behind current write pointer before reading (seconds).")
     p.add_argument("--restart-margin-seconds", type=float, default=None,
                    help="Restart recording this many seconds before the buffer fills. "
-                        "Default: max(snippet+guard, 0.25*ring).")
+                        "Default: max(snippet+guard+safety, 0.25*ring), "
+                        "safety defaults to 15% of ring.")
 
     # Output
     p.add_argument("--memory-only", action="store_true",
@@ -543,7 +544,30 @@ def main(callback=None, args=None, stop_event=None):
             "Increase ring size or reduce snippet/guard."
         )
 
+    snippet_interval_bytes = int(args.snippet_interval * rate * item_size)
+    if snippet_interval_bytes <= 0:
+        raise RuntimeError("snippet_interval is too small for the selected rate/item-size.")
+    if snippet_bytes > snippet_interval_bytes:
+        raise RuntimeError(
+            f"snippet_bytes({snippet_bytes}) > bytes produced per interval({snippet_interval_bytes}). "
+            "This will likely cause Replay backpressure. Reduce snippet_seconds or increase snippet_interval."
+        )
+    if snippet_bytes > int(0.8 * snippet_interval_bytes):
+        log(
+            "WARNING: snippet_seconds is close to snippet_interval at this rate "
+            f"({snippet_bytes}/{snippet_interval_bytes} bytes per interval). "
+            "This increases backpressure risk.",
+            memory_only=args.memory_only,
+        )
+    if snippet_bytes + guard_bytes > ring_bytes // 2:
+        log(
+            "WARNING: snippet+guard uses more than 50% of ring buffer; "
+            "consider a larger ring or shorter snippets to reduce replay pressure.",
+            memory_only=args.memory_only,
+        )
+
     # Restart margin (bytes)
+    user_margin_missing = args.restart_margin_seconds is None
     if args.restart_margin_seconds is None:
         # default: enough room for one full snippet read + guard, but at least 25% of ring
         restart_margin_bytes = max(snippet_bytes + guard_bytes, ring_bytes // 4)
@@ -551,8 +575,31 @@ def main(callback=None, args=None, stop_event=None):
         restart_margin_bytes = int(args.restart_margin_seconds * rate * item_size)
         restart_margin_bytes = max(align, (restart_margin_bytes // align) * align)
 
+    safety_bytes = max(align, ((ring_bytes * 15) // 100 // align) * align)
+    min_restart_margin_bytes = snippet_bytes + guard_bytes + safety_bytes
+    if min_restart_margin_bytes >= ring_bytes:
+        raise RuntimeError(
+            f"restart margin requirement is impossible: min_needed={min_restart_margin_bytes} >= ring={ring_bytes}. "
+            "Increase ring size or reduce snippet/guard settings."
+        )
+
+    if restart_margin_bytes < min_restart_margin_bytes:
+        reason = "missing" if user_margin_missing else "too small"
+        log(
+            "WARNING: restart_margin_seconds was "
+            f"{reason}; raising restart margin to safe minimum {min_restart_margin_bytes} bytes "
+            f"(snippet {snippet_bytes} + guard {guard_bytes} + safety {safety_bytes}).",
+            memory_only=args.memory_only,
+        )
+        restart_margin_bytes = min_restart_margin_bytes
+
     if restart_margin_bytes >= ring_bytes:
-        restart_margin_bytes = ring_bytes // 2
+        fallback_margin = max(align, (ring_bytes // 2 // align) * align)
+        restart_margin_bytes = max(min_restart_margin_bytes, fallback_margin)
+        log(
+            "WARNING: restart margin exceeded ring buffer; clamping to 50% of ring.",
+            memory_only=args.memory_only,
+        )
 
     log(f"Replay mem total: {mem_size/1024/1024:.1f} MiB, stride/port: {mem_stride/1024/1024:.1f} MiB",
         memory_only=args.memory_only)
@@ -560,6 +607,7 @@ def main(callback=None, args=None, stop_event=None):
         memory_only=args.memory_only)
     log(f"Snippet: {snippet_bytes} bytes ({args.snippet_seconds}s), interval: {args.snippet_interval}s, guard: {guard_bytes} bytes",
         memory_only=args.memory_only)
+    log(f"Safety bytes: {safety_bytes} bytes (15% of ring)", memory_only=args.memory_only)
     log(f"Restart margin: {restart_margin_bytes} bytes", memory_only=args.memory_only)
 
     # Configure record buffers per port (start at each stride base)

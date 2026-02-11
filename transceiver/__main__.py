@@ -3464,7 +3464,7 @@ class TransceiverUI(ctk.CTk):
         self.rx_cont_ring_seconds = SuggestEntry(
             rx_cont_params_left, "rx_cont_ring_seconds"
         )
-        self.rx_cont_ring_seconds.insert(0, "2.0")
+        self.rx_cont_ring_seconds.insert(0, "4.0")
         self.rx_cont_ring_seconds.grid(row=1, column=1, sticky="ew")
 
         ctk.CTkLabel(rx_cont_params_right, text="Gain", anchor="e").grid(
@@ -3480,7 +3480,7 @@ class TransceiverUI(ctk.CTk):
         self.rx_cont_restart_margin = SuggestEntry(
             rx_cont_params_left, "rx_cont_restart_margin"
         )
-        self.rx_cont_restart_margin.insert(0, "0.8")
+        self.rx_cont_restart_margin.insert(0, "1.5")
         self.rx_cont_restart_margin.grid(row=2, column=1, sticky="ew")
 
         ctk.CTkLabel(rx_cont_params_body, text="Args", anchor="e").grid(
@@ -3506,7 +3506,7 @@ class TransceiverUI(ctk.CTk):
         self.rx_cont_snippet_seconds = SuggestEntry(
             rx_cont_snippet_body, "rx_cont_snippet_seconds"
         )
-        self.rx_cont_snippet_seconds.insert(0, "0.1")
+        self.rx_cont_snippet_seconds.insert(0, "0.05")
         self.rx_cont_snippet_seconds.grid(row=0, column=1, sticky="ew", padx=(0, 8))
 
         ctk.CTkLabel(rx_cont_snippet_body, text="Interval (s)", anchor="e").grid(
@@ -3519,6 +3519,19 @@ class TransceiverUI(ctk.CTk):
         self.rx_cont_snippet_interval.grid(
             row=0, column=3, sticky="ew", padx=(0, 8)
         )
+
+        ctk.CTkLabel(
+            rx_cont_snippet_body,
+            text=(
+                "Hinweis: Große Snippets bei kurzen Intervallen (≈80–100 % der Intervallzeit), "
+                "kleine Ringbuffer (<~3x Snippet) oder zu kleine Restart-Margin führen typischerweise "
+                "zu Replay-Backpressure."
+            ),
+            justify="left",
+            anchor="w",
+            text_color="gray70",
+            wraplength=640,
+        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(4, 0))
 
         rx_cont_output_frame, rx_cont_output_body, _ = _make_side_bordered_group(
             rx_continuous_tab,
@@ -5392,12 +5405,12 @@ class TransceiverUI(ctk.CTk):
         self.rx_cont_freq.delete(0, tk.END)
         self.rx_cont_freq.insert(0, params.get("rx_cont_freq", "5.18e9"))
         self.rx_cont_ring_seconds.delete(0, tk.END)
-        self.rx_cont_ring_seconds.insert(0, params.get("rx_cont_ring_seconds", "2.0"))
+        self.rx_cont_ring_seconds.insert(0, params.get("rx_cont_ring_seconds", "4.0"))
         self.rx_cont_gain.delete(0, tk.END)
         self.rx_cont_gain.insert(0, params.get("rx_cont_gain", "80"))
         self.rx_cont_restart_margin.delete(0, tk.END)
         self.rx_cont_restart_margin.insert(
-            0, params.get("rx_cont_restart_margin", "0.8")
+            0, params.get("rx_cont_restart_margin", "1.5")
         )
         self.rx_cont_args.delete(0, tk.END)
         self.rx_cont_args.insert(
@@ -5408,7 +5421,7 @@ class TransceiverUI(ctk.CTk):
         )
         self.rx_cont_snippet_seconds.delete(0, tk.END)
         self.rx_cont_snippet_seconds.insert(
-            0, params.get("rx_cont_snippet_seconds", "0.1")
+            0, params.get("rx_cont_snippet_seconds", "0.05")
         )
         self.rx_cont_snippet_interval.delete(0, tk.END)
         self.rx_cont_snippet_interval.insert(
