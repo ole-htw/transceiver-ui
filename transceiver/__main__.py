@@ -17,7 +17,7 @@ import math
 import contextlib
 import tempfile
 import os
-from multiprocessing import shared_memory, Pipe, Process
+from multiprocessing import Pipe, Process, shared_memory
 from pathlib import Path
 from datetime import datetime
 
@@ -42,6 +42,10 @@ from .helpers.correlation_utils import (
 from .helpers.path_cancellation import apply_path_cancellation
 from .helpers.number_parser import parse_number_expr
 from .helpers.plot_colors import PLOT_COLORS
+from .helpers.shared_memory_utils import (
+    cleanup_shared_memory as _cleanup_shared_memory,
+    create_shared_memory as _create_shared_memory,
+)
 from .tx_controller import TxController
 
 # --- suggestion helper -------------------------------------------------------
@@ -116,39 +120,7 @@ AUTOSAVE_INTERVAL = 5  # seconds
 # Arrays larger than this skip shared memory and use .npy + mmap in plot worker.
 USE_SHARED_MEMORY = False
 SHM_SIZE_THRESHOLD_BYTES = 25 * 1024 * 1024  # 25 MB
-
-
-_SHM_REGISTRY: set[str] = set()
-
-
-def _create_shared_memory(size: int) -> shared_memory.SharedMemory:
-    """Create shared memory with tracking disabled when available."""
-    # Ownership rule: the creator unlinks shared memory; consumers only close it.
-    try:
-        shm = shared_memory.SharedMemory(create=True, size=size, track=False)  # type: ignore[call-arg]
-    except TypeError:
-        shm = shared_memory.SharedMemory(create=True, size=size)
-    _SHM_REGISTRY.add(shm.name)
-    return shm
-
-
-def _cleanup_shared_memory() -> None:
-    """Unlink any shared memory segments we created."""
-    if not _SHM_REGISTRY:
-        return
-    for shm_name in sorted(_SHM_REGISTRY):
-        try:
-            shm = shared_memory.SharedMemory(name=shm_name)
-        except (FileNotFoundError, OSError, ValueError):
-            continue
-        try:
-            shm.unlink()
-        except FileNotFoundError:
-            pass
-        finally:
-            with contextlib.suppress(Exception):
-                shm.close()
-    _SHM_REGISTRY.clear()
+CONTINUOUS_FRAME_QUEUE_MAX = 3
 
 
 def _configure_multiprocessing() -> None:
@@ -6048,6 +6020,9 @@ class TransceiverUI(ctk.CTk):
             except Exception:
                 pass
         self._cmd_running = True
+        self._cont_frame_queue = queue.Queue(maxsize=CONTINUOUS_FRAME_QUEUE_MAX)
+        self._cont_frame_drop_count = 0
+        self.after(1, lambda r=rate: self._process_continuous_frames(r))
         if hasattr(self, "rx_cont_start"):
             self.rx_cont_start.configure(state="disabled")
         if hasattr(self, "rx_cont_stop"):
@@ -6105,10 +6080,56 @@ class TransceiverUI(ctk.CTk):
                     )
                     return
         self._cont_thread = None
+        self._cont_frame_queue = None
         if hasattr(self, "rx_cont_stop"):
             self.rx_cont_stop.configure(state="disabled")
         if hasattr(self, "rx_cont_start"):
             self.rx_cont_start.configure(state="normal")
+
+    def _enqueue_continuous_frame(self, frame_meta: dict[str, object]) -> None:
+        frame_queue = getattr(self, "_cont_frame_queue", None)
+        if frame_queue is None:
+            return
+        if frame_queue.full():
+            try:
+                frame_queue.get_nowait()
+                self._cont_frame_drop_count = getattr(self, "_cont_frame_drop_count", 0) + 1
+            except queue.Empty:
+                pass
+        try:
+            frame_queue.put_nowait(frame_meta)
+        except queue.Full:
+            self._cont_frame_drop_count = getattr(self, "_cont_frame_drop_count", 0) + 1
+
+    def _process_continuous_frames(self, rate: float) -> None:
+        frame_queue = getattr(self, "_cont_frame_queue", None)
+        if frame_queue is None:
+            return
+        processed = 0
+        while processed < 2:
+            try:
+                meta = frame_queue.get_nowait()
+            except queue.Empty:
+                break
+            processed += 1
+            try:
+                shm = shared_memory.SharedMemory(name=str(meta["shm_name"]))
+                dtype = np.dtype(str(meta["dtype"]))
+                shape = tuple(int(v) for v in meta["shape"])
+                arr = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
+                reduced, _ = _reduce_data(np.array(arr, copy=True))
+            except Exception as exc:
+                self._out_queue.put(f"Continuous frame error: {exc}\n")
+                continue
+            finally:
+                try:
+                    shm.close()
+                except Exception:
+                    pass
+            self._display_rx_plots(reduced, rate, target_tab="Continuous")
+
+        if self._cmd_running or not frame_queue.empty():
+            self.after(5 if frame_queue.empty() else 1, lambda: self._process_continuous_frames(rate))
 
     def _run_continuous_thread(
         self,
@@ -6121,13 +6142,17 @@ class TransceiverUI(ctk.CTk):
 
             args = rx_continous.parse_args(arg_list)
 
-            def _callback(*, data: np.ndarray, **_info: object) -> None:
-                if data.size:
-                    self._ui(
-                        lambda d=data: self._display_rx_plots(
-                            d, rate, target_tab="Continuous"
-                        )
-                    )
+            def _callback(*, shm_name: str, shape: tuple[int, ...], dtype: str,
+                          snip_idx: int, port: int, **_info: object) -> None:
+                self._enqueue_continuous_frame(
+                    {
+                        "shm_name": shm_name,
+                        "shape": tuple(shape),
+                        "dtype": dtype,
+                        "snip_idx": int(snip_idx),
+                        "port": int(port),
+                    }
+                )
 
             rx_continous.main(callback=_callback, args=args, stop_event=stop_event)
         except Exception as exc:
