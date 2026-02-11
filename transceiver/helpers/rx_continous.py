@@ -18,7 +18,10 @@ import sys
 import time
 import argparse
 import threading
+import multiprocessing as mp
+import queue
 import inspect
+import traceback
 from _thread import LockType
 from datetime import datetime
 
@@ -153,6 +156,153 @@ def emit_snippet(data: np.ndarray, *, port: int, snip_idx: int, ts: str,
     np.save(buf, data)
     sys.stdout.buffer.write(buf.getvalue())
     sys.stdout.buffer.flush()
+
+
+def _build_worker_args_dict(args):
+    return {
+        "args": args.args,
+        "block": args.block,
+        "cpu_format": args.cpu_format,
+        "memory_only": args.memory_only,
+        "stdout_binary": args.stdout_binary,
+        "output_prefix": args.output_prefix,
+        "numpy": args.numpy,
+    }
+
+
+def _read_worker_loop(port: int, req_q, res_q, worker_args):
+    graph = None
+    try:
+        graph = uhd.rfnoc.RfnocGraph(worker_args["args"])
+        replay = uhd.rfnoc.ReplayBlockControl(graph.get_block(worker_args["block"]))
+        stream_args = uhd.usrp.StreamArgs(worker_args["cpu_format"], "sc16")
+        rx_streamer = graph.create_rx_streamer(1, stream_args)
+        graph.connect(replay.get_unique_id(), port, rx_streamer, 0)
+        graph.commit()
+
+        item_size = int(replay.get_play_item_size(0))
+        replay.set_play_type("sc16", port)
+        ipp = int(replay.get_max_items_per_packet(port))
+        if ipp <= 0:
+            ipp = int(replay.get_max_packet_size(port)) // item_size
+        pkt_items = max(1, ipp)
+        dtype = np.complex64 if worker_args["cpu_format"] == "fc32" else np.uint32
+
+        while True:
+            msg = req_q.get()
+            if msg.get("kind") == "shutdown":
+                break
+
+            result = {
+                "kind": "read_result",
+                "port": port,
+                "snip_idx": msg.get("snip_idx"),
+                "timestamp": msg.get("timestamp"),
+                "ranges": msg.get("ranges", []),
+                "status": "ok",
+                "error": None,
+                "data": None,
+            }
+            try:
+                parts = []
+                for r in msg.get("ranges", []):
+                    parts.append(
+                        play_and_download_chunk(
+                            replay=replay,
+                            rx_streamer=rx_streamer,
+                            port=port,
+                            offset_bytes=int(r["offset"]),
+                            size_bytes=int(r["size"]),
+                            item_size=item_size,
+                            dtype=dtype,
+                            pkt_items=pkt_items,
+                            replay_ctrl_lock=None,
+                        )
+                    )
+                if not parts:
+                    result["data"] = np.empty((0,), dtype=dtype)
+                elif len(parts) == 1:
+                    result["data"] = parts[0]
+                else:
+                    result["data"] = np.concatenate(parts)
+            except Exception as exc:
+                result["status"] = "error"
+                result["error"] = f"{type(exc).__name__}: {exc}"
+                result["traceback"] = traceback.format_exc(limit=5)
+
+            res_q.put(result)
+    except Exception as exc:
+        res_q.put(
+            {
+                "kind": "read_result",
+                "port": port,
+                "snip_idx": None,
+                "timestamp": None,
+                "ranges": [],
+                "status": "error",
+                "error": f"worker_init_failed: {type(exc).__name__}: {exc}",
+                "traceback": traceback.format_exc(limit=5),
+                "data": None,
+            }
+        )
+    finally:
+        if graph is not None:
+            try:
+                graph.release()
+            except Exception:
+                pass
+
+
+def _emitter_worker_loop(emit_q, worker_args):
+    args = argparse.Namespace(**worker_args)
+    while True:
+        msg = emit_q.get()
+        if msg.get("kind") == "shutdown":
+            break
+        if msg.get("kind") != "emit_request":
+            continue
+        emit_snippet(
+            msg["data"],
+            port=msg["port"],
+            snip_idx=msg["snip_idx"],
+            ts=msg["timestamp"],
+            args=args,
+            callback=None,
+        )
+
+
+def _start_emitter_worker(args, callback):
+    if callback is not None:
+        def _thread_emitter():
+            while True:
+                msg = emit_q.get()
+                if msg.get("kind") == "shutdown":
+                    break
+                if msg.get("kind") != "emit_request":
+                    continue
+                emit_snippet(
+                    msg["data"],
+                    port=msg["port"],
+                    snip_idx=msg["snip_idx"],
+                    ts=msg["timestamp"],
+                    args=args,
+                    callback=callback,
+                )
+
+        emit_q = queue.Queue(maxsize=16)
+        emitter = threading.Thread(target=_thread_emitter, daemon=True)
+        emitter.start()
+        return emit_q, emitter, "thread"
+
+    ctx = mp.get_context("spawn")
+    emit_q = ctx.Queue(maxsize=16)
+    emitter = ctx.Process(
+        target=_emitter_worker_loop,
+        args=(emit_q, _build_worker_args_dict(args)),
+        daemon=True,
+    )
+    emitter.start()
+    return emit_q, emitter, "process"
 
 # -----------------------------
 # RFNoC Graph helpers (mostly from your script)
@@ -489,16 +639,6 @@ def main(callback=None, args=None, stop_event=None):
     num_ports = len(radio_chan_pairs)
     wrapped_flags = [False] * num_ports
 
-    # Streamer args: wire format from Replay is sc16; CPU format selectable
-    stream_args = uhd.usrp.StreamArgs(args.cpu_format, "sc16")
-
-    # Create 1-channel rx_streamer per port so each port can have independent config_play()
-    rx_streamers = []
-    for port in range(num_ports):
-        s = graph.create_rx_streamer(1, stream_args)
-        graph.connect(replay.get_unique_id(), port, s, 0)
-        rx_streamers.append(s)
-
     graph.commit()
 
     # Replay memory layout: split memory into per-port strides (like your original script)
@@ -625,14 +765,6 @@ def main(callback=None, args=None, stop_event=None):
             ipp = max(1, args.pkt_size // item_size)
             replay.set_max_items_per_packet(ipp, port)
 
-    # Determine receive packet items
-    pkt_items = []
-    for port in range(num_ports):
-        ipp = int(replay.get_max_items_per_packet(port))
-        if ipp <= 0:
-            ipp = int(replay.get_max_packet_size(port)) // item_size
-        pkt_items.append(max(1, ipp))
-
     # Start continuous streaming from radios into Replay
     now = graph.get_mb_controller().get_timekeeper(0).get_time_now()
     stream_cmd = uhd.types.StreamCMD(uhd.types.StreamMode.start_cont)
@@ -668,12 +800,21 @@ def main(callback=None, args=None, stop_event=None):
         t.start()
         monitors.append(t)
 
-    # Host dtype for snippet arrays
-    # (Keep original behavior: sc16 as packed uint32; fc32 as complex64)
-    if args.cpu_format == "fc32":
-        dtype = np.complex64
-    else:
-        dtype = np.uint32
+    worker_ctx = mp.get_context("spawn")
+    read_req_queues = [worker_ctx.Queue(maxsize=2) for _ in range(num_ports)]
+    read_result_queue = worker_ctx.Queue(maxsize=max(8, num_ports * 4))
+    read_workers = []
+    worker_args = _build_worker_args_dict(args)
+    for port in range(num_ports):
+        proc = worker_ctx.Process(
+            target=_read_worker_loop,
+            args=(port, read_req_queues[port], read_result_queue, worker_args),
+            daemon=True,
+        )
+        proc.start()
+        read_workers.append(proc)
+
+    emit_q, emitter, emitter_kind = _start_emitter_worker(args, callback)
 
     # Snippet loop
     log("Entering snippet download loop. Ctrl+C to stop.", memory_only=args.memory_only)
@@ -683,6 +824,69 @@ def main(callback=None, args=None, stop_event=None):
     no_progress_counts = [0] * num_ports
     recovery_attempts = [0] * num_ports
     recovery_failures = [0] * num_ports
+    pending = {}
+
+    def handle_read_result(result_msg):
+        port = int(result_msg.get("port", -1))
+        local_snip_idx = result_msg.get("snip_idx")
+        pending.pop(port, None)
+        status = result_msg.get("status")
+        if status == "ok":
+            data = result_msg.get("data")
+            log(
+                f"[s{local_snip_idx:06d} ch{port}] snippet download done "
+                f"({0 if data is None else len(data)} items)",
+                memory_only=args.memory_only,
+            )
+            emit_q.put(
+                {
+                    "kind": "emit_request",
+                    "port": port,
+                    "snip_idx": local_snip_idx,
+                    "timestamp": result_msg.get("timestamp"),
+                    "ranges": result_msg.get("ranges", []),
+                    "status": "ok",
+                    "error": None,
+                    "data": data,
+                }
+            )
+            return
+
+        error = result_msg.get("error", "unknown")
+        log(
+            f"[s{local_snip_idx if local_snip_idx is not None else 0:06d} ch{port}] "
+            f"worker error: {error}",
+            memory_only=args.memory_only,
+        )
+        recover_port(
+            replay=replay,
+            port=port,
+            base=base_offsets[port],
+            ring_bytes=ring_bytes,
+            restart_margin_bytes=restart_margin_bytes,
+            snippet_bytes=snippet_bytes,
+            guard_bytes=guard_bytes,
+            replay_ctrl_lock=replay_ctrl_lock,
+            wrapped_flags=wrapped_flags,
+            args=args,
+            reason="worker_error",
+            recovery_attempts=recovery_attempts,
+            recovery_failures=recovery_failures,
+        )
+        if (
+            args.graph_reset_after_recovery_failures > 0
+            and recovery_failures[port] >= args.graph_reset_after_recovery_failures
+        ):
+            reset_rfnoc_streaming(
+                graph=graph,
+                replay=replay,
+                radio_chan_pairs=radio_chan_pairs,
+                base_offsets=base_offsets,
+                ring_bytes=ring_bytes,
+                args=args,
+                replay_ctrl_lock=replay_ctrl_lock,
+            )
+            recovery_failures[port] = 0
 
     try:
         while True:
@@ -693,6 +897,11 @@ def main(callback=None, args=None, stop_event=None):
 
             now_m = time.monotonic()
             if now_m < next_t:
+                while True:
+                    try:
+                        handle_read_result(read_result_queue.get_nowait())
+                    except queue.Empty:
+                        break
                 time.sleep(min(0.05, next_t - now_m))
                 continue
 
@@ -759,68 +968,30 @@ def main(callback=None, args=None, stop_event=None):
                         log(f"[s{snip_idx:06d} ch{port}] not enough data yet",
                             memory_only=args.memory_only)
                         continue
-
-                dl_start = time.monotonic()
-                parts = []
-                try:
-                    for off, sz in ranges:
-                        parts.append(
-                            play_and_download_chunk(
-                                replay=replay,
-                                rx_streamer=rx_streamers[port],
-                                port=port,
-                                offset_bytes=off,
-                                size_bytes=sz,
-                                item_size=item_size,
-                                dtype=dtype,
-                                pkt_items=pkt_items[port],
-                                replay_ctrl_lock=replay_ctrl_lock,
-                            )
-                        )
-                except SnippetRecvTimeoutError as exc:
-                    log(f"[s{snip_idx:06d} ch{port}] recv timeout: {exc}",
-                        memory_only=args.memory_only)
-                    recover_port(
-                        replay=replay,
-                        port=port,
-                        base=base_offsets[port],
-                        ring_bytes=ring_bytes,
-                        restart_margin_bytes=restart_margin_bytes,
-                        snippet_bytes=snippet_bytes,
-                        guard_bytes=guard_bytes,
-                        replay_ctrl_lock=replay_ctrl_lock,
-                        wrapped_flags=wrapped_flags,
-                        args=args,
-                        reason="recv_timeout",
-                        recovery_attempts=recovery_attempts,
-                        recovery_failures=recovery_failures,
+                if port in pending:
+                    log(
+                        f"[s{snip_idx:06d} ch{port}] worker busy; skipping request",
+                        memory_only=args.memory_only,
                     )
-                    if (
-                        args.graph_reset_after_recovery_failures > 0
-                        and recovery_failures[port] >= args.graph_reset_after_recovery_failures
-                    ):
-                        reset_rfnoc_streaming(
-                            graph=graph,
-                            replay=replay,
-                            radio_chan_pairs=radio_chan_pairs,
-                            base_offsets=base_offsets,
-                            ring_bytes=ring_bytes,
-                            args=args,
-                            replay_ctrl_lock=replay_ctrl_lock,
-                        )
-                        recovery_failures[port] = 0
                     continue
-                data = np.concatenate(parts) if len(parts) > 1 else parts[0]
-                dl_dur = time.monotonic() - dl_start
-                log(
-                    f"[s{snip_idx:06d} ch{port}] snippet download duration: {dl_dur:.3f}s "
-                    f"({len(data)} items)",
-                    memory_only=args.memory_only,
-                )
 
-                emit_snippet(data, port=port, snip_idx=snip_idx, ts=ts,
-                             args=args, callback=callback)
-                del data
+                msg = {
+                    "kind": "read_request",
+                    "port": port,
+                    "snip_idx": snip_idx,
+                    "timestamp": ts,
+                    "ranges": [{"offset": off, "size": sz} for off, sz in ranges],
+                    "status": "queued",
+                    "error": None,
+                }
+                read_req_queues[port].put(msg)
+                pending[port] = {"snip_idx": snip_idx, "queued_t": time.monotonic()}
+
+            while True:
+                try:
+                    handle_read_result(read_result_queue.get_nowait())
+                except queue.Empty:
+                    break
 
             snip_idx += 1
             next_t += args.snippet_interval
@@ -839,6 +1010,28 @@ def main(callback=None, args=None, stop_event=None):
             log(f"Stop streaming error: {e}", memory_only=args.memory_only)
 
         stop_evt.set()
+        for q in read_req_queues:
+            try:
+                q.put_nowait({"kind": "shutdown"})
+            except Exception:
+                pass
+        try:
+            emit_q.put_nowait({"kind": "shutdown"})
+        except Exception:
+            pass
+
+        for proc in read_workers:
+            proc.join(timeout=2.0)
+            if proc.is_alive():
+                proc.terminate()
+
+        if emitter_kind == "process":
+            emitter.join(timeout=2.0)
+            if emitter.is_alive():
+                emitter.terminate()
+        else:
+            emitter.join(timeout=2.0)
+
         time.sleep(0.1)
 
         try:
