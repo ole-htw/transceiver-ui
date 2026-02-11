@@ -3756,7 +3756,7 @@ class TransceiverUI(ctk.CTk):
                 self._update_rx_scrollbar(tab_name),
             ),
         )
-        rx_continuous_tab.rowconfigure(5, weight=1)
+        rx_continuous_tab.rowconfigure(4, weight=1)
 
         self._rx_scroll_active: dict[str, bool] = {
             "Single": False,
@@ -4361,6 +4361,7 @@ class TransceiverUI(ctk.CTk):
             crosscorr_compare: np.ndarray | None,
         ) -> None:
             target_frame.columnconfigure(0, weight=1)
+            target_frame.rowconfigure(0, weight=1)
             for idx, mode in enumerate(modes):
                 fig = Figure(figsize=(5, 2), dpi=100)
                 ax = fig.add_subplot(111)
@@ -4590,11 +4591,12 @@ class TransceiverUI(ctk.CTk):
                     "X-Corr": ("Crosscorr", "LOS-Echo:"),
                 }
                 tabview = ctk.CTkTabview(target_frame)
-                tabview.grid(row=0, column=0, sticky="n", pady=(8, 2))
+                tabview.grid(row=0, column=0, sticky="nsew", pady=(2, 2))
                 tabview.configure(command=self._on_rx_cont_plot_tab_change)
                 for tab_name in tabs_map:
                     tab = tabview.add(tab_name)
                     tab.columnconfigure(0, weight=1)
+                    tab.rowconfigure(0, weight=1)
                 tabview.set("Signal")
                 pg_state["tabview"] = tabview
                 for tab_name, (mode, metric_label_text) in tabs_map.items():
@@ -4605,7 +4607,7 @@ class TransceiverUI(ctk.CTk):
                     plot_item.setMenuEnabled(False)
                     _style_pg_preview_axes(plot_item, axis_color)
                     label = tk.Label(tabview.tab(tab_name), bg=bg_color)
-                    label.grid(row=0, column=0, sticky="n", pady=(8, 2))
+                    label.grid(row=0, column=0, sticky="nsew", pady=(2, 2))
                     stats_frame = ctk.CTkFrame(tabview.tab(tab_name), fg_color="transparent")
                     stats_frame.grid(row=1, column=0, sticky="ew", pady=2)
                     stats_frame.columnconfigure((0, 1), weight=1)
