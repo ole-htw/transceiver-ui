@@ -3669,19 +3669,6 @@ class TransceiverUI(ctk.CTk):
             row=0, column=3, sticky="ew", padx=(0, 8)
         )
 
-        ctk.CTkLabel(
-            rx_cont_snippet_body,
-            text=(
-                "Hinweis: Große Snippets bei kurzen Intervallen (≈80–100 % der Intervallzeit), "
-                "kleine Ringbuffer (<~3x Snippet) oder zu kleine Restart-Margin führen typischerweise "
-                "zu Replay-Backpressure."
-            ),
-            justify="left",
-            anchor="w",
-            text_color="gray70",
-            wraplength=640,
-        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(4, 0))
-
         rx_cont_output_frame, rx_cont_output_body, _ = _make_side_bordered_group(
             rx_continuous_tab,
             "Output",
@@ -3711,29 +3698,12 @@ class TransceiverUI(ctk.CTk):
             state="disabled",
         )
         self.rx_cont_stop.grid(row=0, column=1, padx=2)
-        self.rx_cont_telemetry_label = ctk.CTkLabel(
-            rx_continuous_tab,
-            text=(
-                "Telemetry: proc -- ms | e2e -- ms | queue drops 0 | "
-                "worker drops 0 | rendered 0"
-            ),
-            anchor="w",
-            justify="left",
-            text_color="gray70",
-        )
-        self.rx_cont_telemetry_label.grid(
-            row=4,
-            column=0,
-            columnspan=2,
-            sticky="ew",
-            pady=(0, 4),
-        )
         rx_cont_scroll_container = ctk.CTkFrame(
             rx_continuous_tab,
             fg_color=terminal_container_fg,
             corner_radius=terminal_container_corner,
         )
-        rx_cont_scroll_container.grid(row=5, column=0, columnspan=2, sticky="nsew")
+        rx_cont_scroll_container.grid(row=4, column=0, columnspan=2, sticky="nsew")
         rx_cont_scroll_container.columnconfigure(0, weight=1)
         rx_cont_scroll_container.rowconfigure(0, weight=1)
 
@@ -6356,19 +6326,6 @@ class TransceiverUI(ctk.CTk):
         if hasattr(self, 'rx_echo_aoa_label'):
             self.rx_echo_aoa_label.configure(
                 text=str(payload.get('echo_aoa_text', 'Echo AoA: --'))
-            )
-        if hasattr(self, 'rx_cont_telemetry_label'):
-            self.rx_cont_telemetry_label.configure(
-                text=(
-                    'Telemetry: proc {proc:.1f} ms | e2e {e2e:.1f} ms | '
-                    'queue drops {qd} | worker drops {wd} | rendered {rf}'
-                ).format(
-                    proc=self._cont_last_processing_ms,
-                    e2e=self._cont_last_end_to_end_ms,
-                    qd=self._cont_task_queue_drops,
-                    wd=self._cont_worker_result_drops,
-                    rf=self._cont_rendered_frames,
-                )
             )
 
     def _wait_for_continuous_stop(
