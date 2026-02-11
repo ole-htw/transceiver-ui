@@ -2576,11 +2576,87 @@ def _clear_pg_plot(plot_item: pg.PlotItem) -> None:
 
 
 def _style_pg_preview_axes(plot_item: pg.PlotItem, color: str) -> None:
+    plot_item._axis_base_color = color
     axis_pen = pg.mkPen(color)
     for axis_name in ("bottom", "left"):
         axis = plot_item.getAxis(axis_name)
         axis.setPen(axis_pen)
         axis.setTextPen(axis_pen)
+
+
+def _animate_pg_y_range_with_glow(
+    plot_item: pg.PlotItem,
+    y_range: tuple[float, float],
+    *,
+    duration_ms: int = 260,
+    steps: int = 7,
+) -> None:
+    """Animate Y-axis range changes and briefly highlight axis labels."""
+    y_min, y_max = y_range
+    if not (np.isfinite(y_min) and np.isfinite(y_max)):
+        return
+
+    if hasattr(plot_item, "_y_range_anim_timer"):
+        old_timer = plot_item._y_range_anim_timer
+        if old_timer is not None:
+            old_timer.stop()
+    if hasattr(plot_item, "_axis_glow_timer"):
+        old_glow_timer = plot_item._axis_glow_timer
+        if old_glow_timer is not None:
+            old_glow_timer.stop()
+
+    current = plot_item.getViewBox().viewRange()[1]
+    start_min = float(current[0])
+    start_max = float(current[1])
+    target_min = float(y_min)
+    target_max = float(y_max)
+    if abs(target_min - start_min) < 1e-9 and abs(target_max - start_max) < 1e-9:
+        return
+
+    base_color = getattr(plot_item, "_axis_base_color", "#9ca3af")
+    glow_color = "#f8fafc"
+    glow_pen = pg.mkPen(glow_color, width=2)
+    base_pen = pg.mkPen(base_color)
+
+    for axis_name in ("bottom", "left"):
+        axis = plot_item.getAxis(axis_name)
+        axis.setPen(glow_pen)
+        axis.setTextPen(glow_pen)
+
+    glow_timer = QtCore.QTimer()
+    glow_timer.setSingleShot(True)
+
+    def _reset_glow() -> None:
+        for axis_name in ("bottom", "left"):
+            axis = plot_item.getAxis(axis_name)
+            axis.setPen(base_pen)
+            axis.setTextPen(base_pen)
+
+    glow_timer.timeout.connect(_reset_glow)
+    glow_timer.start(max(120, duration_ms // 2))
+    plot_item._axis_glow_timer = glow_timer
+
+    frame_total = max(1, int(steps))
+    timer = QtCore.QTimer()
+    timer.setInterval(max(12, duration_ms // frame_total))
+    progress = {"frame": 0}
+
+    def _ease_out_cubic(t: float) -> float:
+        return 1.0 - (1.0 - t) ** 3
+
+    def _tick() -> None:
+        progress["frame"] += 1
+        ratio = min(progress["frame"] / frame_total, 1.0)
+        eased = _ease_out_cubic(ratio)
+        next_min = start_min + (target_min - start_min) * eased
+        next_max = start_max + (target_max - start_max) * eased
+        plot_item.setYRange(next_min, next_max, padding=0.0)
+        if ratio >= 1.0:
+            timer.stop()
+
+    timer.timeout.connect(_tick)
+    timer.start()
+    plot_item._y_range_anim_timer = timer
 
 
 def _export_pg_plot_image(
@@ -4717,7 +4793,7 @@ class TransceiverUI(ctk.CTk):
                         float(peak),
                     )
                     if y_range is not None:
-                        plot_item.setYRange(*y_range, padding=0.0)
+                        _animate_pg_y_range_with_glow(plot_item, y_range)
             image = _export_pg_plot_image(
                 plot_item,
                 preview_width,
