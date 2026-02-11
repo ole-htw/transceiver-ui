@@ -25,6 +25,14 @@ from datetime import datetime
 import numpy as np
 import uhd
 
+try:
+    from .shared_memory_utils import cleanup_shared_memory, create_shared_memory
+except ImportError:  # pragma: no cover - direct script execution
+    from transceiver.helpers.shared_memory_utils import (
+        cleanup_shared_memory,
+        create_shared_memory,
+    )
+
 
 class SnippetRecvTimeoutError(RuntimeError):
     """Raised when Replay snippet downloads time out on recv()."""
@@ -90,6 +98,8 @@ def parse_args(argv=None):
 
     p.add_argument("--max-snippets", type=int, default=0,
                    help="Stop after this many snippet rounds (0 = run forever).")
+    p.add_argument("--shm-slots", type=int, default=4,
+                   help="Number of shared-memory slots per port when using callback mode.")
 
     p.add_argument("--delay", type=float, default=0.5,
                    help="Start streaming after this delay (seconds).")
@@ -153,6 +163,47 @@ def emit_snippet(data: np.ndarray, *, port: int, snip_idx: int, ts: str,
     np.save(buf, data)
     sys.stdout.buffer.write(buf.getvalue())
     sys.stdout.buffer.flush()
+
+
+class SharedSnippetRing:
+    """Pre-allocated shared-memory ring that stores snippet arrays per port."""
+
+    def __init__(self, *, num_ports: int, slots_per_port: int, shape: tuple[int, ...], dtype: np.dtype):
+        if slots_per_port <= 0:
+            raise RuntimeError("--shm-slots must be > 0")
+        self._dtype = np.dtype(dtype)
+        self._registry: set[str] = set()
+        self._shape = tuple(shape)
+        self._slots_per_port = int(slots_per_port)
+        self._next_slot = [0] * num_ports
+        self._segments: list[list[dict[str, object]]] = []
+        bytes_per_slot = int(np.prod(shape, dtype=np.int64)) * self._dtype.itemsize
+
+        for _port in range(num_ports):
+            port_segments = []
+            for _ in range(self._slots_per_port):
+                shm = create_shared_memory(bytes_per_slot, registry=self._registry)
+                arr = np.ndarray(self._shape, dtype=self._dtype, buffer=shm.buf)
+                port_segments.append({"name": shm.name, "shm": shm, "arr": arr})
+            self._segments.append(port_segments)
+
+    def store(self, *, port: int, data: np.ndarray) -> tuple[str, tuple[int, ...], str, int]:
+        slot_idx = self._next_slot[port]
+        self._next_slot[port] = (slot_idx + 1) % self._slots_per_port
+        slot = self._segments[port][slot_idx]
+        np.copyto(slot["arr"], data, casting="no")
+        return slot["name"], self._shape, self._dtype.str, slot_idx
+
+    def close(self) -> None:
+        for port_segments in self._segments:
+            for slot in port_segments:
+                shm = slot.get("shm")
+                if shm is not None:
+                    try:
+                        shm.close()
+                    except Exception:
+                        pass
+        cleanup_shared_memory(registry=self._registry)
 
 # -----------------------------
 # RFNoC Graph helpers (mostly from your script)
@@ -675,6 +726,16 @@ def main(callback=None, args=None, stop_event=None):
     else:
         dtype = np.uint32
 
+    snippet_ring = None
+    snippet_items = snippet_bytes // item_size
+    if args.memory_only and callback is not None:
+        snippet_ring = SharedSnippetRing(
+            num_ports=num_ports,
+            slots_per_port=args.shm_slots,
+            shape=(snippet_items,),
+            dtype=np.dtype(dtype),
+        )
+
     # Snippet loop
     log("Entering snippet download loop. Ctrl+C to stop.", memory_only=args.memory_only)
     snip_idx = 1
@@ -818,8 +879,23 @@ def main(callback=None, args=None, stop_event=None):
                     memory_only=args.memory_only,
                 )
 
-                emit_snippet(data, port=port, snip_idx=snip_idx, ts=ts,
-                             args=args, callback=callback)
+                if snippet_ring is not None:
+                    shm_name, shape, dtype_str, slot_idx = snippet_ring.store(
+                        port=port,
+                        data=data,
+                    )
+                    callback(
+                        shm_name=shm_name,
+                        shape=shape,
+                        dtype=dtype_str,
+                        snip_idx=snip_idx,
+                        port=port,
+                        slot_idx=slot_idx,
+                        timestamp=ts,
+                    )
+                else:
+                    emit_snippet(data, port=port, snip_idx=snip_idx, ts=ts,
+                                 args=args, callback=callback)
                 del data
 
             snip_idx += 1
@@ -846,6 +922,9 @@ def main(callback=None, args=None, stop_event=None):
                 graph.release()
         except Exception:
             pass
+
+        if snippet_ring is not None:
+            snippet_ring.close()
 
     return 0
 
