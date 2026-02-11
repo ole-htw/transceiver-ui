@@ -301,6 +301,7 @@ def port_download_worker(
     *,
     port: int,
     worker_args: dict,
+    rx_streamer,
     item_size: int,
     pkt_items: int,
     job_queue,
@@ -310,19 +311,7 @@ def port_download_worker(
 ):
     """Per-port producer/consumer worker that downloads snippets in-process."""
     try:
-        graph = worker_args["graph"]
         replay = worker_args["replay"]
-        stream_args = uhd.usrp.StreamArgs(worker_args["cpu_format"], "sc16")
-
-        rx_streamer = graph.create_rx_streamer(1, stream_args)
-        graph.connect(replay.get_unique_id(), port, rx_streamer, 0)
-        graph.commit()
-
-        replay.set_play_type("sc16", port)
-        if worker_args["pkt_size"] is not None:
-            ipp = max(1, int(worker_args["pkt_size"]) // item_size)
-            replay.set_max_items_per_packet(ipp, port)
-
         dtype = np.complex64 if worker_args["cpu_format"] == "fc32" else np.uint32
 
         while not stop_event.is_set():
@@ -463,8 +452,6 @@ def main(callback=None, args=None, stop_event=None):
     num_ports = len(radio_chan_pairs)
     wrapped_flags = [False] * num_ports
 
-    graph.commit()
-
     # Replay memory layout: split memory into per-port strides (like your original script)
     mem_size = replay.get_mem_size()
     mem_stride = mem_size // num_ports
@@ -550,6 +537,16 @@ def main(callback=None, args=None, stop_event=None):
             ipp = int(replay.get_max_packet_size(port)) // item_size
         pkt_items.append(max(1, ipp))
 
+    # Build full graph topology before starting continuous streaming.
+    stream_args = uhd.usrp.StreamArgs(args.cpu_format, "sc16")
+    rx_streamers = []
+    for port in range(num_ports):
+        rx_streamer = graph.create_rx_streamer(1, stream_args)
+        graph.connect(replay.get_unique_id(), port, rx_streamer, 0)
+        rx_streamers.append(rx_streamer)
+
+    graph.commit()
+
     # Start continuous streaming from radios into Replay
     now = graph.get_mb_controller().get_timekeeper(0).get_time_now()
     stream_cmd = uhd.types.StreamCMD(uhd.types.StreamMode.start_cont)
@@ -573,10 +570,8 @@ def main(callback=None, args=None, stop_event=None):
         monitors.append(t)
 
     worker_args = {
-        "graph": graph,
         "replay": replay,
         "cpu_format": args.cpu_format,
-        "pkt_size": args.pkt_size,
     }
     job_queues = [queue.Queue() for _ in range(num_ports)]
     result_queue = queue.Queue()
@@ -587,6 +582,7 @@ def main(callback=None, args=None, stop_event=None):
             kwargs={
                 "port": port,
                 "worker_args": worker_args,
+                "rx_streamer": rx_streamers[port],
                 "item_size": item_size,
                 "pkt_items": pkt_items[port],
                 "job_queue": job_queues[port],
