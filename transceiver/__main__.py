@@ -1643,12 +1643,9 @@ def _format_amp(val: float) -> str:
 
 
 def _decimate_for_display(data: np.ndarray, max_points: int = 4096) -> np.ndarray:
-    """Return a decimated copy of *data* suitable for quick UI rendering."""
-    arr = np.asarray(data)
-    if arr.size <= max_points:
-        return arr
-    step = max(1, int(np.ceil(arr.size / max_points)))
-    return arr[::step]
+    """Return *data* unchanged for UI rendering."""
+    del max_points
+    return np.asarray(data)
 
 
 def _continuous_processing_worker(

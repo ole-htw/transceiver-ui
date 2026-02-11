@@ -112,11 +112,8 @@ def _correlate_and_estimate_echo_aoa(
 
 
 def _decimate_for_display(data: np.ndarray, max_points: int = 4096) -> np.ndarray:
-    arr = np.asarray(data)
-    if arr.size <= max_points:
-        return arr
-    step = max(1, int(np.ceil(arr.size / max_points)))
-    return arr[::step]
+    del max_points
+    return np.asarray(data)
 
 
 def continuous_processing_worker(
