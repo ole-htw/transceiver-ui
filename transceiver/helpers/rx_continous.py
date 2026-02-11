@@ -18,8 +18,10 @@ import sys
 import time
 import argparse
 import threading
-import inspect
+import multiprocessing as mp
+import queue
 from datetime import datetime
+from multiprocessing import shared_memory
 
 import numpy as np
 import uhd
@@ -297,6 +299,107 @@ def play_and_download_chunk(replay, rx_streamer, port: int,
     return recv_exact_1ch(rx_streamer, num_items, dtype, pkt_items)
 
 
+def port_download_worker(
+    *,
+    port: int,
+    worker_args: dict,
+    item_size: int,
+    pkt_items: int,
+    job_queue,
+    result_queue,
+    stop_event,
+    port_lock,
+):
+    """Per-port producer/consumer worker that downloads snippets into shared memory."""
+    graph = None
+    try:
+        graph = uhd.rfnoc.RfnocGraph(worker_args["args"])
+        replay = uhd.rfnoc.ReplayBlockControl(graph.get_block(worker_args["block"]))
+        stream_args = uhd.usrp.StreamArgs(worker_args["cpu_format"], "sc16")
+
+        rx_streamer = graph.create_rx_streamer(1, stream_args)
+        graph.connect(replay.get_unique_id(), port, rx_streamer, 0)
+        graph.commit()
+
+        replay.set_play_type("sc16", port)
+        if worker_args["pkt_size"] is not None:
+            ipp = max(1, int(worker_args["pkt_size"]) // item_size)
+            replay.set_max_items_per_packet(ipp, port)
+
+        dtype = np.complex64 if worker_args["cpu_format"] == "fc32" else np.uint32
+
+        while not stop_event.is_set():
+            try:
+                job = job_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+            if job is None:
+                break
+
+            shm = None
+            try:
+                with port_lock:
+                    parts = [
+                        play_and_download_chunk(
+                            replay=replay,
+                            rx_streamer=rx_streamer,
+                            port=port,
+                            offset_bytes=off,
+                            size_bytes=sz,
+                            item_size=item_size,
+                            dtype=dtype,
+                            pkt_items=pkt_items,
+                        )
+                        for off, sz in job["ranges"]
+                    ]
+
+                data = np.concatenate(parts) if len(parts) > 1 else parts[0]
+                shm = shared_memory.SharedMemory(create=True, size=data.nbytes)
+                shm_arr = np.ndarray(data.shape, dtype=data.dtype, buffer=shm.buf)
+                shm_arr[:] = data
+
+                result_queue.put({
+                    "ok": True,
+                    "port": port,
+                    "snip_idx": job["snip_idx"],
+                    "ts": job["ts"],
+                    "shm_name": shm.name,
+                    "shape": data.shape,
+                    "dtype": data.dtype.str,
+                })
+                shm.close()
+                shm = None
+            except Exception as e:
+                if shm is not None:
+                    try:
+                        shm.close()
+                        shm.unlink()
+                    except Exception:
+                        pass
+                result_queue.put({
+                    "ok": False,
+                    "port": port,
+                    "snip_idx": job["snip_idx"],
+                    "ts": job["ts"],
+                    "error": str(e),
+                })
+    except Exception as e:
+        result_queue.put({
+            "ok": False,
+            "port": port,
+            "snip_idx": -1,
+            "ts": "",
+            "error": f"worker init failed: {e}",
+        })
+    finally:
+        try:
+            if graph is not None:
+                graph.release()
+        except Exception:
+            pass
+
+
 
 def snippet_filename(prefix: str, snip_idx: int, port: int, use_numpy: bool):
     ext = "npy" if use_numpy else "dat"
@@ -376,16 +479,6 @@ def main(callback=None, args=None, stop_event=None):
 
     num_ports = len(radio_chan_pairs)
     wrapped_flags = [False] * num_ports
-
-    # Streamer args: wire format from Replay is sc16; CPU format selectable
-    stream_args = uhd.usrp.StreamArgs(args.cpu_format, "sc16")
-
-    # Create 1-channel rx_streamer per port so each port can have independent config_play()
-    rx_streamers = []
-    for port in range(num_ports):
-        s = graph.create_rx_streamer(1, stream_args)
-        graph.connect(replay.get_unique_id(), port, s, 0)
-        rx_streamers.append(s)
 
     graph.commit()
 
@@ -484,24 +577,47 @@ def main(callback=None, args=None, stop_event=None):
         radio.issue_stream_cmd(stream_cmd, chan)
 
     # Background record monitors (wrap before full)
-    stop_evt = stop_event or threading.Event()
-    locks = [threading.Lock() for _ in range(num_ports)]
+    ctx = mp.get_context("spawn")
+    stop_evt = ctx.Event()
+    locks = [ctx.Lock() for _ in range(num_ports)]
+
+    if stop_event is not None and stop_event.is_set():
+        stop_evt.set()
+
     monitors = []
     for port in range(num_ports):
         t = threading.Thread(
             target=record_monitor,
             args=(stop_evt, replay, port, ring_bytes, restart_margin_bytes, locks[port], wrapped_flags),
-            daemon=True,
         )
         t.start()
         monitors.append(t)
 
-    # Host dtype for snippet arrays
-    # (Keep original behavior: sc16 as packed uint32; fc32 as complex64)
-    if args.cpu_format == "fc32":
-        dtype = np.complex64
-    else:
-        dtype = np.uint32
+    worker_args = {
+        "args": args.args,
+        "block": args.block,
+        "cpu_format": args.cpu_format,
+        "pkt_size": args.pkt_size,
+    }
+    job_queues = [ctx.Queue() for _ in range(num_ports)]
+    result_queue = ctx.Queue()
+    workers = []
+    for port in range(num_ports):
+        p = ctx.Process(
+            target=port_download_worker,
+            kwargs={
+                "port": port,
+                "worker_args": worker_args,
+                "item_size": item_size,
+                "pkt_items": pkt_items[port],
+                "job_queue": job_queues[port],
+                "result_queue": result_queue,
+                "stop_event": stop_evt,
+                "port_lock": locks[port],
+            },
+        )
+        p.start()
+        workers.append(p)
 
     # Snippet loop
     log("Entering snippet download loop. Ctrl+C to stop.", memory_only=args.memory_only)
@@ -512,6 +628,9 @@ def main(callback=None, args=None, stop_event=None):
 
     try:
         while True:
+            if stop_event is not None and stop_event.is_set():
+                stop_evt.set()
+
             if stop_evt.is_set():
                 break
             if args.max_snippets and snip_idx > args.max_snippets:
@@ -523,6 +642,7 @@ def main(callback=None, args=None, stop_event=None):
                 continue
 
             ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            pending_results = 0
             for port in range(num_ports):
                 with locks[port]:
                     pos = int(replay.get_record_position(port))
@@ -553,26 +673,48 @@ def main(callback=None, args=None, stop_event=None):
                         log(f"[s{snip_idx:06d} ch{port}] not enough data yet",
                             memory_only=args.memory_only)
                         continue
+                job_queues[port].put({
+                    "port": port,
+                    "snip_idx": snip_idx,
+                    "ts": ts,
+                    "ranges": ranges,
+                })
+                pending_results += 1
 
-                    parts = []
-                    for off, sz in ranges:
-                        parts.append(
-                            play_and_download_chunk(
-                                replay=replay,
-                                rx_streamer=rx_streamers[port],
-                                port=port,
-                                offset_bytes=off,
-                                size_bytes=sz,
-                                item_size=item_size,
-                                dtype=dtype,
-                                pkt_items=pkt_items[port],
-                            )
-                        )
-                    data = np.concatenate(parts) if len(parts) > 1 else parts[0]
+            received_results = 0
+            while received_results < pending_results and not stop_evt.is_set():
+                if stop_event is not None and stop_event.is_set():
+                    stop_evt.set()
+                    break
+                try:
+                    result = result_queue.get(timeout=0.2)
+                except queue.Empty:
+                    continue
 
-                emit_snippet(data, port=port, snip_idx=snip_idx, ts=ts,
-                             args=args, callback=callback)
-                del data
+                if result.get("ok"):
+                    shm = shared_memory.SharedMemory(name=result["shm_name"])
+                    try:
+                        data = np.ndarray(result["shape"], dtype=np.dtype(result["dtype"]), buffer=shm.buf).copy()
+                    finally:
+                        shm.close()
+                        shm.unlink()
+
+                    emit_snippet(
+                        data,
+                        port=result["port"],
+                        snip_idx=result["snip_idx"],
+                        ts=result["ts"],
+                        args=args,
+                        callback=callback,
+                    )
+                    del data
+                else:
+                    log(
+                        f"[s{result.get('snip_idx', -1):06d} ch{result.get('port', -1)}] "
+                        f"worker error: {result.get('error', 'unknown error')}",
+                        memory_only=args.memory_only,
+                    )
+                received_results += 1
 
             snip_idx += 1
             next_t += args.snippet_interval
@@ -591,6 +733,16 @@ def main(callback=None, args=None, stop_event=None):
             log(f"Stop streaming error: {e}", memory_only=args.memory_only)
 
         stop_evt.set()
+
+        for q in job_queues:
+            q.put(None)
+
+        for t in monitors:
+            t.join(timeout=2.0)
+
+        for p in workers:
+            p.join(timeout=5.0)
+
         time.sleep(0.1)
 
         try:
