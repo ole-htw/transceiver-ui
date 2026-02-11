@@ -1,9 +1,6 @@
 import numpy as np
 
 
-LOG_MAG_FLOOR = 1e-12
-
-
 def apply_manual_lags(
     lags: np.ndarray,
     los_idx: int | None,
@@ -71,11 +68,3 @@ def lag_overlap(
         s_start = -lag
         length = min(data_len, ref_len - s_start)
     return r_start, s_start, length
-
-
-def magnitude_for_log_axis(
-    corr: np.ndarray, floor: float = LOG_MAG_FLOOR
-) -> np.ndarray:
-    """Return a strictly positive correlation magnitude for logarithmic y-axes."""
-    mag = np.abs(corr)
-    return np.maximum(mag, floor)
