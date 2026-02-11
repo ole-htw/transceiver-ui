@@ -18,7 +18,11 @@ import sys
 import time
 import argparse
 import threading
+<<<<<<< HEAD
 import queue
+=======
+import inspect
+>>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
 from datetime import datetime
 
 import numpy as np
@@ -297,6 +301,7 @@ def play_and_download_chunk(replay, rx_streamer, port: int,
     return recv_exact_1ch(rx_streamer, num_items, dtype, pkt_items)
 
 
+<<<<<<< HEAD
 def port_download_worker(
     *,
     port: int,
@@ -383,6 +388,8 @@ def port_download_worker(
             pass
 
 
+=======
+>>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
 
 def snippet_filename(prefix: str, snip_idx: int, port: int, use_numpy: bool):
     ext = "npy" if use_numpy else "dat"
@@ -462,6 +469,16 @@ def main(callback=None, args=None, stop_event=None):
 
     num_ports = len(radio_chan_pairs)
     wrapped_flags = [False] * num_ports
+
+    # Streamer args: wire format from Replay is sc16; CPU format selectable
+    stream_args = uhd.usrp.StreamArgs(args.cpu_format, "sc16")
+
+    # Create 1-channel rx_streamer per port so each port can have independent config_play()
+    rx_streamers = []
+    for port in range(num_ports):
+        s = graph.create_rx_streamer(1, stream_args)
+        graph.connect(replay.get_unique_id(), port, s, 0)
+        rx_streamers.append(s)
 
     graph.commit()
 
@@ -562,16 +579,21 @@ def main(callback=None, args=None, stop_event=None):
     # Background record monitors (wrap before full)
     stop_evt = stop_event or threading.Event()
     locks = [threading.Lock() for _ in range(num_ports)]
+<<<<<<< HEAD
 
+=======
+>>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
     monitors = []
     for port in range(num_ports):
         t = threading.Thread(
             target=record_monitor,
             args=(stop_evt, replay, port, ring_bytes, restart_margin_bytes, locks[port], wrapped_flags),
+            daemon=True,
         )
         t.start()
         monitors.append(t)
 
+<<<<<<< HEAD
     worker_args = {
         "graph": graph,
         "replay": replay,
@@ -598,6 +620,14 @@ def main(callback=None, args=None, stop_event=None):
         )
         p.start()
         workers.append(p)
+=======
+    # Host dtype for snippet arrays
+    # (Keep original behavior: sc16 as packed uint32; fc32 as complex64)
+    if args.cpu_format == "fc32":
+        dtype = np.complex64
+    else:
+        dtype = np.uint32
+>>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
 
     # Snippet loop
     log("Entering snippet download loop. Ctrl+C to stop.", memory_only=args.memory_only)
@@ -608,9 +638,6 @@ def main(callback=None, args=None, stop_event=None):
 
     try:
         while True:
-            if stop_event is not None and stop_event.is_set():
-                stop_evt.set()
-
             if stop_evt.is_set():
                 break
             if args.max_snippets and snip_idx > args.max_snippets:
@@ -622,7 +649,6 @@ def main(callback=None, args=None, stop_event=None):
                 continue
 
             ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            pending_results = 0
             for port in range(num_ports):
                 with locks[port]:
                     pos = int(replay.get_record_position(port))
@@ -653,24 +679,24 @@ def main(callback=None, args=None, stop_event=None):
                         log(f"[s{snip_idx:06d} ch{port}] not enough data yet",
                             memory_only=args.memory_only)
                         continue
-                job_queues[port].put({
-                    "port": port,
-                    "snip_idx": snip_idx,
-                    "ts": ts,
-                    "ranges": ranges,
-                })
-                pending_results += 1
 
-            received_results = 0
-            while received_results < pending_results and not stop_evt.is_set():
-                if stop_event is not None and stop_event.is_set():
-                    stop_evt.set()
-                    break
-                try:
-                    result = result_queue.get(timeout=0.2)
-                except queue.Empty:
-                    continue
+                    parts = []
+                    for off, sz in ranges:
+                        parts.append(
+                            play_and_download_chunk(
+                                replay=replay,
+                                rx_streamer=rx_streamers[port],
+                                port=port,
+                                offset_bytes=off,
+                                size_bytes=sz,
+                                item_size=item_size,
+                                dtype=dtype,
+                                pkt_items=pkt_items[port],
+                            )
+                        )
+                    data = np.concatenate(parts) if len(parts) > 1 else parts[0]
 
+<<<<<<< HEAD
                 if result.get("ok"):
                     data = result["data"]
 
@@ -690,6 +716,11 @@ def main(callback=None, args=None, stop_event=None):
                         memory_only=args.memory_only,
                     )
                 received_results += 1
+=======
+                emit_snippet(data, port=port, snip_idx=snip_idx, ts=ts,
+                             args=args, callback=callback)
+                del data
+>>>>>>> parent of 5568903 (Refactor RX snippet path into process workers)
 
             snip_idx += 1
             next_t += args.snippet_interval
@@ -708,16 +739,6 @@ def main(callback=None, args=None, stop_event=None):
             log(f"Stop streaming error: {e}", memory_only=args.memory_only)
 
         stop_evt.set()
-
-        for q in job_queues:
-            q.put(None)
-
-        for t in monitors:
-            t.join(timeout=2.0)
-
-        for p in workers:
-            p.join(timeout=5.0)
-
         time.sleep(0.1)
 
         try:
