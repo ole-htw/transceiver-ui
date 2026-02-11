@@ -400,10 +400,8 @@ def compute_snip_ranges(base: int, ring_bytes: int, record_pos: int,
     ending at (record_pos - guard_bytes), with wrap-around inside [base, base+ring_bytes).
     All returned offsets/sizes are aligned to `align`.
 
-    IMPORTANT: We only return a snippet if it is fully contiguous within the
-    current ring epoch. This avoids stitching data across a recent
-    record_restart() boundary, which can manifest as short discontinuities
-    inside very small snippets.
+    IMPORTANT: Before the first record_restart(), we do NOT allow wrap reads
+    because the end-of-ring does not contain the newest data yet.
     """
     end = record_pos - guard_bytes
     if end < base:
@@ -418,14 +416,19 @@ def compute_snip_ranges(base: int, ring_bytes: int, record_pos: int,
 
     have = end - base
 
-    # Only read when we have a full contiguous snippet behind the guarded write pointer.
-    # Even after wrapping, avoid cross-boundary reads around record_restart(); wait until
-    # enough new data is available in the current epoch.
-    if have < snippet_bytes:
+    # Before first restart: no wrap; only read when we have a full contiguous snippet
+    if have < snippet_bytes and not wrapped:
         return []
 
-    start = end - snippet_bytes
-    return [(start, snippet_bytes)]
+    if have >= snippet_bytes:
+        start = end - snippet_bytes
+        return [(start, snippet_bytes)]
+
+    # wrap (only valid once wrapped==True)
+    head = have
+    tail = snippet_bytes - head
+    tail_start = (base + ring_bytes) - tail
+    return [(tail_start, tail), (base, head)]
 
 
 
