@@ -114,8 +114,6 @@ def _save_state(data: dict) -> None:
 _STATE = _load_state()
 
 AUTOSAVE_INTERVAL = 5  # seconds
-CONTINUOUS_UI_MAX_FPS = 8.0
-CONTINUOUS_MAX_POINTS = 4096
 # Arrays larger than this skip shared memory and use .npy + mmap in plot worker.
 USE_SHARED_MEMORY = False
 SHM_SIZE_THRESHOLD_BYTES = 25 * 1024 * 1024  # 25 MB
@@ -1866,89 +1864,6 @@ def _calc_stats(
     return stats
 
 
-def _build_continuous_compact_payload(
-    data: np.ndarray,
-    fs: float,
-    ref_data: np.ndarray,
-    manual_lags: dict[str, int | None],
-    *,
-    max_points: int = CONTINUOUS_MAX_POINTS,
-) -> dict[str, object]:
-    """Precompute compact continuous preview data for the UI thread."""
-    raw = np.asarray(data)
-    if raw.ndim == 2 and raw.shape[0] > 0:
-        signal_data = np.asarray(raw[0])
-    else:
-        signal_data = np.asarray(raw).reshape(-1)
-    if signal_data.size == 0:
-        return {
-            "fs": float(fs),
-            "signal_x": np.array([], dtype=np.float64),
-            "signal_y": np.array([], dtype=np.float64),
-            "freq_x": np.array([], dtype=np.float64),
-            "freq_y": np.array([], dtype=np.float64),
-            "cross_x": np.array([], dtype=np.float64),
-            "cross_y": np.array([], dtype=np.float64),
-            "cross_compare_y": None,
-            "stats": {"Signal": "--", "Freq": "--", "Crosscorr": "--"},
-            "title_suffix": "",
-            "has_ref": bool(ref_data.size),
-        }
-
-    step = max(1, int(np.ceil(signal_data.size / max_points)))
-    signal_y = signal_data[::step]
-    signal_x = np.arange(signal_y.size, dtype=np.float64) * (step / fs)
-
-    n_fft = int(min(signal_data.size, max_points * 2))
-    centered = signal_data[:n_fft] - np.mean(signal_data[:n_fft])
-    spec = np.fft.fftshift(np.fft.fft(centered))
-    freq_x = np.fft.fftshift(np.fft.fftfreq(n_fft, d=1 / fs))
-    freq_y = 20 * np.log10(np.abs(spec) / max(n_fft, 1) + 1e-12)
-
-    cross_x = np.array([], dtype=np.float64)
-    cross_y = np.array([], dtype=np.float64)
-    cross_compare_y = None
-    if ref_data.size:
-        ref = np.asarray(ref_data).reshape(-1)
-        corr_data = signal_data[-max_points * 4 :]
-        corr_ref = ref[-max_points * 4 :]
-        cc = _xcorr_fft(corr_data, corr_ref)
-        cross_mag = np.abs(cc)
-        lags = np.arange(-(len(corr_ref) - 1), len(corr_data), dtype=np.float64)
-        cstep = max(1, int(np.ceil(cross_mag.size / max_points)))
-        cross_x = lags[::cstep]
-        cross_y = cross_mag[::cstep]
-
-    stats = _calc_stats(
-        signal_data,
-        fs,
-        ref_data,
-        manual_lags=manual_lags,
-        xcorr_reduce=True,
-    )
-    echo_value = "--"
-    if stats.get("echo_delay") is not None:
-        meters = stats["echo_delay"] * 1.5
-        echo_value = f"{stats['echo_delay']} samp ({meters:.1f} m)"
-    return {
-        "fs": float(fs),
-        "signal_x": signal_x,
-        "signal_y": np.abs(signal_y),
-        "freq_x": freq_x,
-        "freq_y": freq_y,
-        "cross_x": cross_x,
-        "cross_y": cross_y,
-        "cross_compare_y": cross_compare_y,
-        "stats": {
-            "Signal": _format_amp(stats["amp"]),
-            "Freq": f"{_format_hz(stats['f_low'])} | {_format_hz(stats['f_high'])}",
-            "Crosscorr": echo_value,
-        },
-        "title_suffix": "",
-        "has_ref": bool(ref_data.size),
-    }
-
-
 def _format_stats_rows(
     stats: dict,
     *,
@@ -2692,11 +2607,6 @@ class TransceiverUI(ctk.CTk):
         self._tx_controller = None
         self._tx_output_capture: _FDCapture | None = None
         self._closing = False
-        self._cont_analysis_queue: queue.Queue[np.ndarray] | None = None
-        self._cont_analysis_thread: threading.Thread | None = None
-        self._cont_analysis_stop_event: threading.Event | None = None
-        self._cont_ui_max_fps = CONTINUOUS_UI_MAX_FPS
-        self._latest_cont_compact_payload: dict[str, object] | None = None
         self._plot_worker_manager = _get_plot_worker_manager()
         self._plot_worker_manager.start()
         self._xcorr_manual_file: Path | None = None
@@ -4781,10 +4691,16 @@ class TransceiverUI(ctk.CTk):
             )
 
     def _on_rx_cont_plot_tab_change(self, *_args) -> None:
-        payload = self._latest_cont_compact_payload
-        if payload is None:
+        has_rx_data = hasattr(self, "raw_rx_data") and self.raw_rx_data is not None
+        if not has_rx_data:
             return
-        self._display_rx_compact_continuous(payload)
+        fs = getattr(self, "latest_fs_raw", self.latest_fs)
+        self._display_rx_plots(
+            self.raw_rx_data,
+            fs,
+            reset_manual=False,
+            target_tab="Continuous",
+        )
 
     def _trim_data(self, data: np.ndarray) -> np.ndarray:
         """Return trimmed view of *data* based on slider settings."""
@@ -6078,266 +5994,6 @@ class TransceiverUI(ctk.CTk):
         ).start()
         self._process_queue()
 
-    def _start_continuous_analysis_worker(self, rate: float) -> None:
-        self._stop_continuous_analysis_worker()
-        self._cont_analysis_queue = queue.Queue(maxsize=2)
-        self._cont_analysis_stop_event = threading.Event()
-
-        tx_reference_path = _strip_zeros_tx_filename(self.tx_file.get())
-        tx_reference = np.array([], dtype=np.complex64)
-        try:
-            raw = np.fromfile(tx_reference_path, dtype=np.int16)
-            if raw.size % 2:
-                raw = raw[:-1]
-            if raw.size:
-                raw = raw.reshape(-1, 2).astype(np.float32)
-                tx_reference = raw[:, 0] + 1j * raw[:, 1]
-        except Exception:
-            tx_reference = np.array([], dtype=np.complex64)
-
-        self.tx_data = tx_reference
-        self._cont_analysis_thread = threading.Thread(
-            target=self._run_continuous_analysis_worker,
-            args=(rate, tx_reference),
-            daemon=True,
-        )
-        self._cont_analysis_thread.start()
-
-    def _stop_continuous_analysis_worker(self) -> None:
-        stop_event = self._cont_analysis_stop_event
-        if stop_event is not None:
-            stop_event.set()
-        if self._cont_analysis_queue is not None:
-            with contextlib.suppress(queue.Full):
-                self._cont_analysis_queue.put_nowait(np.array([], dtype=np.complex64))
-        worker = self._cont_analysis_thread
-        if worker and worker.is_alive():
-            worker.join(timeout=2)
-        self._cont_analysis_thread = None
-        self._cont_analysis_queue = None
-        self._cont_analysis_stop_event = None
-
-    def _enqueue_continuous_analysis_job(self, data: np.ndarray) -> None:
-        analysis_queue = self._cont_analysis_queue
-        if analysis_queue is None:
-            return
-        payload = np.asarray(data)
-        if payload.size == 0:
-            return
-        if analysis_queue.full():
-            with contextlib.suppress(queue.Empty):
-                analysis_queue.get_nowait()
-        with contextlib.suppress(queue.Full):
-            analysis_queue.put_nowait(np.array(payload, copy=True))
-
-    def _run_continuous_analysis_worker(
-        self,
-        rate: float,
-        tx_reference: np.ndarray,
-    ) -> None:
-        analysis_queue = self._cont_analysis_queue
-        stop_event = self._cont_analysis_stop_event
-        if analysis_queue is None or stop_event is None:
-            return
-        min_interval = 1.0 / max(self._cont_ui_max_fps, 0.1)
-        last_emit = 0.0
-        while not stop_event.is_set():
-            try:
-                data = analysis_queue.get(timeout=0.2)
-            except queue.Empty:
-                continue
-            if data.size == 0:
-                continue
-            compact_payload = _build_continuous_compact_payload(
-                data,
-                rate,
-                tx_reference,
-                self.manual_xcorr_lags.copy(),
-            )
-            now = time.monotonic()
-            if now - last_emit < min_interval:
-                continue
-            last_emit = now
-            self._ui(
-                lambda payload=compact_payload: self._display_rx_compact_continuous(
-                    payload
-                )
-            )
-
-    def _display_rx_compact_continuous(self, payload: dict[str, object]) -> None:
-        self._latest_cont_compact_payload = payload
-        target_container = self._get_rx_plot_target("Continuous")
-        target_frame = target_container["frame"]
-        target_canvas = target_container["canvas"]
-        target_window = target_container["window"]
-
-        pg.mkQApp()
-        target_frame.columnconfigure(0, weight=1)
-        preview_width = 500
-        preview_height = 240
-        bg_color = _resolve_ctk_frame_bg(target_frame)
-        pg_bg_color = _tk_color_to_rgb(target_frame, bg_color)
-        axis_color = "#9E9E9E"
-
-        pg_state = getattr(self, "_rx_cont_pg_state", None)
-        plots_state = pg_state.get("plots") if isinstance(pg_state, dict) else None
-        tabview = pg_state.get("tabview") if isinstance(pg_state, dict) else None
-        active_plot_tab = "Signal"
-        if tabview is not None:
-            with contextlib.suppress(Exception):
-                active_plot_tab = tabview.get()
-        if (
-            pg_state is None
-            or not isinstance(pg_state, dict)
-            or not plots_state
-            or tabview is None
-            or any(not plot_info["label"].winfo_exists() for plot_info in plots_state.values())
-        ):
-            pg_state = {
-                "plots": {},
-                "tabview": None,
-                "stats_labels": {},
-                "aoa_plot": None,
-            }
-            tabs_map = {
-                "Signal": ("Signal", "max Amp:"),
-                "Spectrum": ("Freq", "fmin/fmax:"),
-                "X-Corr": ("Crosscorr", "LOS-Echo:"),
-            }
-            tabview = ctk.CTkTabview(target_frame)
-            tabview.grid(row=0, column=0, sticky="n", pady=(8, 2))
-            tabview.configure(command=self._on_rx_cont_plot_tab_change)
-            for tab_name in tabs_map:
-                tab = tabview.add(tab_name)
-                tab.columnconfigure(0, weight=1)
-            tabview.set("Signal")
-            pg_state["tabview"] = tabview
-            for tab_name, (mode, metric_label_text) in tabs_map.items():
-                plot_widget = pg.GraphicsLayoutWidget()
-                plot_widget.setBackground(pg_bg_color)
-                plot_widget.setFixedSize(preview_width, preview_height)
-                plot_item = plot_widget.addPlot()
-                plot_item.setMenuEnabled(False)
-                _style_pg_preview_axes(plot_item, axis_color)
-                label = tk.Label(tabview.tab(tab_name), bg=bg_color)
-                label.grid(row=0, column=0, sticky="n", pady=(8, 2))
-                stats_frame = ctk.CTkFrame(tabview.tab(tab_name), fg_color="transparent")
-                stats_frame.grid(row=1, column=0, sticky="ew", pady=2)
-                stats_frame.columnconfigure((0, 1), weight=1)
-                ctk.CTkLabel(
-                    stats_frame,
-                    justify="right",
-                    anchor="e",
-                    text=metric_label_text,
-                ).grid(row=0, column=0, sticky="e", padx=6)
-                value_label = ctk.CTkLabel(
-                    stats_frame,
-                    justify="left",
-                    anchor="w",
-                    text="--",
-                )
-                value_label.grid(row=0, column=1, sticky="w", padx=6)
-                pg_state["stats_labels"][mode] = value_label
-                pg_state["plots"][mode] = {
-                    "widget": plot_widget,
-                    "plot": plot_item,
-                    "label": label,
-                    "initialized": False,
-                }
-            self._rx_cont_pg_state = pg_state
-            active_plot_tab = "Signal"
-
-        mode_by_tab = {
-            "Signal": "Signal",
-            "Spectrum": "Freq",
-            "X-Corr": "Crosscorr",
-        }
-        mode = mode_by_tab.get(active_plot_tab, "Signal")
-        plot_info = pg_state["plots"][mode]
-        plot_item = plot_info["plot"]
-        _clear_pg_plot(plot_item)
-
-        signal_x = np.asarray(payload.get("signal_x", np.array([], dtype=np.float64)))
-        signal_y = np.asarray(payload.get("signal_y", np.array([], dtype=np.float64)))
-        freq_x = np.asarray(payload.get("freq_x", np.array([], dtype=np.float64)))
-        freq_y = np.asarray(payload.get("freq_y", np.array([], dtype=np.float64)))
-        cross_x = np.asarray(payload.get("cross_x", np.array([], dtype=np.float64)))
-        cross_y = np.asarray(payload.get("cross_y", np.array([], dtype=np.float64)))
-
-        if mode == "Signal" and signal_x.size and signal_y.size:
-            plot_item.plot(signal_x, signal_y, pen=pg.mkPen(PLOT_COLORS["signal"], width=1.2))
-            plot_item.setLabel("bottom", "Time [s]")
-            plot_item.setLabel("left", "Amplitude")
-            plot_item.setTitle("RX Signal")
-        elif mode == "Freq" and freq_x.size and freq_y.size:
-            plot_item.plot(freq_x, freq_y, pen=pg.mkPen(PLOT_COLORS["freq"], width=1.2))
-            plot_item.setLabel("bottom", "Frequency [Hz]")
-            plot_item.setLabel("left", "Magnitude [dB]")
-            plot_item.setTitle("RX Freq")
-        elif mode == "Crosscorr" and cross_x.size and cross_y.size:
-            plot_item.plot(cross_x, cross_y, pen=pg.mkPen(PLOT_COLORS["crosscorr"], width=1.2))
-            plot_item.setLabel("bottom", "Lag")
-            plot_item.setLabel("left", "Magnitude")
-            plot_item.setTitle("RX Crosscorr")
-        else:
-            plot_item.setTitle(f"RX {mode}")
-
-        if not plot_info["initialized"]:
-            plot_item.enableAutoRange(axis="xy", enable=True)
-            plot_item.autoRange()
-            plot_item.enableAutoRange(axis="xy", enable=False)
-            plot_info["initialized"] = True
-
-        image = _export_pg_plot_image(plot_item, preview_width, preview_height)
-        label = plot_info["label"]
-        label.configure(image=image)
-        label.image = image
-
-        fs = float(payload.get("fs", 0.0))
-        if mode == "Signal":
-            label.bind(
-                "<Button-1>",
-                lambda _e, y=signal_y, rate=fs: self._show_fullscreen(
-                    y,
-                    rate,
-                    "Signal",
-                    "RX Signal",
-                ),
-            )
-        elif mode == "Freq":
-            label.bind(
-                "<Button-1>",
-                lambda _e, y=signal_y, rate=fs: self._show_fullscreen(
-                    y,
-                    rate,
-                    "Freq",
-                    "RX Freq",
-                ),
-            )
-        else:
-            label.bind(
-                "<Button-1>",
-                lambda _e, y=signal_y, rate=fs, r=getattr(self, "tx_data", np.array([], dtype=np.complex64)): self._show_fullscreen(
-                    y,
-                    rate,
-                    "Crosscorr",
-                    "RX Crosscorr",
-                    ref_data=r,
-                ),
-            )
-
-        stats_labels = pg_state.get("stats_labels", {})
-        stats = payload.get("stats", {})
-        value_label = stats_labels.get(mode)
-        if value_label is not None and isinstance(stats, dict):
-            value_label.configure(text=str(stats.get(mode, "--")))
-            self.rx_stats_labels = [[value_label]]
-
-        self.latest_data = signal_y
-        self.latest_fs = fs
-        self._center_canvas_window(target_canvas, target_window)
-        self._update_rx_scrollbar("Continuous")
-
     def start_continuous(self) -> None:
         if getattr(self, "_cont_thread", None):
             return
@@ -6399,7 +6055,6 @@ class TransceiverUI(ctk.CTk):
                 tabview.set("Signal")
             except Exception:
                 pass
-        self._start_continuous_analysis_worker(rate)
         self._cmd_running = True
         if hasattr(self, "rx_cont_start"):
             self.rx_cont_start.configure(state="disabled")
@@ -6458,7 +6113,6 @@ class TransceiverUI(ctk.CTk):
                     )
                     return
         self._cont_thread = None
-        self._stop_continuous_analysis_worker()
         if hasattr(self, "rx_cont_stop"):
             self.rx_cont_stop.configure(state="disabled")
         if hasattr(self, "rx_cont_start"):
@@ -6477,7 +6131,11 @@ class TransceiverUI(ctk.CTk):
 
             def _callback(*, data: np.ndarray, **_info: object) -> None:
                 if data.size:
-                    self._enqueue_continuous_analysis_job(data)
+                    self._ui(
+                        lambda d=data: self._display_rx_plots(
+                            d, rate, target_tab="Continuous"
+                        )
+                    )
 
             rx_continous.main(callback=_callback, args=args, stop_event=stop_event)
         except Exception as exc:
@@ -6485,7 +6143,6 @@ class TransceiverUI(ctk.CTk):
         finally:
             self._cmd_running = False
             self._cont_thread = None
-            self._stop_continuous_analysis_worker()
             self._ui(self._reset_cont_buttons)
 
     def _reset_cont_buttons(self) -> None:
