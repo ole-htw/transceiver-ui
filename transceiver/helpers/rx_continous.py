@@ -25,6 +25,10 @@ import numpy as np
 import uhd
 
 
+class SnippetRecvTimeoutError(RuntimeError):
+    """Raised when Replay snippet downloads time out on recv()."""
+
+
 # -----------------------------
 # Args / Utilities
 # -----------------------------
@@ -87,6 +91,14 @@ def parse_args(argv=None):
 
     p.add_argument("--delay", type=float, default=0.5,
                    help="Start streaming after this delay (seconds).")
+    p.add_argument("--no-progress-recovery-threshold", type=int, default=50,
+                   help="Trigger recovery if record position does not advance this many checks.")
+    p.add_argument("--recovery-retry-delay", type=float, default=0.05,
+                   help="Delay after a recovery action before next snippet attempt (seconds).")
+    p.add_argument("--recovery-rearm-record", action="store_true",
+                   help="During recovery also re-arm Replay recording via replay.record(...).")
+    p.add_argument("--graph-reset-after-recovery-failures", type=int, default=0,
+                   help="Optional full streaming reset after N failed recovery attempts per port (0=disabled).")
 
     return p.parse_args(argv)
 
@@ -258,7 +270,9 @@ def recv_exact_1ch(rx_streamer, num_items: int, dtype, pkt_items: int):
     while got < num_items:
         n = rx_streamer.recv(tmp, md, 1.0)
         if md.error_code == uhd.types.RXMetadataErrorCode.timeout:
-            raise RuntimeError("Snippet download recv() timed out.")
+            raise SnippetRecvTimeoutError(
+                f"Snippet download recv() timed out after {got}/{num_items} items."
+            )
         if md.error_code == uhd.types.RXMetadataErrorCode.overflow:
             # For host downloads from Replay this should be rare, but handle it.
             print("WARNING: Overflow during snippet download (possible host/network bottleneck).",
@@ -377,6 +391,81 @@ def replay_get_record_async_md(replay, timeout: float = 0.0):
     md = uhd.types.RXMetadata()
     ok = replay.get_record_async_metadata(md, timeout)
     return md if ok else None
+
+
+def log_recovery_event(*, port: int, reason: str, position: int, fullness: int,
+                       ring_bytes: int, restart_margin_bytes: int, snippet_bytes: int,
+                       guard_bytes: int, attempts: int, memory_only: bool):
+    log(
+        f"[recovery ch{port}] reason={reason}, attempts={attempts}, pos={position}, "
+        f"fullness={fullness}, ring={ring_bytes}, margin={restart_margin_bytes}, "
+        f"snippet={snippet_bytes}, guard={guard_bytes}",
+        memory_only=memory_only,
+    )
+
+
+def recover_port(*, replay, port: int, base: int, ring_bytes: int,
+                 restart_margin_bytes: int, snippet_bytes: int, guard_bytes: int,
+                 replay_ctrl_lock: threading.Lock, wrapped_flags: list,
+                 args, reason: str,
+                 recovery_attempts: list, recovery_failures: list):
+    recovery_attempts[port] += 1
+    attempts = recovery_attempts[port]
+    position = int(replay.get_record_position(port))
+    fullness = int(replay.get_record_fullness(port))
+    log_recovery_event(
+        port=port,
+        reason=reason,
+        position=position,
+        fullness=fullness,
+        ring_bytes=ring_bytes,
+        restart_margin_bytes=restart_margin_bytes,
+        snippet_bytes=snippet_bytes,
+        guard_bytes=guard_bytes,
+        attempts=attempts,
+        memory_only=args.memory_only,
+    )
+
+    try:
+        with replay_ctrl_lock:
+            replay.record_restart(port)
+            if args.recovery_rearm_record:
+                replay.record(base, ring_bytes, port)
+        wrapped_flags[port] = True
+        recovery_failures[port] = 0
+        time.sleep(args.recovery_retry_delay)
+        return True
+    except Exception as exc:
+        recovery_failures[port] += 1
+        log(
+            f"[recovery ch{port}] failed ({reason}), consecutive failures="
+            f"{recovery_failures[port]}: {exc}",
+            memory_only=args.memory_only,
+        )
+        return False
+
+
+def reset_rfnoc_streaming(*, graph, replay, radio_chan_pairs, base_offsets,
+                          ring_bytes: int, args, replay_ctrl_lock: threading.Lock):
+    """Best-effort clean restart of continuous streaming and Replay record arming."""
+    log("[recovery] resetting RFNoC streaming graph state", memory_only=args.memory_only)
+    stop_cmd = uhd.types.StreamCMD(uhd.types.StreamMode.stop_cont)
+    stop_cmd.stream_now = True
+    for radio, chan in radio_chan_pairs:
+        radio.issue_stream_cmd(stop_cmd, chan)
+
+    with replay_ctrl_lock:
+        for port, base in enumerate(base_offsets):
+            replay.record(base, ring_bytes, port)
+
+    now = graph.get_mb_controller().get_timekeeper(0).get_time_now()
+    start_cmd = uhd.types.StreamCMD(uhd.types.StreamMode.start_cont)
+    start_cmd.stream_now = False
+    start_cmd.time_spec = now + uhd.types.TimeSpec(args.delay)
+    for radio, chan in radio_chan_pairs:
+        radio.issue_stream_cmd(start_cmd, chan)
+
+    time.sleep(max(args.recovery_retry_delay, 0.05))
 
 
 def main(callback=None, args=None, stop_event=None):
@@ -543,6 +632,8 @@ def main(callback=None, args=None, stop_event=None):
     next_t = time.monotonic() + args.snippet_interval
     last_positions = [None] * num_ports
     no_progress_counts = [0] * num_ports
+    recovery_attempts = [0] * num_ports
+    recovery_failures = [0] * num_ports
 
     try:
         while True:
@@ -568,6 +659,37 @@ def main(callback=None, args=None, stop_event=None):
                                 "waiting for replay buffer to fill",
                                 memory_only=args.memory_only,
                             )
+                        if no_progress_counts[port] >= args.no_progress_recovery_threshold:
+                            recover_port(
+                                replay=replay,
+                                port=port,
+                                base=base_offsets[port],
+                                ring_bytes=ring_bytes,
+                                restart_margin_bytes=restart_margin_bytes,
+                                snippet_bytes=snippet_bytes,
+                                guard_bytes=guard_bytes,
+                                replay_ctrl_lock=replay_ctrl_lock,
+                                wrapped_flags=wrapped_flags,
+                                args=args,
+                                reason="no_progress_threshold",
+                                recovery_attempts=recovery_attempts,
+                                recovery_failures=recovery_failures,
+                            )
+                            no_progress_counts[port] = 0
+                            if (
+                                args.graph_reset_after_recovery_failures > 0
+                                and recovery_failures[port] >= args.graph_reset_after_recovery_failures
+                            ):
+                                reset_rfnoc_streaming(
+                                    graph=graph,
+                                    replay=replay,
+                                    radio_chan_pairs=radio_chan_pairs,
+                                    base_offsets=base_offsets,
+                                    ring_bytes=ring_bytes,
+                                    args=args,
+                                    replay_ctrl_lock=replay_ctrl_lock,
+                                )
+                                recovery_failures[port] = 0
                         continue
                     last_positions[port] = pos
                     no_progress_counts[port] = 0
@@ -591,20 +713,54 @@ def main(callback=None, args=None, stop_event=None):
 
                 dl_start = time.monotonic()
                 parts = []
-                for off, sz in ranges:
-                    parts.append(
-                        play_and_download_chunk(
+                try:
+                    for off, sz in ranges:
+                        parts.append(
+                            play_and_download_chunk(
+                                replay=replay,
+                                rx_streamer=rx_streamers[port],
+                                port=port,
+                                offset_bytes=off,
+                                size_bytes=sz,
+                                item_size=item_size,
+                                dtype=dtype,
+                                pkt_items=pkt_items[port],
+                                replay_ctrl_lock=replay_ctrl_lock,
+                            )
+                        )
+                except SnippetRecvTimeoutError as exc:
+                    log(f"[s{snip_idx:06d} ch{port}] recv timeout: {exc}",
+                        memory_only=args.memory_only)
+                    recover_port(
+                        replay=replay,
+                        port=port,
+                        base=base_offsets[port],
+                        ring_bytes=ring_bytes,
+                        restart_margin_bytes=restart_margin_bytes,
+                        snippet_bytes=snippet_bytes,
+                        guard_bytes=guard_bytes,
+                        replay_ctrl_lock=replay_ctrl_lock,
+                        wrapped_flags=wrapped_flags,
+                        args=args,
+                        reason="recv_timeout",
+                        recovery_attempts=recovery_attempts,
+                        recovery_failures=recovery_failures,
+                    )
+                    if (
+                        args.graph_reset_after_recovery_failures > 0
+                        and recovery_failures[port] >= args.graph_reset_after_recovery_failures
+                    ):
+                        reset_rfnoc_streaming(
+                            graph=graph,
                             replay=replay,
-                            rx_streamer=rx_streamers[port],
-                            port=port,
-                            offset_bytes=off,
-                            size_bytes=sz,
-                            item_size=item_size,
-                            dtype=dtype,
-                            pkt_items=pkt_items[port],
+                            radio_chan_pairs=radio_chan_pairs,
+                            base_offsets=base_offsets,
+                            ring_bytes=ring_bytes,
+                            args=args,
                             replay_ctrl_lock=replay_ctrl_lock,
                         )
-                    )
+                        recovery_failures[port] = 0
+                    continue
                 data = np.concatenate(parts) if len(parts) > 1 else parts[0]
                 dl_dur = time.monotonic() - dl_start
                 log(
