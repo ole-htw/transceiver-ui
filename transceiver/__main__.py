@@ -1783,6 +1783,9 @@ def _calc_stats(
     symbol_rate: float | None = None,
     xcorr_reduce: bool = False,
     path_cancel_info: dict[str, object] | None = None,
+    include_spectrum: bool = True,
+    include_amp: bool = True,
+    include_echo: bool = True,
 ) -> dict:
     """Return basic signal statistics for display.
 
@@ -1807,51 +1810,55 @@ def _calc_stats(
     if data.size == 0 or fs <= 0:
         return stats
 
-    stats["amp"] = float(np.max(np.abs(data))) if np.any(data) else 0.0
+    if include_amp:
+        stats["amp"] = float(np.max(np.abs(data))) if np.any(data) else 0.0
 
-    # Suppress DC components which would otherwise dominate the spectrum and
-    # mask the actual signal.  This prevents the f_low/f_high detection from
-    # always returning 0 Hz when a noticeable DC offset is present in the
-    # received samples.
-    data = data - np.mean(data)
+    spectrum_data = data
+    if include_spectrum:
+        # Suppress DC components which would otherwise dominate the spectrum and
+        # mask the actual signal.  This prevents the f_low/f_high detection from
+        # always returning 0 Hz when a noticeable DC offset is present in the
+        # received samples.
+        spectrum_data = data - np.mean(data)
 
-    spec = np.fft.fftshift(np.fft.fft(data))
-    freqs = np.fft.fftshift(np.fft.fftfreq(len(data), d=1 / fs))
-    mag = 20 * np.log10(np.abs(spec) / len(data) + 1e-12)
-    max_mag = mag.max()
-    mask = mag >= max_mag - 3.0
-    if np.any(mask):
-        stats["f_low"] = float(freqs[mask].min())
-        stats["f_high"] = float(freqs[mask].max())
-        stats["bw"] = stats["f_high"] - stats["f_low"]
-        if fs > 0:
-            stats["bw_norm_nyq"] = stats["bw"] / (fs / 2)
-        if symbol_rate is not None and symbol_rate > 0:
-            stats["bw_rs"] = stats["bw"] / symbol_rate
+        spec = np.fft.fftshift(np.fft.fft(spectrum_data))
+        freqs = np.fft.fftshift(np.fft.fftfreq(len(spectrum_data), d=1 / fs))
+        mag = 20 * np.log10(np.abs(spec) / len(spectrum_data) + 1e-12)
+        max_mag = mag.max()
+        mask = mag >= max_mag - 3.0
+        if np.any(mask):
+            stats["f_low"] = float(freqs[mask].min())
+            stats["f_high"] = float(freqs[mask].max())
+            stats["bw"] = stats["f_high"] - stats["f_low"]
+            if fs > 0:
+                stats["bw_norm_nyq"] = stats["bw"] / (fs / 2)
+            if symbol_rate is not None and symbol_rate > 0:
+                stats["bw_rs"] = stats["bw"] / symbol_rate
 
-    if ref_data is not None and ref_data.size and data.size:
-        xcorr_data = data
-        xcorr_ref = ref_data
-        xcorr_step = 1
-        if xcorr_reduce:
-            xcorr_data, xcorr_ref, xcorr_step = _reduce_pair(
-                xcorr_data, xcorr_ref
+    if include_echo:
+        xcorr_data = spectrum_data if include_spectrum else data
+        if ref_data is not None and ref_data.size and xcorr_data.size:
+            xcorr_ref = ref_data
+            xcorr_step = 1
+            if xcorr_reduce:
+                xcorr_data, xcorr_ref, xcorr_step = _reduce_pair(
+                    xcorr_data, xcorr_ref
+                )
+            cc = _xcorr_fft(xcorr_data, xcorr_ref)
+            lags = (
+                np.arange(-(len(xcorr_ref) - 1), len(xcorr_data)) * xcorr_step
             )
-        cc = _xcorr_fft(xcorr_data, xcorr_ref)
-        lags = (
-            np.arange(-(len(xcorr_ref) - 1), len(xcorr_data)) * xcorr_step
-        )
-        los_idx, echo_idx = _find_los_echo(cc)
-        los_idx, echo_idx = _apply_manual_lags(
-            lags, los_idx, echo_idx, manual_lags
-        )
-        stats["echo_delay"] = _echo_delay_samples(lags, los_idx, echo_idx)
-    elif path_cancel_info is not None:
-        if (
-            path_cancel_info.get("k0") is not None
-            and path_cancel_info.get("k1") is not None
-        ):
-            stats["echo_delay"] = path_cancel_info.get("delta_k")
+            los_idx, echo_idx = _find_los_echo(cc)
+            los_idx, echo_idx = _apply_manual_lags(
+                lags, los_idx, echo_idx, manual_lags
+            )
+            stats["echo_delay"] = _echo_delay_samples(lags, los_idx, echo_idx)
+        elif path_cancel_info is not None:
+            if (
+                path_cancel_info.get("k0") is not None
+                and path_cancel_info.get("k1") is not None
+            ):
+                stats["echo_delay"] = path_cancel_info.get("delta_k")
 
     return stats
 
@@ -4404,28 +4411,69 @@ class TransceiverUI(ctk.CTk):
                 )
 
             pg_state = getattr(self, "_rx_cont_pg_state", None)
-            plots_state = (
-                pg_state.get("plots") if isinstance(pg_state, dict) else None
-            )
+            plots_state = pg_state.get("plots") if isinstance(pg_state, dict) else None
+            tabview = pg_state.get("tabview") if isinstance(pg_state, dict) else None
+            active_plot_tab = "Signal"
+            if tabview is not None:
+                try:
+                    active_plot_tab = tabview.get()
+                except Exception:
+                    active_plot_tab = "Signal"
             if (
                 pg_state is None
                 or not isinstance(pg_state, dict)
                 or not plots_state
+                or tabview is None
                 or any(
                     not plot_info["label"].winfo_exists()
                     for plot_info in plots_state.values()
                 )
             ):
-                pg_state = {"plots": {}, "stats_frame": None, "aoa_plot": None}
-                for idx, mode in enumerate(modes):
+                pg_state = {
+                    "plots": {},
+                    "tabview": None,
+                    "stats_labels": {},
+                    "aoa_plot": None,
+                }
+                tabs_map = {
+                    "Signal": ("Signal", "max Amp:"),
+                    "Spectrum": ("Freq", "fmin/fmax:"),
+                    "X-Corr": ("Crosscorr", "LOS-Echo:"),
+                }
+                tabview = ctk.CTkTabview(target_frame)
+                tabview.grid(row=0, column=0, sticky="n", pady=2)
+                tabview.configure(command=self._on_rx_cont_plot_tab_change)
+                for tab_name in tabs_map:
+                    tab = tabview.add(tab_name)
+                    tab.columnconfigure(0, weight=1)
+                tabview.set("Signal")
+                pg_state["tabview"] = tabview
+                for tab_name, (mode, metric_label_text) in tabs_map.items():
                     plot_widget = pg.GraphicsLayoutWidget()
                     plot_widget.setBackground(pg_bg_color)
                     plot_widget.setFixedSize(preview_width, preview_height)
                     plot_item = plot_widget.addPlot()
                     plot_item.setMenuEnabled(False)
                     _style_pg_preview_axes(plot_item, axis_color)
-                    label = tk.Label(target_frame, bg=bg_color)
-                    label.grid(row=idx, column=0, sticky="n", pady=2)
+                    label = tk.Label(tabview.tab(tab_name), bg=bg_color)
+                    label.grid(row=0, column=0, sticky="n", pady=2)
+                    stats_frame = ctk.CTkFrame(tabview.tab(tab_name), fg_color="transparent")
+                    stats_frame.grid(row=1, column=0, sticky="ew", pady=2)
+                    stats_frame.columnconfigure((0, 1), weight=1)
+                    ctk.CTkLabel(
+                        stats_frame,
+                        justify="right",
+                        anchor="e",
+                        text=metric_label_text,
+                    ).grid(row=0, column=0, sticky="e", padx=6)
+                    value_label = ctk.CTkLabel(
+                        stats_frame,
+                        justify="left",
+                        anchor="w",
+                        text="--",
+                    )
+                    value_label.grid(row=0, column=1, sticky="w", padx=6)
+                    pg_state["stats_labels"][mode] = value_label
                     pg_state["plots"][mode] = {
                         "widget": plot_widget,
                         "plot": plot_item,
@@ -4433,73 +4481,75 @@ class TransceiverUI(ctk.CTk):
                         "initialized": False,
                     }
                 self._rx_cont_pg_state = pg_state
+                active_plot_tab = "Signal"
 
-            for idx, mode in enumerate(modes):
-                plot_info = pg_state["plots"][mode]
-                plot_item = plot_info["plot"]
-                _clear_pg_plot(plot_item)
-                ref = plot_ref_data if mode == "Crosscorr" else None
-                crosscorr_title = (
-                    f"RX {mode}{title_suffix} ({plot_ref_label})"
-                    if mode == "Crosscorr" and plot_ref_label
-                    else f"RX {mode}{title_suffix}"
-                )
-                _plot_on_pg(
-                    plot_item,
+            mode_by_tab = {
+                "Signal": "Signal",
+                "Spectrum": "Freq",
+                "X-Corr": "Crosscorr",
+            }
+            mode = mode_by_tab.get(active_plot_tab, "Signal")
+            plot_info = pg_state["plots"][mode]
+            plot_item = plot_info["plot"]
+            _clear_pg_plot(plot_item)
+            ref = plot_ref_data if mode == "Crosscorr" else None
+            crosscorr_title = (
+                f"RX {mode}{title_suffix} ({plot_ref_label})"
+                if mode == "Crosscorr" and plot_ref_label
+                else f"RX {mode}{title_suffix}"
+            )
+            _plot_on_pg(
+                plot_item,
+                plot_data,
+                plot_fs,
+                mode,
+                crosscorr_title,
+                ref_data=ref,
+                crosscorr_compare=crosscorr_compare if mode == "Crosscorr" else None,
+                manual_lags=self.manual_xcorr_lags if mode == "Crosscorr" else None,
+            )
+            if not plot_info["initialized"]:
+                plot_item.enableAutoRange(axis="xy", enable=True)
+                plot_item.autoRange()
+                plot_item.enableAutoRange(axis="xy", enable=False)
+                plot_info["initialized"] = True
+            if mode == "Crosscorr":
+                zoom_range = _crosscorr_zoom_range(
                     plot_data,
-                    plot_fs,
-                    mode,
-                    crosscorr_title,
-                    ref_data=ref,
-                    crosscorr_compare=crosscorr_compare if mode == "Crosscorr" else None,
-                    manual_lags=self.manual_xcorr_lags if mode == "Crosscorr" else None,
+                    plot_ref_data,
+                    crosscorr_compare,
+                    self.manual_xcorr_lags,
                 )
-                if not plot_info["initialized"]:
-                    plot_item.enableAutoRange(axis="xy", enable=True)
-                    plot_item.autoRange()
-                    plot_item.enableAutoRange(axis="xy", enable=False)
-                    plot_info["initialized"] = True
-                if mode == "Crosscorr":
-                    zoom_range = _crosscorr_zoom_range(
-                        plot_data,
-                        plot_ref_data,
-                        crosscorr_compare,
-                        self.manual_xcorr_lags,
+                if zoom_range is not None:
+                    plot_item.setXRange(*zoom_range, padding=0.0)
+            image = _export_pg_plot_image(
+                plot_item,
+                preview_width,
+                preview_height,
+            )
+            label = plot_info["label"]
+            label.configure(image=image)
+            label.image = image
+            if mode == "Crosscorr":
+                handler = (
+                    lambda _e,
+                    m=mode,
+                    d=plot_data,
+                    s=plot_fs,
+                    r=ref,
+                    c=crosscorr_compare,
+                    t=crosscorr_title: (
+                        self._show_fullscreen(d, s, m, t, ref_data=r, crosscorr_compare=c)
                     )
-                    if zoom_range is not None:
-                        plot_item.setXRange(*zoom_range, padding=0.0)
-                image = _export_pg_plot_image(
-                    plot_item,
-                    preview_width,
-                    preview_height,
                 )
-                label = plot_info["label"]
-                label.configure(image=image)
-                label.image = image
-                if mode == "Crosscorr":
-                    handler = (
-                        lambda _e,
-                        m=mode,
-                        d=plot_data,
-                        s=plot_fs,
-                        r=ref,
-                        c=crosscorr_compare,
-                        t=crosscorr_title: (
-                            self._show_fullscreen(
-                                d, s, m, t, ref_data=r, crosscorr_compare=c
-                            )
-                        )
-                    )
-                else:
-                    handler = (
-                        lambda _e,
-                        m=mode,
-                        d=plot_data,
-                        s=plot_fs: self._show_fullscreen(
-                            d, s, m, f"RX {m}{title_suffix}"
-                        )
-                    )
-                label.bind("<Button-1>", handler)
+            else:
+                handler = (
+                    lambda _e,
+                    m=mode,
+                    d=plot_data,
+                    s=plot_fs: self._show_fullscreen(d, s, m, f"RX {m}{title_suffix}")
+                )
+            label.bind("<Button-1>", handler)
 
             stats = _calc_stats(
                 plot_data,
@@ -4508,34 +4558,25 @@ class TransceiverUI(ctk.CTk):
                 manual_lags=self.manual_xcorr_lags,
                 xcorr_reduce=True,
                 path_cancel_info=path_cancel_info,
+                include_spectrum=(mode == "Freq"),
+                include_amp=(mode == "Signal"),
+                include_echo=(mode == "Crosscorr"),
             )
-            stats_rows = _format_rx_stats_rows(stats)
-            stats_frame = pg_state.get("stats_frame")
-            if stats_frame is not None and stats_frame.winfo_exists():
-                stats_frame.destroy()
-            stats_frame = ctk.CTkFrame(target_frame, fg_color="transparent")
-            stats_frame.grid(row=len(modes), column=0, sticky="ew", pady=2)
-            stats_frame.columnconfigure((0, 1, 2, 3, 4, 5), weight=1)
-            value_labels: list[ctk.CTkLabel] = []
-            for idx, (label, value) in enumerate(stats_rows):
-                row = 0 if idx < 3 else 1
-                col = (idx if idx < 3 else idx - 3) * 2
-                ctk.CTkLabel(
-                    stats_frame,
-                    justify="right",
-                    anchor="e",
-                    text=f"{label}:",
-                ).grid(row=row, column=col, sticky="e", padx=6)
-                value_label = ctk.CTkLabel(
-                    stats_frame,
-                    justify="left",
-                    anchor="w",
-                    text=value,
-                )
-                value_label.grid(row=row, column=col + 1, sticky="w", padx=6)
-                value_labels.append(value_label)
-            pg_state["stats_frame"] = stats_frame
-            self.rx_stats_labels.append(value_labels)
+            stats_labels = pg_state.get("stats_labels", {})
+            if mode == "Freq":
+                value = f"{_format_hz(stats['f_low'])} | {_format_hz(stats['f_high'])}"
+            elif mode == "Signal":
+                value = _format_amp(stats['amp'])
+            else:
+                echo_value = "--"
+                if stats.get("echo_delay") is not None:
+                    meters = stats["echo_delay"] * 1.5
+                    echo_value = f"{stats['echo_delay']} samp ({meters:.1f} m)"
+                value = echo_value
+            value_label = stats_labels.get(mode)
+            if value_label is not None:
+                value_label.configure(text=value)
+                self.rx_stats_labels.append([value_label])
 
             if self.rx_view.get() == "AoA (ESPRIT)":
                 fig = Figure(figsize=(5, 2), dpi=100)
@@ -4640,6 +4681,18 @@ class TransceiverUI(ctk.CTk):
                 reset_manual=False,
                 target_tab=tab_name,
             )
+
+    def _on_rx_cont_plot_tab_change(self, *_args) -> None:
+        has_rx_data = hasattr(self, "raw_rx_data") and self.raw_rx_data is not None
+        if not has_rx_data:
+            return
+        fs = getattr(self, "latest_fs_raw", self.latest_fs)
+        self._display_rx_plots(
+            self.raw_rx_data,
+            fs,
+            reset_manual=False,
+            target_tab="Continuous",
+        )
 
     def _trim_data(self, data: np.ndarray) -> np.ndarray:
         """Return trimmed view of *data* based on slider settings."""
@@ -5987,6 +6040,13 @@ class TransceiverUI(ctk.CTk):
             "fc32",
         ]
         self._cont_stop_event = threading.Event()
+        pg_state = getattr(self, "_rx_cont_pg_state", None)
+        tabview = pg_state.get("tabview") if isinstance(pg_state, dict) else None
+        if tabview is not None:
+            try:
+                tabview.set("Signal")
+            except Exception:
+                pass
         self._cmd_running = True
         if hasattr(self, "rx_cont_start"):
             self.rx_cont_start.configure(state="disabled")
