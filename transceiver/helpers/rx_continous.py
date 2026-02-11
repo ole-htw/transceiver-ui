@@ -18,10 +18,8 @@ import sys
 import time
 import argparse
 import threading
-import multiprocessing as mp
 import queue
 from datetime import datetime
-from multiprocessing import shared_memory
 
 import numpy as np
 import uhd
@@ -310,11 +308,10 @@ def port_download_worker(
     stop_event,
     port_lock,
 ):
-    """Per-port producer/consumer worker that downloads snippets into shared memory."""
-    graph = None
+    """Per-port producer/consumer worker that downloads snippets in-process."""
     try:
-        graph = uhd.rfnoc.RfnocGraph(worker_args["args"])
-        replay = uhd.rfnoc.ReplayBlockControl(graph.get_block(worker_args["block"]))
+        graph = worker_args["graph"]
+        replay = worker_args["replay"]
         stream_args = uhd.usrp.StreamArgs(worker_args["cpu_format"], "sc16")
 
         rx_streamer = graph.create_rx_streamer(1, stream_args)
@@ -337,7 +334,6 @@ def port_download_worker(
             if job is None:
                 break
 
-            shm = None
             try:
                 with port_lock:
                     parts = [
@@ -355,28 +351,14 @@ def port_download_worker(
                     ]
 
                 data = np.concatenate(parts) if len(parts) > 1 else parts[0]
-                shm = shared_memory.SharedMemory(create=True, size=data.nbytes)
-                shm_arr = np.ndarray(data.shape, dtype=data.dtype, buffer=shm.buf)
-                shm_arr[:] = data
-
                 result_queue.put({
                     "ok": True,
                     "port": port,
                     "snip_idx": job["snip_idx"],
                     "ts": job["ts"],
-                    "shm_name": shm.name,
-                    "shape": data.shape,
-                    "dtype": data.dtype.str,
+                    "data": data,
                 })
-                shm.close()
-                shm = None
             except Exception as e:
-                if shm is not None:
-                    try:
-                        shm.close()
-                        shm.unlink()
-                    except Exception:
-                        pass
                 result_queue.put({
                     "ok": False,
                     "port": port,
@@ -394,8 +376,9 @@ def port_download_worker(
         })
     finally:
         try:
-            if graph is not None:
-                graph.release()
+            rx_streamer = locals().get("rx_streamer")
+            if rx_streamer is not None:
+                del rx_streamer
         except Exception:
             pass
 
@@ -577,12 +560,8 @@ def main(callback=None, args=None, stop_event=None):
         radio.issue_stream_cmd(stream_cmd, chan)
 
     # Background record monitors (wrap before full)
-    ctx = mp.get_context("spawn")
-    stop_evt = ctx.Event()
-    locks = [ctx.Lock() for _ in range(num_ports)]
-
-    if stop_event is not None and stop_event.is_set():
-        stop_evt.set()
+    stop_evt = stop_event or threading.Event()
+    locks = [threading.Lock() for _ in range(num_ports)]
 
     monitors = []
     for port in range(num_ports):
@@ -594,16 +573,16 @@ def main(callback=None, args=None, stop_event=None):
         monitors.append(t)
 
     worker_args = {
-        "args": args.args,
-        "block": args.block,
+        "graph": graph,
+        "replay": replay,
         "cpu_format": args.cpu_format,
         "pkt_size": args.pkt_size,
     }
-    job_queues = [ctx.Queue() for _ in range(num_ports)]
-    result_queue = ctx.Queue()
+    job_queues = [queue.Queue() for _ in range(num_ports)]
+    result_queue = queue.Queue()
     workers = []
     for port in range(num_ports):
-        p = ctx.Process(
+        p = threading.Thread(
             target=port_download_worker,
             kwargs={
                 "port": port,
@@ -615,6 +594,7 @@ def main(callback=None, args=None, stop_event=None):
                 "stop_event": stop_evt,
                 "port_lock": locks[port],
             },
+            daemon=True,
         )
         p.start()
         workers.append(p)
@@ -692,12 +672,7 @@ def main(callback=None, args=None, stop_event=None):
                     continue
 
                 if result.get("ok"):
-                    shm = shared_memory.SharedMemory(name=result["shm_name"])
-                    try:
-                        data = np.ndarray(result["shape"], dtype=np.dtype(result["dtype"]), buffer=shm.buf).copy()
-                    finally:
-                        shm.close()
-                        shm.unlink()
+                    data = result["data"]
 
                     emit_snippet(
                         data,
