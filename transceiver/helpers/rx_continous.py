@@ -65,6 +65,9 @@ def parse_args(argv=None):
                    help="Snippet length in seconds.")
     p.add_argument("--snippet-interval", type=float, required=True,
                    help="How often to download snippets (seconds).")
+    p.add_argument("--allow-wrap-read", action="store_true",
+                   help="Allow snippet reads that cross the replay ring wrap boundary. "
+                        "Disabled by default, so only fully contiguous snippets are emitted.")
 
     # Safety / alignment
     p.add_argument("--guard-seconds", type=float, default=0.01,
@@ -394,7 +397,7 @@ def connect_radios(graph, replay, radio_chan_pairs, freqs, gains, antennas, rate
 # -----------------------------
 def compute_snip_ranges(base: int, ring_bytes: int, record_pos: int,
                         snippet_bytes: int, guard_bytes: int, align: int,
-                        wrapped: bool):
+                        wrapped: bool, allow_wrap_read: bool = False):
     """
     Compute one or two (offset,size) ranges that represent the last snippet_bytes
     ending at (record_pos - guard_bytes), with wrap-around inside [base, base+ring_bytes).
@@ -402,6 +405,8 @@ def compute_snip_ranges(base: int, ring_bytes: int, record_pos: int,
 
     IMPORTANT: Before the first record_restart(), we do NOT allow wrap reads
     because the end-of-ring does not contain the newest data yet.
+
+    If allow_wrap_read is False, wrap snippets are skipped even after wrapped=True.
     """
     end = record_pos - guard_bytes
     if end < base:
@@ -418,6 +423,9 @@ def compute_snip_ranges(base: int, ring_bytes: int, record_pos: int,
 
     # Before first restart: no wrap; only read when we have a full contiguous snippet
     if have < snippet_bytes and not wrapped:
+        return []
+
+    if have < snippet_bytes and not allow_wrap_read:
         return []
 
     if have >= snippet_bytes:
@@ -1050,9 +1058,28 @@ def main(callback=None, args=None, stop_event=None):
                         guard_bytes=guard_bytes,
                         align=align,
                         wrapped=wrapped,
+                        allow_wrap_read=args.allow_wrap_read,
                     )
 
                     if not ranges:
+                        if wrapped and not args.allow_wrap_read:
+                            wrap_ranges = compute_snip_ranges(
+                                base=base,
+                                ring_bytes=ring_bytes,
+                                record_pos=pos,
+                                snippet_bytes=snippet_bytes,
+                                guard_bytes=guard_bytes,
+                                align=align,
+                                wrapped=wrapped,
+                                allow_wrap_read=True,
+                            )
+                            if len(wrap_ranges) == 2:
+                                log(
+                                    f"[s{snip_idx:06d} ch{port}] skip due to wrap boundary "
+                                    f"(port={port} snip_idx={snip_idx} record_pos={pos})",
+                                    memory_only=args.memory_only,
+                                )
+                                continue
                         log(f"[s{snip_idx:06d} ch{port}] not enough data yet",
                             memory_only=args.memory_only)
                         continue
