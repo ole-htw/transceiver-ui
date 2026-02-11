@@ -43,7 +43,6 @@ from .helpers.correlation_utils import (
 from .helpers.path_cancellation import apply_path_cancellation
 from .helpers.number_parser import parse_number_expr
 from .helpers.plot_colors import PLOT_COLORS
-from .helpers.shared_memory_utils import SharedMemoryRegistry, open_shared_array
 from .tx_controller import TxController
 
 # --- suggestion helper -------------------------------------------------------
@@ -122,15 +121,37 @@ USE_SHARED_MEMORY = False
 SHM_SIZE_THRESHOLD_BYTES = 25 * 1024 * 1024  # 25 MB
 
 
-_SHM_REGISTRY = SharedMemoryRegistry()
+_SHM_REGISTRY: set[str] = set()
 
 
 def _create_shared_memory(size: int) -> shared_memory.SharedMemory:
-    return _SHM_REGISTRY.create(size)
+    """Create shared memory with tracking disabled when available."""
+    # Ownership rule: the creator unlinks shared memory; consumers only close it.
+    try:
+        shm = shared_memory.SharedMemory(create=True, size=size, track=False)  # type: ignore[call-arg]
+    except TypeError:
+        shm = shared_memory.SharedMemory(create=True, size=size)
+    _SHM_REGISTRY.add(shm.name)
+    return shm
 
 
 def _cleanup_shared_memory() -> None:
-    _SHM_REGISTRY.cleanup()
+    """Unlink any shared memory segments we created."""
+    if not _SHM_REGISTRY:
+        return
+    for shm_name in sorted(_SHM_REGISTRY):
+        try:
+            shm = shared_memory.SharedMemory(name=shm_name)
+        except (FileNotFoundError, OSError, ValueError):
+            continue
+        try:
+            shm.unlink()
+        except FileNotFoundError:
+            pass
+        finally:
+            with contextlib.suppress(Exception):
+                shm.close()
+    _SHM_REGISTRY.clear()
 
 
 def _configure_multiprocessing() -> None:
@@ -2671,7 +2692,7 @@ class TransceiverUI(ctk.CTk):
         self._tx_controller = None
         self._tx_output_capture: _FDCapture | None = None
         self._closing = False
-        self._cont_analysis_queue: queue.Queue[dict[str, object]] | None = None
+        self._cont_analysis_queue: queue.Queue[np.ndarray] | None = None
         self._cont_analysis_thread: threading.Thread | None = None
         self._cont_analysis_stop_event: threading.Event | None = None
         self._cont_ui_max_fps = CONTINUOUS_UI_MAX_FPS
@@ -6082,48 +6103,32 @@ class TransceiverUI(ctk.CTk):
         )
         self._cont_analysis_thread.start()
 
-    def _release_continuous_shm_payload(self, payload: dict[str, object]) -> None:
-        shm_name = payload.get("shm_name")
-        if not isinstance(shm_name, str) or not shm_name:
-            return
-        with contextlib.suppress(Exception):
-            shm = shared_memory.SharedMemory(name=shm_name)
-            shm.close()
-
     def _stop_continuous_analysis_worker(self) -> None:
         stop_event = self._cont_analysis_stop_event
         if stop_event is not None:
             stop_event.set()
         if self._cont_analysis_queue is not None:
             with contextlib.suppress(queue.Full):
-                self._cont_analysis_queue.put_nowait({"stop": True})
+                self._cont_analysis_queue.put_nowait(np.array([], dtype=np.complex64))
         worker = self._cont_analysis_thread
         if worker and worker.is_alive():
             worker.join(timeout=2)
-        if self._cont_analysis_queue is not None:
-            with contextlib.suppress(queue.Empty):
-                while True:
-                    payload = self._cont_analysis_queue.get_nowait()
-                    if isinstance(payload, dict):
-                        self._release_continuous_shm_payload(payload)
         self._cont_analysis_thread = None
         self._cont_analysis_queue = None
         self._cont_analysis_stop_event = None
 
-    def _enqueue_continuous_analysis_job(self, payload: dict[str, object]) -> None:
+    def _enqueue_continuous_analysis_job(self, data: np.ndarray) -> None:
         analysis_queue = self._cont_analysis_queue
         if analysis_queue is None:
-            self._release_continuous_shm_payload(payload)
+            return
+        payload = np.asarray(data)
+        if payload.size == 0:
             return
         if analysis_queue.full():
             with contextlib.suppress(queue.Empty):
-                dropped = analysis_queue.get_nowait()
-                if isinstance(dropped, dict):
-                    self._release_continuous_shm_payload(dropped)
-        try:
-            analysis_queue.put_nowait(payload)
-        except queue.Full:
-            self._release_continuous_shm_payload(payload)
+                analysis_queue.get_nowait()
+        with contextlib.suppress(queue.Full):
+            analysis_queue.put_nowait(np.array(payload, copy=True))
 
     def _run_continuous_analysis_worker(
         self,
@@ -6138,41 +6143,13 @@ class TransceiverUI(ctk.CTk):
         last_emit = 0.0
         while not stop_event.is_set():
             try:
-                payload = analysis_queue.get(timeout=0.2)
+                data = analysis_queue.get(timeout=0.2)
             except queue.Empty:
                 continue
-            if not isinstance(payload, dict):
+            if data.size == 0:
                 continue
-            if payload.get("stop"):
-                continue
-
-            shm_name = payload.get("shm_name")
-            shape = payload.get("shape")
-            dtype = payload.get("dtype")
-            if not isinstance(shm_name, str) or not isinstance(shape, tuple) or not isinstance(dtype, str):
-                continue
-
-            try:
-                shm, shm_view = open_shared_array(
-                    shm_name=shm_name,
-                    shape=shape,
-                    dtype=dtype,
-                )
-            except Exception:
-                continue
-
-            try:
-                reduced = _downsample_iq_for_preview(np.asarray(shm_view), CONTINUOUS_MAX_POINTS)
-                reduced = np.array(reduced, copy=True)
-            finally:
-                with contextlib.suppress(Exception):
-                    shm.close()
-
-            if reduced.size == 0:
-                continue
-
             compact_payload = _build_continuous_compact_payload(
-                reduced,
+                data,
                 rate,
                 tx_reference,
                 self.manual_xcorr_lags.copy(),
@@ -6498,24 +6475,9 @@ class TransceiverUI(ctk.CTk):
 
             args = rx_continous.parse_args(arg_list)
 
-            def _callback(
-                *,
-                shm_name: str,
-                shape: tuple[int, ...],
-                dtype: str,
-                snip_idx: int,
-                port: int,
-                **_info: object,
-            ) -> None:
-                self._enqueue_continuous_analysis_job(
-                    {
-                        "shm_name": shm_name,
-                        "shape": shape,
-                        "dtype": dtype,
-                        "snip_idx": snip_idx,
-                        "port": port,
-                    }
-                )
+            def _callback(*, data: np.ndarray, **_info: object) -> None:
+                if data.size:
+                    self._enqueue_continuous_analysis_job(data)
 
             rx_continous.main(callback=_callback, args=args, stop_event=stop_event)
         except Exception as exc:
