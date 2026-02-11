@@ -731,12 +731,16 @@ def main(callback=None, args=None, stop_event=None):
         workers.append(p)
 
     callback_dtype = np.complex64 if args.cpu_format == "fc32" else np.uint32
+    snippet_items = snippet_bytes // item_size
     shared_slots = None
     if args.memory_only and callback is not None:
         shared_slots = SharedSnippetSlots(
             num_ports=num_ports,
             slot_count=max(1, int(args.shm_slots)),
-            slot_nbytes=snippet_bytes,
+            # Replay stores snippets as sc16 bytes, but callback payload dtype can be
+            # larger (e.g., complex64 for fc32 host format). Size slots by item count
+            # and callback dtype to avoid truncated shared-memory views.
+            slot_nbytes=snippet_items * np.dtype(callback_dtype).itemsize,
             dtype=callback_dtype,
         )
 
