@@ -276,7 +276,8 @@ def recv_exact_1ch(rx_streamer, num_items: int, dtype, pkt_items: int):
 
 def play_and_download_chunk(replay, rx_streamer, port: int,
                             offset_bytes: int, size_bytes: int,
-                            item_size: int, dtype, pkt_items: int):
+                            item_size: int, dtype, pkt_items: int,
+                            replay_ctrl_lock: threading.Lock | None = None):
     """
     Configure Replay playback for (offset,size) on output port `port`,
     then download exactly that chunk through rx_streamer (1ch).
@@ -284,15 +285,20 @@ def play_and_download_chunk(replay, rx_streamer, port: int,
     if size_bytes <= 0:
         return np.empty((0,), dtype=dtype)
 
-    replay.config_play(offset_bytes, size_bytes, port)
-
     num_items = size_bytes // item_size
     stream_cmd = uhd.types.StreamCMD(uhd.types.StreamMode.num_done)
     stream_cmd.num_samps = num_items
     stream_cmd.stream_now = True
 
-    # Wichtig: Replay-Port steuern (nicht der Streamer)
-    replay.issue_stream_cmd(stream_cmd, port)
+    if replay_ctrl_lock is None:
+        replay.config_play(offset_bytes, size_bytes, port)
+        # Wichtig: Replay-Port steuern (nicht der Streamer)
+        replay.issue_stream_cmd(stream_cmd, port)
+    else:
+        with replay_ctrl_lock:
+            replay.config_play(offset_bytes, size_bytes, port)
+            # Wichtig: Replay-Port steuern (nicht der Streamer)
+            replay.issue_stream_cmd(stream_cmd, port)
 
     return recv_exact_1ch(rx_streamer, num_items, dtype, pkt_items)
 
@@ -306,19 +312,34 @@ def snippet_filename(prefix: str, snip_idx: int, port: int, use_numpy: bool):
 def record_monitor(stop_evt: threading.Event,
                    replay, port: int,
                    ring_bytes: int, restart_margin_bytes: int,
-                   lock: threading.Lock,
-                   wrapped_flags: list):
+                   wrapped_flags: list,
+                   state_lock: threading.Lock,
+                   replay_ctrl_lock: threading.Lock,
+                   restart_times: list,
+                   memory_only: bool):
     """
     Restart recording before the buffer fills to emulate ring-buffer overwrite.
-    Uses the same lock as snippet reads to avoid restarting mid-read.
+    Uses a short replay-control lock only around record_restart().
     """
     while not stop_evt.is_set():
         try:
             fullness = replay.get_record_fullness(port)
             if fullness >= ring_bytes - restart_margin_bytes:
-                with lock:
+                now_m = time.monotonic()
+                with replay_ctrl_lock:
                     replay.record_restart(port)
+                with state_lock:
                     wrapped_flags[port] = True
+                    prev_restart = restart_times[port]
+                    restart_times[port] = now_m
+                if prev_restart is None:
+                    log(f"[port {port}] record_restart() issued", memory_only=memory_only)
+                else:
+                    delta = now_m - prev_restart
+                    log(
+                        f"[port {port}] record_restart() issued, dt since last restart: {delta:.3f}s",
+                        memory_only=memory_only,
+                    )
 
             # Optional: pull RX async metadata (overruns etc.)
             while True:
@@ -485,12 +506,25 @@ def main(callback=None, args=None, stop_event=None):
 
     # Background record monitors (wrap before full)
     stop_evt = stop_event or threading.Event()
-    locks = [threading.Lock() for _ in range(num_ports)]
+    state_locks = [threading.Lock() for _ in range(num_ports)]
+    replay_ctrl_lock = threading.Lock()
+    restart_times = [None] * num_ports
     monitors = []
     for port in range(num_ports):
         t = threading.Thread(
             target=record_monitor,
-            args=(stop_evt, replay, port, ring_bytes, restart_margin_bytes, locks[port], wrapped_flags),
+            args=(
+                stop_evt,
+                replay,
+                port,
+                ring_bytes,
+                restart_margin_bytes,
+                wrapped_flags,
+                state_locks[port],
+                replay_ctrl_lock,
+                restart_times,
+                args.memory_only,
+            ),
             daemon=True,
         )
         t.start()
@@ -524,7 +558,7 @@ def main(callback=None, args=None, stop_event=None):
 
             ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             for port in range(num_ports):
-                with locks[port]:
+                with state_locks[port]:
                     pos = int(replay.get_record_position(port))
                     if last_positions[port] is not None and pos == last_positions[port]:
                         no_progress_counts[port] += 1
@@ -538,6 +572,7 @@ def main(callback=None, args=None, stop_event=None):
                     last_positions[port] = pos
                     no_progress_counts[port] = 0
                     base = base_offsets[port]
+                    wrapped = wrapped_flags[port]
 
                     ranges = compute_snip_ranges(
                         base=base,
@@ -546,7 +581,7 @@ def main(callback=None, args=None, stop_event=None):
                         snippet_bytes=snippet_bytes,
                         guard_bytes=guard_bytes,
                         align=align,
-                        wrapped=wrapped_flags[port],
+                        wrapped=wrapped,
                     )
 
                     if not ranges:
@@ -554,21 +589,29 @@ def main(callback=None, args=None, stop_event=None):
                             memory_only=args.memory_only)
                         continue
 
-                    parts = []
-                    for off, sz in ranges:
-                        parts.append(
-                            play_and_download_chunk(
-                                replay=replay,
-                                rx_streamer=rx_streamers[port],
-                                port=port,
-                                offset_bytes=off,
-                                size_bytes=sz,
-                                item_size=item_size,
-                                dtype=dtype,
-                                pkt_items=pkt_items[port],
-                            )
+                dl_start = time.monotonic()
+                parts = []
+                for off, sz in ranges:
+                    parts.append(
+                        play_and_download_chunk(
+                            replay=replay,
+                            rx_streamer=rx_streamers[port],
+                            port=port,
+                            offset_bytes=off,
+                            size_bytes=sz,
+                            item_size=item_size,
+                            dtype=dtype,
+                            pkt_items=pkt_items[port],
+                            replay_ctrl_lock=replay_ctrl_lock,
                         )
-                    data = np.concatenate(parts) if len(parts) > 1 else parts[0]
+                    )
+                data = np.concatenate(parts) if len(parts) > 1 else parts[0]
+                dl_dur = time.monotonic() - dl_start
+                log(
+                    f"[s{snip_idx:06d} ch{port}] snippet download duration: {dl_dur:.3f}s "
+                    f"({len(data)} items)",
+                    memory_only=args.memory_only,
+                )
 
                 emit_snippet(data, port=port, snip_idx=snip_idx, ts=ts,
                              args=args, callback=callback)
