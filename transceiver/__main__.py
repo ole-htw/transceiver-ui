@@ -2436,12 +2436,14 @@ def _plot_on_pg(
         )
         plot.plot(lags, mag, pen=pg.mkPen(colors["crosscorr"]), name=main_label)
         max_peak = float(np.max(mag)) if mag.size else 0.0
+        visible_peak_traces: list[tuple[np.ndarray, np.ndarray]] = [(lags, mag)]
         if crosscorr_compare is not None and crosscorr_compare.size:
             cc2 = _xcorr_fft(crosscorr_compare, ref_data)
             lags2 = np.arange(
                 -(len(ref_data) - 1), len(crosscorr_compare)
             ) * step_r
             mag2 = np.abs(cc2)
+            visible_peak_traces.append((lags2, mag2))
             plot.plot(
                 lags2,
                 mag2,
@@ -2659,6 +2661,7 @@ def _plot_on_pg(
         plot.setLabel("bottom", "Lag")
         plot.setLabel("left", "Magnitude")
         plot._crosscorr_peak = max_peak
+        plot._crosscorr_peak_traces = visible_peak_traces
     plot.showGrid(x=True, y=True)
 
 
@@ -2676,9 +2679,15 @@ def _crosscorr_dynamic_y_range(
     peak = float(max(0.0, peak))
     if y_max <= y_min:
         return (0.0, max(1.0, peak * (1.0 + headroom_ratio)))
-    visible_span = y_max - y_min
-    lower_trigger = y_min + visible_span * low_threshold
-    outside_visible = peak > y_max or peak < y_min
+    # In previews we expect a non-negative magnitude axis. If the view box
+    # drifts below zero (padding/manual zoom), evaluate the low-threshold trigger
+    # against an effective baseline at 0.0 to keep the trigger meaningful.
+    effective_min = max(0.0, y_min)
+    visible_span = y_max - effective_min
+    if visible_span <= 0.0:
+        return (0.0, max(1.0, peak * (1.0 + headroom_ratio)))
+    lower_trigger = effective_min + visible_span * low_threshold
+    outside_visible = peak > y_max or peak < effective_min
     too_low = peak < lower_trigger
     if not outside_visible and not too_low:
         return None
@@ -4874,6 +4883,21 @@ class TransceiverUI(ctk.CTk):
                 if zoom_range is not None:
                     plot_item.setXRange(*zoom_range, padding=0.0)
                 peak = getattr(plot_item, "_crosscorr_peak", None)
+                trace_data = getattr(plot_item, "_crosscorr_peak_traces", None)
+                if trace_data:
+                    current_x = plot_item.getViewBox().viewRange()[0]
+                    x_min, x_max = float(current_x[0]), float(current_x[1])
+                    visible_peak = None
+                    for lags_trace, mag_trace in trace_data:
+                        if lags_trace.size == 0 or mag_trace.size == 0:
+                            continue
+                        visible_mask = (lags_trace >= x_min) & (lags_trace <= x_max)
+                        if not np.any(visible_mask):
+                            continue
+                        trace_peak = float(np.max(mag_trace[visible_mask]))
+                        visible_peak = trace_peak if visible_peak is None else max(visible_peak, trace_peak)
+                    if visible_peak is not None:
+                        peak = visible_peak
                 if peak is not None:
                     current_y = plot_item.getViewBox().viewRange()[1]
                     y_range = _crosscorr_dynamic_y_range(
