@@ -134,6 +134,33 @@ XCORR_EXTRA_PEAK_COLORS = (
 )
 
 
+def _classify_visible_xcorr_peaks(
+    cc: np.ndarray,
+    *,
+    peaks_before: int = XCORR_EXTRA_PEAKS_BEFORE,
+    peaks_after: int = XCORR_EXTRA_PEAKS_AFTER,
+    min_rel_height: float = XCORR_EXTRA_PEAK_MIN_REL_HEIGHT,
+) -> tuple[int | None, int | None, list[int]]:
+    """Return (highest_idx, los_idx, echo_indices) from visible local maxima."""
+    mag = np.abs(cc)
+    if mag.size == 0:
+        return None, None, []
+
+    highest_idx = int(np.argmax(mag))
+    peak_indices = _find_local_maxima_around_peak(
+        cc,
+        center_idx=highest_idx,
+        peaks_before=peaks_before,
+        peaks_after=peaks_after,
+        min_rel_height=min_rel_height,
+    )
+    if not peak_indices:
+        peak_indices = [highest_idx]
+    los_idx = int(peak_indices[0])
+    echo_indices = [int(idx) for idx in peak_indices[1:]]
+    return highest_idx, los_idx, echo_indices
+
+
 _SHM_REGISTRY: set[str] = set()
 
 
@@ -2414,33 +2441,26 @@ def _plot_on_pg(
             legend = plot.addLegend()
         if legend is not None:
             legend.show()
-        base_los_idx, base_echo_idx = _find_los_echo(cc)
+        highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(cc)
         los_lags = lags
         los_mag = mag
         peak_source_cc = cc
+        peak_source_highest_idx = highest_idx
+        peak_source_los_idx = base_los_idx
+        peak_source_echo_indices = list(base_echo_indices)
         if crosscorr_compare is not None and crosscorr_compare.size:
-            base_los_idx, _ = _find_los_echo(cc2)
+            highest_idx2, los_idx2, echo_indices2 = _classify_visible_xcorr_peaks(cc2)
             los_lags = lags2
             los_mag = mag2
             peak_source_cc = cc2
-        los_idx, _ = _apply_manual_lags(
-            los_lags, base_los_idx, None, manual_lags
-        )
-        _, echo_idx = _apply_manual_lags(
-            lags, None, base_echo_idx, manual_lags
-        )
-        extra_peak_indices = _find_local_maxima_around_peak(
-            peak_source_cc,
-            center_idx=base_los_idx,
-            peaks_before=XCORR_EXTRA_PEAKS_BEFORE,
-            peaks_after=XCORR_EXTRA_PEAKS_AFTER,
-            min_rel_height=XCORR_EXTRA_PEAK_MIN_REL_HEIGHT,
-        )
-        extra_peak_indices = [
-            idx
-            for idx in extra_peak_indices
-            if idx != los_idx
-        ]
+            peak_source_highest_idx = highest_idx2
+            peak_source_los_idx = los_idx2
+            peak_source_echo_indices = list(echo_indices2)
+        los_idx, _ = _apply_manual_lags(los_lags, peak_source_los_idx, None, manual_lags)
+        echo_idx = peak_source_echo_indices[0] if peak_source_echo_indices else None
+        visible_peak_indices = [peak_source_los_idx] + list(peak_source_echo_indices)
+        if peak_source_los_idx is None:
+            visible_peak_indices = []
 
         echo_text = pg.TextItem(color=colors["text"], anchor=(0, 1))
 
@@ -2456,22 +2476,25 @@ def _plot_on_pg(
 
         def _update_echo_text() -> None:
             adj_los_idx, _ = _apply_manual_lags(
-                los_lags, base_los_idx, None, manual_lags
+                los_lags, peak_source_los_idx, None, manual_lags
             )
-            _, adj_echo_idx = _apply_manual_lags(
-                lags, None, base_echo_idx, manual_lags
-            )
+            adj_echo_indices = [idx for idx in peak_source_echo_indices if idx is not None]
             los_lag_value = _lag_value(los_lags, adj_los_idx)
-            echo_lag_value = _lag_value(lags, adj_echo_idx)
-            if los_lag_value is None or echo_lag_value is None:
-                delay = None
+            if los_lag_value is None or not adj_echo_indices:
+                echo_text.setText("LOS-Echos: --")
             else:
-                delay = int(round(abs(echo_lag_value - los_lag_value)))
-            if delay is None:
-                echo_text.setText("LOS-Echo: --")
-            else:
-                meters = delay * 1.5
-                echo_text.setText(f"LOS-Echo: {delay} samp ({meters:.1f} m)")
+                rows = []
+                for i, peak_idx in enumerate(adj_echo_indices, start=1):
+                    echo_lag_value = _lag_value(los_lags, peak_idx)
+                    if echo_lag_value is None:
+                        continue
+                    delay = int(round(abs(echo_lag_value - los_lag_value)))
+                    meters = delay * 1.5
+                    rows.append(f"Echo {i}: {delay} samp ({meters:.1f} m)")
+                if rows:
+                    echo_text.setText("LOS-Echos:\n" + "\n".join(rows))
+                else:
+                    echo_text.setText("LOS-Echos: --")
             _position_echo_text()
 
         def _wrap_drag(callback):
@@ -2507,11 +2530,21 @@ def _plot_on_pg(
             symbolBrush=pg.mkBrush(echo_color),
             symbolPen=pg.mkPen(echo_color),
         )
+        highest_legend = pg.PlotDataItem(
+            [],
+            [],
+            pen=None,
+            symbol="t",
+            symbolBrush=pg.mkBrush(colors["text"]),
+            symbolPen=pg.mkPen(colors["text"]),
+        )
         los_legend.setData([0], [0])
         echo_legend.setData([0], [0])
+        highest_legend.setData([0], [0])
+        legend.addItem(highest_legend, "Höchster Peak")
         legend.addItem(los_legend, "LOS")
-        legend.addItem(echo_legend, "Echo")
-        if extra_peak_indices:
+        legend.addItem(echo_legend, "Echo 1")
+        if visible_peak_indices:
             extra_legend = pg.PlotDataItem(
                 [],
                 [],
@@ -2521,9 +2554,22 @@ def _plot_on_pg(
                 symbolPen=pg.mkPen(XCORR_EXTRA_PEAK_COLORS[0]),
             )
             extra_legend.setData([0], [0])
-            legend.addItem(extra_legend, "weitere lokale Maxima")
+            legend.addItem(extra_legend, "lokale Maxima")
 
-        for color_idx, peak_idx in enumerate(extra_peak_indices):
+        if peak_source_highest_idx is not None:
+            plot.plot(
+                [los_lags[peak_source_highest_idx]],
+                [los_mag[peak_source_highest_idx]],
+                pen=None,
+                symbol="t",
+                symbolSize=10,
+                symbolBrush=pg.mkBrush(colors["text"]),
+                symbolPen=pg.mkPen(colors["text"]),
+            )
+
+        for color_idx, peak_idx in enumerate(visible_peak_indices):
+            if peak_idx == los_idx:
+                continue
             c = XCORR_EXTRA_PEAK_COLORS[color_idx % len(XCORR_EXTRA_PEAK_COLORS)]
             plot.plot(
                 [los_lags[peak_idx]],
@@ -2746,34 +2792,24 @@ def _plot_on_mpl(
                     label="ohne Pfad-Cancellation",
                 ),
             ]
-        base_los_idx, base_echo_idx = _find_los_echo(cc)
+        highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(cc)
         los_lags = lags
         los_mag = mag
-        peak_source_cc = cc
         if crosscorr_compare is not None and crosscorr_compare.size:
-            base_los_idx, _ = _find_los_echo(cc2)
+            highest_idx2, base_los_idx2, base_echo_indices2 = _classify_visible_xcorr_peaks(cc2)
+            highest_idx = highest_idx2
+            base_los_idx = base_los_idx2
+            base_echo_indices = base_echo_indices2
             los_lags = lags2
             los_mag = mag2
-            peak_source_cc = cc2
         los_idx, _ = _apply_manual_lags(
             los_lags, base_los_idx, None, manual_lags
         )
-        _, echo_idx = _apply_manual_lags(
-            lags, None, base_echo_idx, manual_lags
-        )
-        extra_peak_indices = _find_local_maxima_around_peak(
-            peak_source_cc,
-            center_idx=base_los_idx,
-            peaks_before=XCORR_EXTRA_PEAKS_BEFORE,
-            peaks_after=XCORR_EXTRA_PEAKS_AFTER,
-            min_rel_height=XCORR_EXTRA_PEAK_MIN_REL_HEIGHT,
-        )
-        extra_peak_indices = [
-            idx
-            for idx in extra_peak_indices
-            if idx != los_idx
-        ]
-        for color_idx, peak_idx in enumerate(extra_peak_indices):
+        echo_idx = base_echo_indices[0] if base_echo_indices else None
+        visible_peak_indices = [base_los_idx] + list(base_echo_indices) if base_los_idx is not None else []
+        for color_idx, peak_idx in enumerate(visible_peak_indices):
+            if peak_idx == los_idx:
+                continue
             c = XCORR_EXTRA_PEAK_COLORS[color_idx % len(XCORR_EXTRA_PEAK_COLORS)]
             ax.plot(
                 los_lags[peak_idx],
@@ -2782,6 +2818,14 @@ def _plot_on_mpl(
                 linestyle="",
                 color=c,
                 markersize=5,
+            )
+        if highest_idx is not None:
+            ax.plot(
+                los_lags[highest_idx],
+                los_mag[highest_idx],
+                marker="^",
+                linestyle="",
+                color=mpl_colors["text"],
             )
         if los_idx is not None:
             ax.plot(
@@ -2793,8 +2837,8 @@ def _plot_on_mpl(
             )
         if echo_idx is not None:
             ax.plot(
-                lags[echo_idx],
-                mag[echo_idx],
+                los_lags[echo_idx],
+                los_mag[echo_idx],
                 marker="o",
                 linestyle="",
                 color=mpl_colors["echo"],
@@ -4633,20 +4677,19 @@ class TransceiverUI(ctk.CTk):
                 lags = np.arange(
                     -(len(preview_ref) - 1), len(preview_data)
                 ) * step_r
-                base_los_idx, base_echo_idx = _find_los_echo(cc)
+                _highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(cc)
                 los_lags = lags
                 if compare is not None and compare.size:
                     cc2 = _xcorr_fft(compare, preview_ref)
                     lags2 = np.arange(
                         -(len(preview_ref) - 1), len(compare)
                     ) * step_r
-                    base_los_idx, _ = _find_los_echo(cc2)
+                    _highest_idx2, base_los_idx2, base_echo_indices2 = _classify_visible_xcorr_peaks(cc2)
+                    base_los_idx = base_los_idx2
+                    base_echo_indices = base_echo_indices2
                     los_lags = lags2
                 los_idx, _ = _apply_manual_lags(
                     los_lags, base_los_idx, None, manual_lags
-                )
-                _, echo_idx = _apply_manual_lags(
-                    lags, None, base_echo_idx, manual_lags
                 )
 
                 def _lag_value(source_lags: np.ndarray, idx: int | None) -> float | None:
@@ -4656,16 +4699,17 @@ class TransceiverUI(ctk.CTk):
                         source_lags[int(np.clip(idx, 0, len(source_lags) - 1))]
                     )
 
+                focus_lags = []
                 los_lag = _lag_value(los_lags, los_idx)
-                echo_lag = _lag_value(lags, echo_idx)
-                if los_lag is None and echo_lag is None:
+                if los_lag is not None:
+                    focus_lags.append(los_lag)
+                for idx in base_echo_indices:
+                    echo_lag = _lag_value(los_lags, idx)
+                    if echo_lag is not None:
+                        focus_lags.append(echo_lag)
+                if not focus_lags:
                     return None
-                if los_lag is None:
-                    center = echo_lag
-                elif echo_lag is None:
-                    center = los_lag
-                else:
-                    center = (los_lag + echo_lag) / 2.0
+                center = float(sum(focus_lags) / len(focus_lags))
                 return (
                     center - zoom_half_window,
                     center + zoom_half_window,
@@ -4699,7 +4743,7 @@ class TransceiverUI(ctk.CTk):
                 tabs_map = {
                     "Signal": ("Signal", "max Amp:"),
                     "Spectrum": ("Freq", "fmin/fmax:"),
-                    "X-Corr": ("Crosscorr", "LOS-Echo:"),
+                    "X-Corr": ("Crosscorr", "LOS-Echos:"),
                 }
                 tabview = ctk.CTkTabview(target_frame)
                 tabview.grid(row=0, column=0, sticky="nsew", pady=(2, 2))
