@@ -36,6 +36,7 @@ from .helpers import doa_esprit
 from .helpers.correlation_utils import (
     apply_manual_lags as _apply_manual_lags,
     autocorr_fft as _autocorr_fft,
+    find_local_maxima_around_peak as _find_local_maxima_around_peak,
     find_los_echo as _find_los_echo,
     lag_overlap as _lag_overlap,
     xcorr_fft as _xcorr_fft,
@@ -118,6 +119,18 @@ AUTOSAVE_INTERVAL = 5  # seconds
 # Arrays larger than this skip shared memory and use .npy + mmap in plot worker.
 USE_SHARED_MEMORY = False
 SHM_SIZE_THRESHOLD_BYTES = 25 * 1024 * 1024  # 25 MB
+XCORR_EXTRA_PEAKS_BEFORE = 4
+XCORR_EXTRA_PEAKS_AFTER = 4
+XCORR_EXTRA_PEAK_COLORS = (
+    "#FFB300",
+    "#8E24AA",
+    "#00ACC1",
+    "#F4511E",
+    "#43A047",
+    "#5E35B1",
+    "#FB8C00",
+    "#3949AB",
+)
 
 
 _SHM_REGISTRY: set[str] = set()
@@ -2403,16 +2416,29 @@ def _plot_on_pg(
         base_los_idx, base_echo_idx = _find_los_echo(cc)
         los_lags = lags
         los_mag = mag
+        peak_source_cc = cc
         if crosscorr_compare is not None and crosscorr_compare.size:
             base_los_idx, _ = _find_los_echo(cc2)
             los_lags = lags2
             los_mag = mag2
+            peak_source_cc = cc2
         los_idx, _ = _apply_manual_lags(
             los_lags, base_los_idx, None, manual_lags
         )
         _, echo_idx = _apply_manual_lags(
             lags, None, base_echo_idx, manual_lags
         )
+        extra_peak_indices = _find_local_maxima_around_peak(
+            peak_source_cc,
+            center_idx=base_los_idx,
+            peaks_before=XCORR_EXTRA_PEAKS_BEFORE,
+            peaks_after=XCORR_EXTRA_PEAKS_AFTER,
+        )
+        extra_peak_indices = [
+            idx
+            for idx in extra_peak_indices
+            if idx != los_idx
+        ]
 
         echo_text = pg.TextItem(color=colors["text"], anchor=(0, 1))
 
@@ -2483,6 +2509,29 @@ def _plot_on_pg(
         echo_legend.setData([0], [0])
         legend.addItem(los_legend, "LOS")
         legend.addItem(echo_legend, "Echo")
+        if extra_peak_indices:
+            extra_legend = pg.PlotDataItem(
+                [],
+                [],
+                pen=None,
+                symbol="o",
+                symbolBrush=pg.mkBrush(XCORR_EXTRA_PEAK_COLORS[0]),
+                symbolPen=pg.mkPen(XCORR_EXTRA_PEAK_COLORS[0]),
+            )
+            extra_legend.setData([0], [0])
+            legend.addItem(extra_legend, "weitere lokale Maxima")
+
+        for color_idx, peak_idx in enumerate(extra_peak_indices):
+            c = XCORR_EXTRA_PEAK_COLORS[color_idx % len(XCORR_EXTRA_PEAK_COLORS)]
+            plot.plot(
+                [los_lags[peak_idx]],
+                [los_mag[peak_idx]],
+                pen=None,
+                symbol="o",
+                symbolSize=8,
+                symbolBrush=pg.mkBrush(c),
+                symbolPen=pg.mkPen(c),
+            )
 
         los_drag_callback = _wrap_drag(on_los_drag)
         echo_drag_callback = _wrap_drag(on_echo_drag)
@@ -2698,16 +2747,39 @@ def _plot_on_mpl(
         base_los_idx, base_echo_idx = _find_los_echo(cc)
         los_lags = lags
         los_mag = mag
+        peak_source_cc = cc
         if crosscorr_compare is not None and crosscorr_compare.size:
             base_los_idx, _ = _find_los_echo(cc2)
             los_lags = lags2
             los_mag = mag2
+            peak_source_cc = cc2
         los_idx, _ = _apply_manual_lags(
             los_lags, base_los_idx, None, manual_lags
         )
         _, echo_idx = _apply_manual_lags(
             lags, None, base_echo_idx, manual_lags
         )
+        extra_peak_indices = _find_local_maxima_around_peak(
+            peak_source_cc,
+            center_idx=base_los_idx,
+            peaks_before=XCORR_EXTRA_PEAKS_BEFORE,
+            peaks_after=XCORR_EXTRA_PEAKS_AFTER,
+        )
+        extra_peak_indices = [
+            idx
+            for idx in extra_peak_indices
+            if idx != los_idx
+        ]
+        for color_idx, peak_idx in enumerate(extra_peak_indices):
+            c = XCORR_EXTRA_PEAK_COLORS[color_idx % len(XCORR_EXTRA_PEAK_COLORS)]
+            ax.plot(
+                los_lags[peak_idx],
+                los_mag[peak_idx],
+                marker="o",
+                linestyle="",
+                color=c,
+                markersize=5,
+            )
         if los_idx is not None:
             ax.plot(
                 los_lags[los_idx],
