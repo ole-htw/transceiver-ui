@@ -1454,34 +1454,6 @@ def _echo_delay_samples(
     return int(abs(lags[echo_idx] - lags[los_idx]))
 
 
-def _classify_xcorr_peaks(
-    cc: np.ndarray,
-    *,
-    peaks_before: int = XCORR_EXTRA_PEAKS_BEFORE,
-    peaks_after: int = XCORR_EXTRA_PEAKS_AFTER,
-    min_rel_height: float = XCORR_EXTRA_PEAK_MIN_REL_HEIGHT,
-) -> tuple[int | None, int | None, int | None, list[int], list[int]]:
-    """Return (highest, los, first_echo, local_maxima, echo_indices)."""
-    mag = np.abs(cc)
-    if mag.size == 0:
-        return None, None, None, [], []
-    highest_idx = int(np.argmax(mag))
-    local_maxima = _find_local_maxima_around_peak(
-        cc,
-        center_idx=highest_idx,
-        peaks_before=peaks_before,
-        peaks_after=peaks_after,
-        min_rel_height=min_rel_height,
-    )
-    ordered = sorted({int(i) for i in local_maxima})
-    if not ordered:
-        ordered = [highest_idx]
-    los_idx = ordered[0]
-    echoes = ordered[1:]
-    first_echo_idx = echoes[0] if echoes else None
-    return highest_idx, los_idx, first_echo_idx, ordered, echoes
-
-
 def _estimate_los_lag(
     data: np.ndarray,
     ref_data: np.ndarray,
@@ -1984,7 +1956,6 @@ def _calc_stats(
         "bw_rs": None,
         "amp": 0.0,
         "echo_delay": None,
-        "echo_delays": [],
     }
 
     if data.size == 0 or fs <= 0:
@@ -2028,31 +1999,17 @@ def _calc_stats(
             lags = (
                 np.arange(-(len(xcorr_ref) - 1), len(xcorr_data)) * xcorr_step
             )
-            _highest_idx, los_idx, echo_idx, _maxima, echo_indices = (
-                _classify_xcorr_peaks(cc)
+            los_idx, echo_idx = _find_los_echo(cc)
+            los_idx, echo_idx = _apply_manual_lags(
+                lags, los_idx, echo_idx, manual_lags
             )
-            los_idx, _ = _apply_manual_lags(lags, los_idx, None, manual_lags)
-            _, echo_idx = _apply_manual_lags(lags, None, echo_idx, manual_lags)
-            if echo_idx is not None:
-                echo_indices = [echo_idx] + [
-                    idx for idx in echo_indices if idx != echo_idx
-                ]
-            delays = [
-                _echo_delay_samples(lags, los_idx, idx)
-                for idx in echo_indices
-            ]
-            stats["echo_delays"] = [d for d in delays if d is not None]
-            stats["echo_delay"] = (
-                stats["echo_delays"][0] if stats["echo_delays"] else None
-            )
+            stats["echo_delay"] = _echo_delay_samples(lags, los_idx, echo_idx)
         elif path_cancel_info is not None:
             if (
                 path_cancel_info.get("k0") is not None
                 and path_cancel_info.get("k1") is not None
             ):
                 stats["echo_delay"] = path_cancel_info.get("delta_k")
-                if stats["echo_delay"] is not None:
-                    stats["echo_delays"] = [int(stats["echo_delay"])]
 
     return stats
 
@@ -2076,30 +2033,25 @@ def _format_stats_rows(
             rows.append(("BW (Nyq)", f"{stats['bw_norm_nyq']:.3f}"))
         if stats.get("bw_rs") is not None:
             rows.append(("BW (Rs)", f"{stats['bw_rs']:.3f}×Rs"))
-    if include_echo:
-        echo_delays = stats.get("echo_delays") or []
-        for idx, delay in enumerate(echo_delays, start=1):
-            meters = delay * 1.5
-            rows.append((f"Echo {idx}", f"{delay} samp ({meters:.1f} m)"))
+    if include_echo and stats.get("echo_delay") is not None:
+        meters = stats["echo_delay"] * 1.5
+        rows.append(("LOS-Echo", f"{stats['echo_delay']} samp ({meters:.1f} m)"))
     return rows
 
 
 def _format_rx_stats_rows(stats: dict) -> list[tuple[str, str]]:
     """Return rows for RX stats with a fixed layout order."""
-    rows = [
+    echo_value = "--"
+    if stats.get("echo_delay") is not None:
+        meters = stats["echo_delay"] * 1.5
+        echo_value = f"{stats['echo_delay']} samp ({meters:.1f} m)"
+    return [
         ("fmin", _format_hz(stats["f_low"])),
         ("fmax", _format_hz(stats["f_high"])),
         ("max Amp", _format_amp(stats["amp"])),
+        ("LOS-Echo", echo_value),
         ("BW (3dB)", _format_hz(stats["bw"])),
     ]
-    echo_delays = stats.get("echo_delays") or []
-    if not echo_delays:
-        rows.append(("Echo 1", "--"))
-        return rows
-    for idx, delay in enumerate(echo_delays, start=1):
-        meters = delay * 1.5
-        rows.append((f"Echo {idx}", f"{delay} samp ({meters:.1f} m)"))
-    return rows
 
 
 def _format_stats_text(
@@ -2462,18 +2414,33 @@ def _plot_on_pg(
             legend = plot.addLegend()
         if legend is not None:
             legend.show()
-        base_peak_idx, base_los_idx, base_echo_idx, base_maxima, _base_echoes = _classify_xcorr_peaks(cc)
+        base_los_idx, base_echo_idx = _find_los_echo(cc)
         los_lags = lags
         los_mag = mag
         peak_source_cc = cc
         if crosscorr_compare is not None and crosscorr_compare.size:
-            base_peak_idx, base_los_idx, _base_echo_idx_cmp, base_maxima, _base_echoes = _classify_xcorr_peaks(cc2)
+            base_los_idx, _ = _find_los_echo(cc2)
             los_lags = lags2
             los_mag = mag2
             peak_source_cc = cc2
-        los_idx, _ = _apply_manual_lags(los_lags, base_los_idx, None, manual_lags)
-        _, echo_idx = _apply_manual_lags(lags, None, base_echo_idx, manual_lags)
-        extra_peak_indices = [idx for idx in base_maxima if idx not in (los_idx, base_peak_idx)]
+        los_idx, _ = _apply_manual_lags(
+            los_lags, base_los_idx, None, manual_lags
+        )
+        _, echo_idx = _apply_manual_lags(
+            lags, None, base_echo_idx, manual_lags
+        )
+        extra_peak_indices = _find_local_maxima_around_peak(
+            peak_source_cc,
+            center_idx=base_los_idx,
+            peaks_before=XCORR_EXTRA_PEAKS_BEFORE,
+            peaks_after=XCORR_EXTRA_PEAKS_AFTER,
+            min_rel_height=XCORR_EXTRA_PEAK_MIN_REL_HEIGHT,
+        )
+        extra_peak_indices = [
+            idx
+            for idx in extra_peak_indices
+            if idx != los_idx
+        ]
 
         echo_text = pg.TextItem(color=colors["text"], anchor=(0, 1))
 
@@ -2488,21 +2455,23 @@ def _plot_on_pg(
             echo_text.setPos(x_range[0], y_range[0])
 
         def _update_echo_text() -> None:
-            adj_los_idx, _ = _apply_manual_lags(los_lags, base_los_idx, None, manual_lags)
-            _, adj_echo_idx = _apply_manual_lags(lags, None, base_echo_idx, manual_lags)
+            adj_los_idx, _ = _apply_manual_lags(
+                los_lags, base_los_idx, None, manual_lags
+            )
+            _, adj_echo_idx = _apply_manual_lags(
+                lags, None, base_echo_idx, manual_lags
+            )
             los_lag_value = _lag_value(los_lags, adj_los_idx)
-            delays = []
-            if los_lag_value is not None:
-                echo_indices = [idx for idx in base_maxima if idx != adj_los_idx]
-                if adj_echo_idx is not None:
-                    echo_indices = [adj_echo_idx] + [idx for idx in echo_indices if idx != adj_echo_idx]
-                for i, idx in enumerate(echo_indices, start=1):
-                    lag_value = _lag_value(lags if idx == adj_echo_idx else los_lags, idx)
-                    if lag_value is None:
-                        continue
-                    d = int(round(abs(lag_value - los_lag_value)))
-                    delays.append(f"Echo {i}: {d} samp ({d * 1.5:.1f} m)")
-            echo_text.setText("\n".join(delays) if delays else "Echo 1: --")
+            echo_lag_value = _lag_value(lags, adj_echo_idx)
+            if los_lag_value is None or echo_lag_value is None:
+                delay = None
+            else:
+                delay = int(round(abs(echo_lag_value - los_lag_value)))
+            if delay is None:
+                echo_text.setText("LOS-Echo: --")
+            else:
+                meters = delay * 1.5
+                echo_text.setText(f"LOS-Echo: {delay} samp ({meters:.1f} m)")
             _position_echo_text()
 
         def _wrap_drag(callback):
@@ -2541,12 +2510,7 @@ def _plot_on_pg(
         los_legend.setData([0], [0])
         echo_legend.setData([0], [0])
         legend.addItem(los_legend, "LOS")
-        legend.addItem(echo_legend, "Echo 1")
-        if base_peak_idx is not None:
-            peak_legend = pg.PlotDataItem([], [], pen=None, symbol="o", symbolBrush=pg.mkBrush(colors["compare"]), symbolPen=pg.mkPen(colors["compare"]))
-            peak_legend.setData([0], [0])
-            legend.addItem(peak_legend, "Höchster Peak")
-            plot.plot([los_lags[base_peak_idx]], [los_mag[base_peak_idx]], pen=None, symbol="o", symbolSize=8, symbolBrush=pg.mkBrush(colors["compare"]), symbolPen=pg.mkPen(colors["compare"]))
+        legend.addItem(echo_legend, "Echo")
         if extra_peak_indices:
             extra_legend = pg.PlotDataItem(
                 [],
@@ -2782,18 +2746,33 @@ def _plot_on_mpl(
                     label="ohne Pfad-Cancellation",
                 ),
             ]
-        base_peak_idx, base_los_idx, base_echo_idx, base_maxima, _base_echoes = _classify_xcorr_peaks(cc)
+        base_los_idx, base_echo_idx = _find_los_echo(cc)
         los_lags = lags
         los_mag = mag
         peak_source_cc = cc
         if crosscorr_compare is not None and crosscorr_compare.size:
-            base_peak_idx, base_los_idx, _base_echo_idx_cmp, base_maxima, _base_echoes = _classify_xcorr_peaks(cc2)
+            base_los_idx, _ = _find_los_echo(cc2)
             los_lags = lags2
             los_mag = mag2
             peak_source_cc = cc2
-        los_idx, _ = _apply_manual_lags(los_lags, base_los_idx, None, manual_lags)
-        _, echo_idx = _apply_manual_lags(lags, None, base_echo_idx, manual_lags)
-        extra_peak_indices = [idx for idx in base_maxima if idx not in (los_idx, base_peak_idx)]
+        los_idx, _ = _apply_manual_lags(
+            los_lags, base_los_idx, None, manual_lags
+        )
+        _, echo_idx = _apply_manual_lags(
+            lags, None, base_echo_idx, manual_lags
+        )
+        extra_peak_indices = _find_local_maxima_around_peak(
+            peak_source_cc,
+            center_idx=base_los_idx,
+            peaks_before=XCORR_EXTRA_PEAKS_BEFORE,
+            peaks_after=XCORR_EXTRA_PEAKS_AFTER,
+            min_rel_height=XCORR_EXTRA_PEAK_MIN_REL_HEIGHT,
+        )
+        extra_peak_indices = [
+            idx
+            for idx in extra_peak_indices
+            if idx != los_idx
+        ]
         for color_idx, peak_idx in enumerate(extra_peak_indices):
             c = XCORR_EXTRA_PEAK_COLORS[color_idx % len(XCORR_EXTRA_PEAK_COLORS)]
             ax.plot(
@@ -2803,14 +2782,6 @@ def _plot_on_mpl(
                 linestyle="",
                 color=c,
                 markersize=5,
-            )
-        if base_peak_idx is not None:
-            ax.plot(
-                los_lags[base_peak_idx],
-                los_mag[base_peak_idx],
-                marker="o",
-                linestyle="",
-                color=mpl_colors["compare"],
             )
         if los_idx is not None:
             ax.plot(
@@ -4567,8 +4538,8 @@ class TransceiverUI(ctk.CTk):
             stats_frame.columnconfigure((0, 1, 2, 3, 4, 5), weight=1)
             value_labels: list[ctk.CTkLabel] = []
             for idx, (label, value) in enumerate(stats_rows):
-                row = idx // 3
-                col = (idx % 3) * 2
+                row = 0 if idx < 3 else 1
+                col = (idx if idx < 3 else idx - 3) * 2
                 ctk.CTkLabel(
                     stats_frame,
                     justify="right",
@@ -4662,14 +4633,14 @@ class TransceiverUI(ctk.CTk):
                 lags = np.arange(
                     -(len(preview_ref) - 1), len(preview_data)
                 ) * step_r
-                _base_peak_idx, base_los_idx, base_echo_idx, _base_maxima, _base_echoes = _classify_xcorr_peaks(cc)
+                base_los_idx, base_echo_idx = _find_los_echo(cc)
                 los_lags = lags
                 if compare is not None and compare.size:
                     cc2 = _xcorr_fft(compare, preview_ref)
                     lags2 = np.arange(
                         -(len(preview_ref) - 1), len(compare)
                     ) * step_r
-                    _base_peak_idx, base_los_idx, _cmp_echo_idx, _base_maxima, _base_echoes = _classify_xcorr_peaks(cc2)
+                    base_los_idx, _ = _find_los_echo(cc2)
                     los_lags = lags2
                 los_idx, _ = _apply_manual_lags(
                     los_lags, base_los_idx, None, manual_lags
@@ -4728,7 +4699,7 @@ class TransceiverUI(ctk.CTk):
                 tabs_map = {
                     "Signal": ("Signal", "max Amp:"),
                     "Spectrum": ("Freq", "fmin/fmax:"),
-                    "X-Corr": ("Crosscorr", "Echos:"),
+                    "X-Corr": ("Crosscorr", "LOS-Echo:"),
                 }
                 tabview = ctk.CTkTabview(target_frame)
                 tabview.grid(row=0, column=0, sticky="nsew", pady=(2, 2))
@@ -4868,14 +4839,11 @@ class TransceiverUI(ctk.CTk):
             elif mode == "Signal":
                 value = _format_amp(stats['amp'])
             else:
-                echo_delays = stats.get("echo_delays") or []
-                if echo_delays:
-                    value = "\n".join(
-                        f"Echo {idx}: {delay} samp ({delay * 1.5:.1f} m)"
-                        for idx, delay in enumerate(echo_delays, start=1)
-                    )
-                else:
-                    value = "Echo 1: --"
+                echo_value = "--"
+                if stats.get("echo_delay") is not None:
+                    meters = stats["echo_delay"] * 1.5
+                    echo_value = f"{stats['echo_delay']} samp ({meters:.1f} m)"
+                value = echo_value
             value_label = stats_labels.get(mode)
             if value_label is not None:
                 value_label.configure(text=value)
