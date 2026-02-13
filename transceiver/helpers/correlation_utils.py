@@ -55,6 +55,37 @@ def find_los_echo(cc: np.ndarray) -> tuple[int | None, int | None]:
     return los, echo
 
 
+def find_local_maxima_around_peak(
+    cc: np.ndarray,
+    center_idx: int | None = None,
+    *,
+    peaks_before: int = 3,
+    peaks_after: int = 3,
+) -> list[int]:
+    """Return local maxima indices around a center peak (before + after)."""
+    mag = np.abs(cc)
+    if mag.size < 3:
+        return []
+    if center_idx is None:
+        center_idx = int(np.argmax(mag))
+    center_idx = int(np.clip(center_idx, 0, mag.size - 1))
+
+    local_maxima = [
+        i
+        for i in range(1, mag.size - 1)
+        if mag[i] >= mag[i - 1] and mag[i] >= mag[i + 1]
+    ]
+    if not local_maxima:
+        return []
+
+    before = [i for i in local_maxima if i < center_idx]
+    after = [i for i in local_maxima if i > center_idx]
+
+    before_sel = before[-max(0, peaks_before) :]
+    after_sel = after[: max(0, peaks_after)]
+    return before_sel + [center_idx] + after_sel
+
+
 def lag_overlap(
     data_len: int, ref_len: int, lag: int
 ) -> tuple[int, int, int]:
