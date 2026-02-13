@@ -79,7 +79,9 @@ def find_local_maxima_around_peak(
     # the selected LOS peak.
     left_bound = 0
     right_bound = mag.size - 1
-    strong_peak_min_height = 0.6 * center_mag
+    # Only very dominant neighbours should clip the search window. A lower
+    # threshold can suppress valid echoes around the selected LOS peak.
+    strong_peak_min_height = 0.9 * center_mag
     strong_peaks = [
         i
         for i in range(1, mag.size - 1)
