@@ -74,9 +74,33 @@ def find_local_maxima_around_peak(
     center_mag = float(mag[center_idx])
     min_height = max(0.0, float(min_rel_height)) * center_mag
 
-    local_maxima = [
+    # Constrain the search window to the lobe of ``center_idx``. Otherwise,
+    # side-lobes of another strong LOS peak can be incorrectly attributed to
+    # the selected LOS peak.
+    left_bound = 0
+    right_bound = mag.size - 1
+    strong_peak_min_height = 0.6 * center_mag
+    strong_peaks = [
         i
         for i in range(1, mag.size - 1)
+        if (
+            i != center_idx
+            and mag[i] >= mag[i - 1]
+            and mag[i] >= mag[i + 1]
+            and mag[i] >= strong_peak_min_height
+        )
+    ]
+    left_strong = max((i for i in strong_peaks if i < center_idx), default=None)
+    right_strong = min((i for i in strong_peaks if i > center_idx), default=None)
+
+    if left_strong is not None and left_strong + 1 < center_idx:
+        left_bound = left_strong + int(np.argmin(mag[left_strong : center_idx + 1]))
+    if right_strong is not None and center_idx + 1 < right_strong:
+        right_bound = center_idx + int(np.argmin(mag[center_idx : right_strong + 1]))
+
+    local_maxima = [
+        i
+        for i in range(max(1, left_bound), min(mag.size - 1, right_bound + 1))
         if (
             mag[i] >= mag[i - 1]
             and mag[i] >= mag[i + 1]
