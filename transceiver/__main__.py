@@ -121,6 +121,7 @@ USE_SHARED_MEMORY = False
 SHM_SIZE_THRESHOLD_BYTES = 25 * 1024 * 1024  # 25 MB
 XCORR_EXTRA_PEAKS_BEFORE = 4
 XCORR_EXTRA_PEAKS_AFTER = 4
+XCORR_EXTRA_PEAK_MIN_REL_HEIGHT = 0.1
 XCORR_EXTRA_PEAK_COLORS = (
     "#FFB300",
     "#8E24AA",
@@ -2433,6 +2434,7 @@ def _plot_on_pg(
             center_idx=base_los_idx,
             peaks_before=XCORR_EXTRA_PEAKS_BEFORE,
             peaks_after=XCORR_EXTRA_PEAKS_AFTER,
+            min_rel_height=XCORR_EXTRA_PEAK_MIN_REL_HEIGHT,
         )
         extra_peak_indices = [
             idx
@@ -2764,6 +2766,7 @@ def _plot_on_mpl(
             center_idx=base_los_idx,
             peaks_before=XCORR_EXTRA_PEAKS_BEFORE,
             peaks_after=XCORR_EXTRA_PEAKS_AFTER,
+            min_rel_height=XCORR_EXTRA_PEAK_MIN_REL_HEIGHT,
         )
         extra_peak_indices = [
             idx

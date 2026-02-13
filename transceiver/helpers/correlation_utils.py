@@ -61,6 +61,7 @@ def find_local_maxima_around_peak(
     *,
     peaks_before: int = 3,
     peaks_after: int = 3,
+    min_rel_height: float = 0.1,
 ) -> list[int]:
     """Return local maxima indices around a center peak (before + after)."""
     mag = np.abs(cc)
@@ -70,10 +71,17 @@ def find_local_maxima_around_peak(
         center_idx = int(np.argmax(mag))
     center_idx = int(np.clip(center_idx, 0, mag.size - 1))
 
+    center_mag = float(mag[center_idx])
+    min_height = max(0.0, float(min_rel_height)) * center_mag
+
     local_maxima = [
         i
         for i in range(1, mag.size - 1)
-        if mag[i] >= mag[i - 1] and mag[i] >= mag[i + 1]
+        if (
+            mag[i] >= mag[i - 1]
+            and mag[i] >= mag[i + 1]
+            and mag[i] >= min_height
+        )
     ]
     if not local_maxima:
         return []
