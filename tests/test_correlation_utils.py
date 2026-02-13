@@ -27,3 +27,20 @@ def test_local_maxima_are_limited_to_selected_los_lobe() -> None:
     assert right_center in maxima
     assert all(idx > 700 for idx in maxima)
     assert left_center not in maxima
+
+
+def test_local_maxima_keep_visible_echoes_for_lower_secondary_peak() -> None:
+    mag = np.zeros(200, dtype=float)
+    mag[80] = 1.0
+    mag[120] = 0.7
+    cc = mag.astype(np.complex128)
+
+    maxima = find_local_maxima_around_peak(
+        cc,
+        center_idx=80,
+        peaks_before=0,
+        peaks_after=2,
+        min_rel_height=0.1,
+    )
+
+    assert maxima == [80, 120]
