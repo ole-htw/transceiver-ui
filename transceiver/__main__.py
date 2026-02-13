@@ -1472,6 +1472,19 @@ def _add_draggable_markers(
     return los_marker, echo_marker
 
 
+def _crosscorr_peak_labels(
+    los_idx: int | None,
+    echo_indices: list[int],
+) -> dict[int, str]:
+    """Return labels for visible cross-correlation peak markers."""
+    labels: dict[int, str] = {}
+    if los_idx is not None:
+        labels[int(los_idx)] = "LOS"
+    for number, idx in enumerate(echo_indices, start=1):
+        labels[int(idx)] = str(number)
+    return labels
+
+
 def _echo_delay_samples(
     lags: np.ndarray, los_idx: int | None, echo_idx: int | None
 ) -> int | None:
@@ -2567,6 +2580,8 @@ def _plot_on_pg(
                 symbolPen=pg.mkPen(colors["text"]),
             )
 
+        peak_labels = _crosscorr_peak_labels(los_idx, peak_source_echo_indices)
+
         for color_idx, peak_idx in enumerate(visible_peak_indices):
             if peak_idx == los_idx:
                 continue
@@ -2580,6 +2595,16 @@ def _plot_on_pg(
                 symbolBrush=pg.mkBrush(c),
                 symbolPen=pg.mkPen(c),
             )
+            label_text = peak_labels.get(int(peak_idx))
+            if label_text is not None:
+                label_item = pg.TextItem(label_text, color=colors["text"], anchor=(0, 1))
+                label_item.setPos(float(los_lags[peak_idx]), float(los_mag[peak_idx]))
+                plot.addItem(label_item)
+
+        if los_idx is not None:
+            los_label_item = pg.TextItem("LOS", color=colors["text"], anchor=(0, 1))
+            los_label_item.setPos(float(los_lags[los_idx]), float(los_mag[los_idx]))
+            plot.addItem(los_label_item)
 
         los_drag_callback = _wrap_drag(on_los_drag)
         echo_drag_callback = _wrap_drag(on_echo_drag)
@@ -2807,6 +2832,8 @@ def _plot_on_mpl(
         )
         echo_idx = base_echo_indices[0] if base_echo_indices else None
         visible_peak_indices = [base_los_idx] + list(base_echo_indices) if base_los_idx is not None else []
+        peak_labels = _crosscorr_peak_labels(los_idx, base_echo_indices)
+
         for color_idx, peak_idx in enumerate(visible_peak_indices):
             if peak_idx == los_idx:
                 continue
@@ -2819,6 +2846,16 @@ def _plot_on_mpl(
                 color=c,
                 markersize=5,
             )
+            label_text = peak_labels.get(int(peak_idx))
+            if label_text is not None:
+                ax.annotate(
+                    label_text,
+                    (los_lags[peak_idx], los_mag[peak_idx]),
+                    textcoords="offset points",
+                    xytext=(5, 5),
+                    color=mpl_colors["text"],
+                    fontsize=8,
+                )
         if highest_idx is not None:
             ax.plot(
                 los_lags[highest_idx],
@@ -2834,6 +2871,14 @@ def _plot_on_mpl(
                 marker="o",
                 linestyle="",
                 color=mpl_colors["los"],
+            )
+            ax.annotate(
+                "LOS",
+                (los_lags[los_idx], los_mag[los_idx]),
+                textcoords="offset points",
+                xytext=(5, 5),
+                color=mpl_colors["text"],
+                fontsize=8,
             )
         if echo_idx is not None:
             ax.plot(
