@@ -37,21 +37,23 @@ def autocorr_fft(x: np.ndarray) -> np.ndarray:
 
 
 def find_los_echo(cc: np.ndarray) -> tuple[int | None, int | None]:
-    """Return indices of the LOS peak and the first echo in ``cc``."""
+    """Return LOS and first echo from local maxima around the highest peak."""
     mag = np.abs(cc)
     if mag.size == 0:
         return None, None
 
-    los = int(np.argmax(mag))
-    echo = None
-    for i in range(los + 1, len(mag) - 1):
-        if mag[i] >= mag[i - 1] and mag[i] >= mag[i + 1]:
-            echo = int(i)
-            break
+    local_maxima = [
+        i
+        for i in range(1, len(mag) - 1)
+        if mag[i] >= mag[i - 1] and mag[i] >= mag[i + 1]
+    ]
+    if not local_maxima:
+        peak = int(np.argmax(mag))
+        return peak, None
 
-    if echo is None and los + 1 < len(mag):
-        echo = int(np.argmax(mag[los + 1 :]) + los + 1)
-
+    local_maxima.sort()
+    los = int(local_maxima[0])
+    echo = int(local_maxima[1]) if len(local_maxima) > 1 else None
     return los, echo
 
 
