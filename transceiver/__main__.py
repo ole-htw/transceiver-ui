@@ -4588,6 +4588,7 @@ class TransceiverUI(ctk.CTk):
         fs: float,
         reset_manual: bool = True,
         target_tab: str | None = None,
+        preprocessed: bool = False,
     ) -> None:
         """Render preview plots below the receive parameters."""
         if reset_manual:
@@ -4595,6 +4596,7 @@ class TransceiverUI(ctk.CTk):
         self.rx_stats_labels = []
         self.raw_rx_data = data
         self.latest_fs_raw = fs
+        skip_ui_preprocessing = bool(preprocessed and target_tab == "Continuous")
         if data.ndim == 2 and data.shape[0] >= 2:
             self.rx_channel_view_box.configure(state="normal")
             selection_label = self.rx_channel_view.get()
@@ -4602,11 +4604,14 @@ class TransceiverUI(ctk.CTk):
             self.rx_channel_view.set("Kanal 1")
             self.rx_channel_view_box.configure(state="disabled")
             selection_label = ""
-        data, channel_label = self._select_rx_display_data(data)
+        if skip_ui_preprocessing:
+            channel_label = ""
+        else:
+            data, channel_label = self._select_rx_display_data(data)
         if selection_label and not channel_label:
             channel_label = selection_label
         self.range_slider.set_data(data)
-        if self.trim_var.get():
+        if self.trim_var.get() and not skip_ui_preprocessing:
             data = self._trim_data(data)
 
         def _load_tx_samples(path: str) -> np.ndarray:
@@ -4622,7 +4627,7 @@ class TransceiverUI(ctk.CTk):
         except Exception:
             self.tx_data = np.array([], dtype=np.complex64)
         ref_data, ref_label = self._get_crosscorr_reference()
-        if self.rx_magnitude_enable.get():
+        if self.rx_magnitude_enable.get() and not skip_ui_preprocessing:
             data = np.abs(data)
             ref_data = np.abs(ref_data)
         data_uncanceled = data
@@ -4632,7 +4637,11 @@ class TransceiverUI(ctk.CTk):
         aoa_raw_data = None
         aoa_time = None
         aoa_series = None
-        if self.raw_rx_data.ndim == 2 and self.raw_rx_data.shape[0] >= 2:
+        if (
+            self.raw_rx_data.ndim == 2
+            and self.raw_rx_data.shape[0] >= 2
+            and not skip_ui_preprocessing
+        ):
             aoa_raw_data = self.raw_rx_data[:2]
             if self.trim_var.get():
                 aoa_raw_data = self._trim_data_multichannel(aoa_raw_data)
@@ -4697,7 +4706,7 @@ class TransceiverUI(ctk.CTk):
             echo_aoa_text = "Echo AoA: TX-Daten erforderlich"
 
         cancel_info: dict[str, object] | None = None
-        if self.rx_path_cancel_enable.get():
+        if self.rx_path_cancel_enable.get() and not skip_ui_preprocessing:
             data, cancel_info = self._apply_path_cancellation(data, ref_data)
             if cancel_info is not None:
                 self._log_path_cancellation(cancel_info, "RX")
@@ -6757,7 +6766,13 @@ class TransceiverUI(ctk.CTk):
         frame_ts = float(payload.get('frame_ts', time.monotonic()))
         self._cont_last_end_to_end_ms = (time.monotonic() - frame_ts) * 1000.0
 
-        self._display_rx_plots(plot_data, fs, reset_manual=False, target_tab='Continuous')
+        self._display_rx_plots(
+            plot_data,
+            fs,
+            reset_manual=False,
+            target_tab='Continuous',
+            preprocessed=bool(payload.get('preprocessed', False)),
+        )
 
         if hasattr(self, 'rx_aoa_label'):
             self.rx_aoa_label.configure(text=str(payload.get('aoa_text', 'AoA (ESPRIT): --')))

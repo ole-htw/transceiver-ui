@@ -236,6 +236,7 @@ def continuous_processing_worker(
                 "frame_ts": float(task.get("frame_ts", started)),
                 "fs": fs,
                 "plot_data": plot_data,
+                "preprocessed": True,
                 "aoa_text": aoa_text,
                 "echo_aoa_text": echo_aoa_text,
                 "aoa_series": aoa_series_plot,
