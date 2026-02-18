@@ -120,6 +120,11 @@ def rfnoc_dram_rx(args):
     for (radio, radio_chan), ddc_info in zip(
         dram.radio_chan_pairs, dram.ddc_chan_pairs
     ):
+        radio.set_rx_antenna("TX/RX", radio_chan)
+        print(
+            f"RX antenna for channel {radio_chan}: {radio.get_rx_antenna(radio_chan)}",
+            file=sys.stderr,
+        )
         radio.set_rx_frequency(args.freq, radio_chan)
         radio.set_rx_gain(args.gain, radio_chan)
         if ddc_info:
