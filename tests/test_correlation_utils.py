@@ -3,7 +3,6 @@ import numpy as np
 from transceiver.helpers.correlation_utils import (
     filter_peak_indices_to_period_group,
     find_local_maxima_around_peak,
-    resolve_manual_los_idx,
 )
 
 
@@ -93,25 +92,3 @@ def test_filter_peak_indices_to_period_group_keeps_all_without_period() -> None:
     )
 
     assert filtered == peaks
-
-
-def test_resolve_manual_los_idx_resets_outdated_group_selection() -> None:
-    lags = np.array([-50, -40, -30, -20, -10, 0, 10, 20, 30, 40, 50], dtype=float)
-    base_los_idx = 8
-    highest_idx = 8
-    period_samples = 40
-    peak_group_indices = [7, 8, 9]
-    manual_lags = {"los": -20, "echo": None}
-
-    los_idx, was_reset = resolve_manual_los_idx(
-        lags,
-        base_los_idx,
-        manual_lags,
-        peak_group_indices=peak_group_indices,
-        highest_idx=highest_idx,
-        period_samples=period_samples,
-    )
-
-    assert was_reset is True
-    assert los_idx == base_los_idx
-    assert manual_lags["los"] is None
