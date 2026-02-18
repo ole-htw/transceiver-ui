@@ -64,14 +64,24 @@ def parse_args(argv=None):
     return args
 
 
-def ensure_uhd_frame_sizes(args_str, recv_frame_size=8000, send_frame_size=8000):
-    """Ensure recv/send frame sizes are present in UHD device args."""
+def ensure_uhd_frame_sizes(args_str, recv_frame_size=8000, send_frame_size=8000, num_recv_frames=256, num_send_frames=256):
+    """Ensure recv/send frame sizes and frame counts are present in UHD device args."""
     components = [part for part in args_str.split(",") if part]
-    if not any(part.startswith("recv_frame_size=") for part in components):
+
+    def _has(prefix):
+        return any(part.startswith(prefix) for part in components)
+
+    if not _has("recv_frame_size="):
         components.append(f"recv_frame_size={recv_frame_size}")
-    if not any(part.startswith("send_frame_size=") for part in components):
+    if not _has("send_frame_size="):
         components.append(f"send_frame_size={send_frame_size}")
+    if not _has("num_recv_frames="):
+        components.append(f"num_recv_frames={num_recv_frames}")
+    if not _has("num_send_frames="):
+        components.append(f"num_send_frames={num_send_frames}")
+
     return ",".join(components)
+
 
 
 def multi_usrp_rx(args):
@@ -82,14 +92,29 @@ def multi_usrp_rx(args):
     num_samps = int(np.ceil(args.duration * args.rate))
     if not isinstance(args.channels, list):
         args.channels = [args.channels]
-    samps = usrp.recv_num_samps(
-        num_samps, args.freq, args.rate, args.channels, args.gain
-    )
+
+    try:
+        samps = usrp.recv_num_samps(
+            num_samps, args.freq, args.rate, args.channels, args.gain
+        )
+    except Exception as e:
+        print(f"ERROR during recv_num_samps(): {e}", file=sys.stderr)
+        raise
+
+    # Log what we actually got
+    try:
+        got = samps.shape[-1]  # works for (ch, n) or (n,)
+    except Exception:
+        got = len(samps)
+
+    print(f"Captured {got} samples (requested {num_samps}).", file=sys.stderr)
+
     with open(args.output_file, "wb") as out_file:
         if args.numpy:
             np.save(out_file, samps, allow_pickle=False, fix_imports=False)
         else:
             samps.tofile(out_file)
+
 
 
 def rfnoc_dram_rx(args):
@@ -145,18 +170,45 @@ def rfnoc_dram_rx(args):
     ]
     dram.mem_regions = mem_regions
 
+    # Preallocate output, but do NOT assume recv() fills everything in one shot.
     data = np.zeros((len(radio_chans), num_samps), dtype=np.complex64)
+
+
     stream_cmd = StreamCMD(StreamMode.num_done)
     stream_cmd.stream_now = True
     stream_cmd.num_samps = num_samps
     dram.issue_stream_cmd(stream_cmd)
+
     rx_md = uhd.types.RXMetadata()
-    dram.recv(data, rx_md)
+
+    # One-shot recv into full buffer (DRAM receiver/replay path is not a normal streamer)
+    data = np.zeros((len(radio_chans), num_samps), dtype=np.complex64)
+
+    ret = dram.recv(data, rx_md)
+
+    # Metadata checks (print always for debugging)
+    print(f"RX md: error_code={getattr(rx_md, 'error_code', None)}, out_of_sequence={getattr(rx_md, 'out_of_sequence', None)}", file=sys.stderr)
+
+    if hasattr(rx_md, "error_code"):
+        if str(rx_md.error_code).lower().find("none") == -1 and str(rx_md.error_code) != "0":
+            print(f"RX metadata error: {rx_md.error_code}", file=sys.stderr)
+
+    # If ret is an int, it is the number of samples actually written.
+    if isinstance(ret, int):
+        pos = ret
+        data = data[:, :pos]
+    else:
+        pos = num_samps
+
+
     with open(args.output_file, "wb") as out_file:
         if args.numpy:
             np.save(out_file, data, allow_pickle=False, fix_imports=False)
         else:
             data.tofile(out_file)
+
+    print(f"Captured {pos} samples per channel (requested {num_samps}).", file=sys.stderr)
+
 
 
 def main(args=None):
