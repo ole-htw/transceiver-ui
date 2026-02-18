@@ -3973,6 +3973,7 @@ class TransceiverUI(ctk.CTk):
         self.rx_cont_gain.insert(0, "80")
         self.rx_cont_gain.grid(row=1, column=1, sticky="ew")
 
+
         ctk.CTkLabel(rx_cont_params_left, text="Restart margin (s)", anchor="e").grid(
             row=2, column=0, sticky="e", padx=label_padx
         )
