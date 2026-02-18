@@ -41,6 +41,7 @@ from .helpers.correlation_utils import (
     find_los_echo as _find_los_echo,
     filter_peak_indices_to_period_group as _filter_peak_indices_to_period_group,
     lag_overlap as _lag_overlap,
+    resolve_manual_los_idx as _resolve_manual_los_idx,
     xcorr_fft as _xcorr_fft,
 )
 from .helpers.path_cancellation import apply_path_cancellation
@@ -175,6 +176,26 @@ def _classify_visible_xcorr_peaks(
     los_idx = int(peak_indices[0])
     echo_indices = [int(idx) for idx in peak_indices[1:]]
     return highest_idx, los_idx, echo_indices
+
+
+def _current_peak_group_indices(
+    lags: np.ndarray,
+    peak_source_los_idx: int | None,
+    peak_source_echo_indices: list[int],
+    peak_source_highest_idx: int | None,
+    period_samples: int | None,
+) -> list[int]:
+    indices = [
+        idx
+        for idx in [peak_source_los_idx, *peak_source_echo_indices, peak_source_highest_idx]
+        if idx is not None
+    ]
+    return _filter_peak_indices_to_period_group(
+        lags,
+        indices,
+        peak_source_highest_idx,
+        period_samples,
+    )
 
 
 _SHM_REGISTRY: set[str] = set()
@@ -1524,7 +1545,22 @@ def _estimate_los_lag(
     cc = _xcorr_fft(data_red[:n], ref_red[:n])
     lags = np.arange(-n + 1, n) * step
     los_idx, _echo_idx = _find_los_echo(cc)
-    los_idx, _ = _apply_manual_lags(lags, los_idx, None, manual_lags)
+    period_samples = int(len(ref_red[:n]) * step)
+    current_peak_group = _current_peak_group_indices(
+        lags,
+        los_idx,
+        [],
+        los_idx,
+        period_samples,
+    )
+    los_idx, _ = _resolve_manual_los_idx(
+        lags,
+        los_idx,
+        manual_lags,
+        peak_group_indices=current_peak_group,
+        highest_idx=los_idx,
+        period_samples=period_samples,
+    )
     if los_idx is None:
         return None
     return int(lags[los_idx])
@@ -2058,8 +2094,24 @@ def _calc_stats(
                 np.arange(-(len(xcorr_ref) - 1), len(xcorr_data)) * xcorr_step
             )
             los_idx, echo_idx = _find_los_echo(cc)
-            los_idx, echo_idx = _apply_manual_lags(
-                lags, los_idx, echo_idx, manual_lags
+            period_samples = int(len(xcorr_ref) * xcorr_step)
+            current_peak_group = _current_peak_group_indices(
+                lags,
+                los_idx,
+                [echo_idx] if echo_idx is not None else [],
+                los_idx,
+                period_samples,
+            )
+            los_idx, _ = _resolve_manual_los_idx(
+                lags,
+                los_idx,
+                manual_lags,
+                peak_group_indices=current_peak_group,
+                highest_idx=los_idx,
+                period_samples=period_samples,
+            )
+            _, echo_idx = _apply_manual_lags(
+                lags, los_idx, echo_idx, {"los": None, "echo": manual_lags.get("echo") if manual_lags else None}
             )
             stats["echo_delay"] = _echo_delay_samples(lags, los_idx, echo_idx)
         elif path_cancel_info is not None:
@@ -2490,7 +2542,21 @@ def _plot_on_pg(
             peak_source_los_idx = los_idx2
             peak_source_echo_indices = list(echo_indices2)
         period_samples = int(len(ref_data) * step_r)
-        los_idx, _ = _apply_manual_lags(los_lags, peak_source_los_idx, None, manual_lags)
+        current_peak_group = _current_peak_group_indices(
+            los_lags,
+            peak_source_los_idx,
+            peak_source_echo_indices,
+            peak_source_highest_idx,
+            period_samples,
+        )
+        los_idx, _ = _resolve_manual_los_idx(
+            los_lags,
+            peak_source_los_idx,
+            manual_lags,
+            peak_group_indices=current_peak_group,
+            highest_idx=peak_source_highest_idx,
+            period_samples=period_samples,
+        )
 
         def _echo_indices_for_los(anchor_idx: int | None) -> list[int]:
             return _filter_peak_indices_to_period_group(
@@ -2519,8 +2585,13 @@ def _plot_on_pg(
             echo_text.setPos(x_range[0], y_range[0])
 
         def _update_echo_text() -> None:
-            adj_los_idx, _ = _apply_manual_lags(
-                los_lags, peak_source_los_idx, None, manual_lags
+            adj_los_idx, _ = _resolve_manual_los_idx(
+                los_lags,
+                peak_source_los_idx,
+                manual_lags,
+                peak_group_indices=current_peak_group,
+                highest_idx=peak_source_highest_idx,
+                period_samples=period_samples,
             )
             adj_echo_indices = _echo_indices_for_los(adj_los_idx)
             los_lag_value = _lag_value(los_lags, adj_los_idx)
@@ -2865,12 +2936,31 @@ def _plot_on_mpl(
             base_echo_indices = base_echo_indices2
             los_lags = lags2
             los_mag = mag2
-        los_idx, _ = _apply_manual_lags(
-            los_lags, base_los_idx, None, manual_lags
+        period_samples = int(len(ref_data) * step_r)
+        current_peak_group = _current_peak_group_indices(
+            los_lags,
+            base_los_idx,
+            list(base_echo_indices),
+            highest_idx,
+            period_samples,
         )
-        echo_idx = base_echo_indices[0] if base_echo_indices else None
-        visible_peak_indices = [base_los_idx] + list(base_echo_indices) if base_los_idx is not None else []
-        peak_labels = _crosscorr_peak_labels(los_idx, base_echo_indices)
+        los_idx, _ = _resolve_manual_los_idx(
+            los_lags,
+            base_los_idx,
+            manual_lags,
+            peak_group_indices=current_peak_group,
+            highest_idx=highest_idx,
+            period_samples=period_samples,
+        )
+        filtered_echo_indices = _filter_peak_indices_to_period_group(
+            los_lags,
+            [idx for idx in base_echo_indices if idx is not None],
+            los_idx,
+            period_samples,
+        )
+        echo_idx = filtered_echo_indices[0] if filtered_echo_indices else None
+        visible_peak_indices = [int(los_idx)] + filtered_echo_indices if los_idx is not None else []
+        peak_labels = _crosscorr_peak_labels(los_idx, filtered_echo_indices)
 
         for color_idx, peak_idx in enumerate(visible_peak_indices):
             if peak_idx == los_idx:
@@ -4790,19 +4880,39 @@ class TransceiverUI(ctk.CTk):
                 lags = np.arange(
                     -(len(preview_ref) - 1), len(preview_data)
                 ) * step_r
-                _highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(cc)
+                highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(cc)
                 los_lags = lags
                 if compare is not None and compare.size:
                     cc2 = _xcorr_fft(compare, preview_ref)
                     lags2 = np.arange(
                         -(len(preview_ref) - 1), len(compare)
                     ) * step_r
-                    _highest_idx2, base_los_idx2, base_echo_indices2 = _classify_visible_xcorr_peaks(cc2)
+                    highest_idx2, base_los_idx2, base_echo_indices2 = _classify_visible_xcorr_peaks(cc2)
+                    highest_idx = highest_idx2
                     base_los_idx = base_los_idx2
                     base_echo_indices = base_echo_indices2
                     los_lags = lags2
-                los_idx, _ = _apply_manual_lags(
-                    los_lags, base_los_idx, None, manual_lags
+                period_samples = int(len(preview_ref) * step_r)
+                current_peak_group = _current_peak_group_indices(
+                    los_lags,
+                    base_los_idx,
+                    list(base_echo_indices),
+                    highest_idx,
+                    period_samples,
+                )
+                los_idx, _ = _resolve_manual_los_idx(
+                    los_lags,
+                    base_los_idx,
+                    manual_lags,
+                    peak_group_indices=current_peak_group,
+                    highest_idx=highest_idx,
+                    period_samples=period_samples,
+                )
+                base_echo_indices = _filter_peak_indices_to_period_group(
+                    los_lags,
+                    [idx for idx in base_echo_indices if idx is not None],
+                    los_idx,
+                    period_samples,
                 )
 
                 def _lag_value(source_lags: np.ndarray, idx: int | None) -> float | None:
