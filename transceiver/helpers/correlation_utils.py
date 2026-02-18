@@ -62,6 +62,7 @@ def find_local_maxima_around_peak(
     peaks_before: int = 3,
     peaks_after: int = 3,
     min_rel_height: float = 0.1,
+    repetition_period_samples: int | None = None,
 ) -> list[int]:
     """Return local maxima indices around a center peak (before + after)."""
     mag = np.abs(cc)
@@ -74,31 +75,41 @@ def find_local_maxima_around_peak(
     center_mag = float(mag[center_idx])
     min_height = max(0.0, float(min_rel_height)) * center_mag
 
-    # Constrain the search window to the lobe of ``center_idx``. Otherwise,
-    # side-lobes of another strong LOS peak can be incorrectly attributed to
-    # the selected LOS peak.
-    left_bound = 0
-    right_bound = mag.size - 1
-    # Only very dominant neighbours should clip the search window. A lower
-    # threshold can suppress valid echoes around the selected LOS peak.
-    strong_peak_min_height = 0.9 * center_mag
-    strong_peaks = [
-        i
-        for i in range(1, mag.size - 1)
-        if (
-            i != center_idx
-            and mag[i] >= mag[i - 1]
-            and mag[i] >= mag[i + 1]
-            and mag[i] >= strong_peak_min_height
-        )
-    ]
-    left_strong = max((i for i in strong_peaks if i < center_idx), default=None)
-    right_strong = min((i for i in strong_peaks if i > center_idx), default=None)
+    if repetition_period_samples is not None and repetition_period_samples > 1:
+        half_period = max(1, int(round(repetition_period_samples / 2.0)))
+        left_bound = max(0, center_idx - half_period)
+        right_bound = min(mag.size - 1, center_idx + half_period)
+    else:
+        # Fallback segmentation: walk from the center outwards until a local
+        # minimum is reached on each side *and* a new dominant lobe is found
+        # after that minimum. This keeps weaker echoes in the current group.
+        left_bound = 0
+        right_bound = mag.size - 1
+        main_lobe_threshold = 0.8 * center_mag
 
-    if left_strong is not None and left_strong + 1 < center_idx:
-        left_bound = left_strong + int(np.argmin(mag[left_strong : center_idx + 1]))
-    if right_strong is not None and center_idx + 1 < right_strong:
-        right_bound = center_idx + int(np.argmin(mag[center_idx : right_strong + 1]))
+        for idx in range(center_idx - 1, 0, -1):
+            if mag[idx] <= mag[idx - 1] and mag[idx] <= mag[idx + 1]:
+                has_new_main_lobe = any(
+                    mag[j] >= mag[j - 1]
+                    and mag[j] >= mag[j + 1]
+                    and mag[j] >= main_lobe_threshold
+                    for j in range(idx - 1, 0, -1)
+                )
+                if has_new_main_lobe:
+                    left_bound = idx
+                    break
+
+        for idx in range(center_idx + 1, mag.size - 1):
+            if mag[idx] <= mag[idx - 1] and mag[idx] <= mag[idx + 1]:
+                has_new_main_lobe = any(
+                    mag[j] >= mag[j - 1]
+                    and mag[j] >= mag[j + 1]
+                    and mag[j] >= main_lobe_threshold
+                    for j in range(idx + 1, mag.size - 1)
+                )
+                if has_new_main_lobe:
+                    right_bound = idx
+                    break
 
     local_maxima = [
         i

@@ -49,6 +49,29 @@ def test_local_maxima_keep_visible_echoes_for_lower_secondary_peak() -> None:
     assert maxima == [80, 120]
 
 
+def test_local_maxima_do_not_include_adjacent_lower_group_when_period_known() -> None:
+    n = 1200
+    group_a_center = 420
+    group_b_center = 720
+    period = group_b_center - group_a_center
+
+    mag = _sinc_lobe(n, group_a_center, 0.65) + _sinc_lobe(n, group_b_center, 1.0)
+    cc = mag.astype(np.complex128)
+
+    maxima = find_local_maxima_around_peak(
+        cc,
+        center_idx=group_b_center,
+        peaks_before=6,
+        peaks_after=6,
+        min_rel_height=0.05,
+        repetition_period_samples=period,
+    )
+
+    assert group_b_center in maxima
+    assert all(abs(idx - group_b_center) <= period / 2 for idx in maxima)
+    assert all(abs(idx - group_a_center) > period / 2 for idx in maxima)
+
+
 def test_filter_peak_indices_to_period_group_removes_adjacent_repetition() -> None:
     lags = np.array([84000, 84500, 85000, 89500, 90000, 90500])
     peaks = [1, 2, 3, 4, 5]
