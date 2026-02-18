@@ -366,7 +366,7 @@ def connect_radios(graph, replay, radio_chan_pairs, freqs, gains, antennas, rate
         log(f"Connecting {radio.get_unique_id()}:{chan} -> {replay.get_unique_id()}:{replay_port_idx}",
             memory_only=memory_only)
 
-        antenna = "RX1"
+        antenna = "TX/RX"
         if antennas is not None:
             antenna = antennas[replay_port_idx % len(antennas)]
         radio.set_rx_antenna(antenna, chan)
