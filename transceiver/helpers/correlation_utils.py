@@ -163,63 +163,6 @@ def filter_peak_indices_to_period_group(
     return filtered
 
 
-def resolve_manual_los_idx(
-    lags: np.ndarray,
-    base_los_idx: int | None,
-    manual_lags: dict[str, int | None] | None,
-    *,
-    peak_group_indices: list[int] | None = None,
-    highest_idx: int | None = None,
-    period_samples: int | None = None,
-) -> tuple[int | None, bool]:
-    """Return LOS idx with optional validation against the active peak group.
-
-    When ``manual_lags['los']`` points outside the currently dominant
-    cross-correlation group, the manual LOS is ignored and ``manual_lags['los']``
-    is reset to ``None`` so subsequent frames snap back to the current group.
-    """
-    if lags.size == 0:
-        return base_los_idx, False
-    if manual_lags is None or manual_lags.get("los") is None:
-        return base_los_idx, False
-
-    manual_los = float(manual_lags["los"])
-    min_lag = float(lags.min())
-    max_lag = float(lags.max())
-    if manual_los < min_lag or manual_los > max_lag:
-        return base_los_idx, False
-
-    manual_idx = int(np.abs(lags - manual_los).argmin())
-    allow_manual = True
-
-    if peak_group_indices:
-        normalized = {
-            int(idx)
-            for idx in peak_group_indices
-            if 0 <= int(idx) < lags.size
-        }
-        if normalized and manual_idx not in normalized:
-            allow_manual = False
-
-    if (
-        allow_manual
-        and highest_idx is not None
-        and period_samples is not None
-        and period_samples > 1
-    ):
-        highest_idx = int(np.clip(highest_idx, 0, lags.size - 1))
-        highest_lag = float(lags[highest_idx])
-        half_period = float(period_samples) / 2.0
-        if abs(manual_los - highest_lag) > half_period:
-            allow_manual = False
-
-    if not allow_manual:
-        manual_lags["los"] = None
-        return base_los_idx, True
-
-    return manual_idx, False
-
-
 def lag_overlap(
     data_len: int, ref_len: int, lag: int
 ) -> tuple[int, int, int]:
