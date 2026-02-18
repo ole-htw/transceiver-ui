@@ -1,6 +1,9 @@
 import numpy as np
 
-from transceiver.helpers.correlation_utils import find_local_maxima_around_peak
+from transceiver.helpers.correlation_utils import (
+    filter_peak_indices_to_period_group,
+    find_local_maxima_around_peak,
+)
 
 
 def _sinc_lobe(length: int, center: int, amplitude: float) -> np.ndarray:
@@ -44,3 +47,25 @@ def test_local_maxima_keep_visible_echoes_for_lower_secondary_peak() -> None:
     )
 
     assert maxima == [80, 120]
+
+
+def test_filter_peak_indices_to_period_group_removes_adjacent_repetition() -> None:
+    lags = np.array([84000, 84500, 85000, 89500, 90000, 90500])
+    peaks = [1, 2, 3, 4, 5]
+
+    filtered = filter_peak_indices_to_period_group(
+        lags, peaks, anchor_idx=1, period_samples=5000
+    )
+
+    assert filtered == [1, 2]
+
+
+def test_filter_peak_indices_to_period_group_keeps_all_without_period() -> None:
+    lags = np.array([10, 20, 30])
+    peaks = [0, 1, 2]
+
+    filtered = filter_peak_indices_to_period_group(
+        lags, peaks, anchor_idx=1, period_samples=None
+    )
+
+    assert filtered == peaks

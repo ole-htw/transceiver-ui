@@ -120,6 +120,38 @@ def find_local_maxima_around_peak(
     return before_sel + [center_idx] + after_sel
 
 
+def filter_peak_indices_to_period_group(
+    lags: np.ndarray,
+    peak_indices: list[int],
+    anchor_idx: int | None,
+    period_samples: int | None,
+) -> list[int]:
+    """Keep only peaks that belong to the same repetition group as ``anchor_idx``.
+
+    With repeated TX sequences, cross-correlation maxima appear every
+    ``period_samples``. This helper keeps only the peak indices inside a
+    half-period window around the selected anchor lag, so marker points remain
+    on one peak group and do not jump between adjacent repetitions.
+    """
+    if anchor_idx is None or lags.size == 0:
+        return [int(i) for i in peak_indices]
+    if period_samples is None or period_samples <= 1:
+        return [int(i) for i in peak_indices]
+
+    anchor_idx = int(np.clip(anchor_idx, 0, lags.size - 1))
+    anchor_lag = float(lags[anchor_idx])
+    half_period = float(period_samples) / 2.0
+
+    filtered = []
+    for idx in peak_indices:
+        idx = int(idx)
+        if idx < 0 or idx >= lags.size:
+            continue
+        if abs(float(lags[idx]) - anchor_lag) <= half_period:
+            filtered.append(idx)
+    return filtered
+
+
 def lag_overlap(
     data_len: int, ref_len: int, lag: int
 ) -> tuple[int, int, int]:
