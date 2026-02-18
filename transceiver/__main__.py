@@ -38,6 +38,7 @@ from .helpers.correlation_utils import (
     autocorr_fft as _autocorr_fft,
     find_local_maxima_around_peak as _find_local_maxima_around_peak,
     find_los_echo as _find_los_echo,
+    filter_peak_indices_to_period_group as _filter_peak_indices_to_period_group,
     lag_overlap as _lag_overlap,
     xcorr_fft as _xcorr_fft,
 )
@@ -2471,11 +2472,22 @@ def _plot_on_pg(
             peak_source_highest_idx = highest_idx2
             peak_source_los_idx = los_idx2
             peak_source_echo_indices = list(echo_indices2)
+        period_samples = int(len(ref_data) * step_r)
         los_idx, _ = _apply_manual_lags(los_lags, peak_source_los_idx, None, manual_lags)
-        echo_idx = peak_source_echo_indices[0] if peak_source_echo_indices else None
-        visible_peak_indices = [peak_source_los_idx] + list(peak_source_echo_indices)
-        if peak_source_los_idx is None:
-            visible_peak_indices = []
+
+        def _echo_indices_for_los(anchor_idx: int | None) -> list[int]:
+            return _filter_peak_indices_to_period_group(
+                los_lags,
+                [idx for idx in peak_source_echo_indices if idx is not None],
+                anchor_idx,
+                period_samples,
+            )
+
+        filtered_echo_indices = _echo_indices_for_los(los_idx)
+        echo_idx = filtered_echo_indices[0] if filtered_echo_indices else None
+        visible_peak_indices = []
+        if los_idx is not None:
+            visible_peak_indices = [int(los_idx)] + filtered_echo_indices
 
         echo_text = pg.TextItem(color=colors["text"], anchor=(0, 1))
 
@@ -2493,7 +2505,7 @@ def _plot_on_pg(
             adj_los_idx, _ = _apply_manual_lags(
                 los_lags, peak_source_los_idx, None, manual_lags
             )
-            adj_echo_indices = [idx for idx in peak_source_echo_indices if idx is not None]
+            adj_echo_indices = _echo_indices_for_los(adj_los_idx)
             los_lag_value = _lag_value(los_lags, adj_los_idx)
             if los_lag_value is None or not adj_echo_indices:
                 echo_text.setText("LOS-Echos: --")
@@ -2582,7 +2594,7 @@ def _plot_on_pg(
                 symbolPen=pg.mkPen(colors["text"]),
             )
 
-        peak_labels = _crosscorr_peak_labels(los_idx, peak_source_echo_indices)
+        peak_labels = _crosscorr_peak_labels(los_idx, filtered_echo_indices)
 
         for color_idx, peak_idx in enumerate(visible_peak_indices):
             if peak_idx == los_idx:
