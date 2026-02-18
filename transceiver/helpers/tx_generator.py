@@ -24,6 +24,7 @@ geschrieben.
 
 import argparse
 import math
+from fractions import Fraction
 from typing import Optional
 from pathlib import Path
 from datetime import datetime
@@ -32,6 +33,10 @@ import numpy as np
 from scipy.signal import upfirdn
 
 from .iq_utils import complex_to_interleaved_int16
+
+
+MAX_OVERSAMPLING_DEN = 1024
+MAX_RESAMPLING_FACTOR_WARN = 4096
 
 
 # ---------- Hilfsfunktionen --------------------------------------------------
@@ -87,6 +92,12 @@ def _pretty(val: float) -> str:
     return f"{int(val)}"
 
 
+def _format_oversampling_token(val: float) -> str:
+    """Formatiert Oversampling für Dateinamen (z. B. 1.25 -> 1p25)."""
+    text = f"{val:.6f}".rstrip("0").rstrip(".")
+    return text.replace("-", "m").replace(".", "p")
+
+
 def generate_filename(args) -> Path:
     """Erzeuge einen Dateinamen basierend auf den Parametern."""
     parts = [args.waveform]
@@ -97,7 +108,7 @@ def generate_filename(args) -> Path:
     elif args.waveform == "zadoffchu":
         parts.append(f"q{args.q}")
         if args.oversampling != 1:
-            parts.append(f"os{args.oversampling}")
+            parts.append(f"os{_format_oversampling_token(args.oversampling)}")
     elif args.waveform == "chirp":
         parts.append(f"{_pretty(args.f0)}_{_pretty(args.f1)}")
     elif args.waveform == "ofdm_preamble":
@@ -113,7 +124,7 @@ def generate_filename(args) -> Path:
     if args.waveform == "zadoffchu":
         parts.append(f"Nsym{args.samples}")
         if args.oversampling != 1:
-            parts.append(f"Nsamp{args.samples * args.oversampling}")
+            parts.append(f"Nsamp{int(round(args.samples * args.oversampling))}")
     elif args.waveform == "ofdm_preamble":
         parts.append(f"N{args.samples}")
     else:
@@ -193,7 +204,7 @@ def generate_waveform(
     f1: Optional[float] = None,
     rrc_beta: float = 0.25,
     rrc_span: int = 6,
-    oversampling: int = 1,
+    oversampling: float = 1.0,
     ofdm_nfft: int = 64,
     ofdm_cp_len: int = 16,
     ofdm_active_subcarriers: int = 52,
@@ -216,7 +227,7 @@ def generate_waveform(
     if w != "ofdm_preamble" and N <= 0:
         raise ValueError("N muss > 0 sein.")
     if oversampling <= 0:
-        raise ValueError("oversampling muss >= 1 sein")
+        raise ValueError("oversampling muss > 0 sein")
 
     # ---------- Sinus ---------------------------------------------------------
     if w == "sinus":
@@ -274,8 +285,21 @@ def generate_waveform(
         else:
             symbols = np.exp(-1j * np.pi * q * n * (n + 1) / N).astype(np.complex64)
 
-        # Oversampling-Faktor entspricht "samples per symbol" für die Pulse-Shaping-Stufe
-        sps = int(oversampling)
+        oversampling_float = float(oversampling)
+        if np.isclose(oversampling_float, 1.0, atol=1e-9, rtol=0.0):
+            ratio = Fraction(1, 1)
+        else:
+            ratio = Fraction(oversampling_float).limit_denominator(MAX_OVERSAMPLING_DEN)
+        up = ratio.numerator
+        down = ratio.denominator
+        if up > MAX_RESAMPLING_FACTOR_WARN or down > MAX_RESAMPLING_FACTOR_WARN:
+            print(
+                "WARNUNG: Resampling-Verhältnis ist sehr groß "
+                f"(up/down={up}/{down})."
+            )
+
+        # RRC auf internem Upsampling-Grid designen, sps bleibt ganzzahlig.
+        sps = up
 
         if rrc_span > 0:
             h = rrc_coeffs(rrc_beta, rrc_span, sps=sps).astype(np.float32)
@@ -284,23 +308,12 @@ def generate_waveform(
             # Hinweis: Das ist *kein* "glattes" Interpolieren.
             h = np.array([1.0], dtype=np.float32)
 
-        if sps > 1:
-            # Upsampling + FIR in einem Schritt
-            y = upfirdn(h, symbols, up=sps).astype(np.complex64)
-
-            delay = (len(h) - 1) // 2
-            start = delay
-            stop = start + N * sps
-            y = y[start:stop]                      # schneidet direkt auf Zielbereich
-            y = _trim_to_length(y, N * sps).astype(np.complex64)
-            return y
-        else:
-            # Kein Oversampling -> einfach filtern (same-Länge)
-            if len(h) > 1:
-                y = np.convolve(symbols, h, mode="same").astype(np.complex64)
-            else:
-                y = symbols
-            return y
+        y = upfirdn(h, symbols, up=up, down=down).astype(np.complex64)
+        target_len = int(round(N * up / down))
+        delay = (len(h) - 1) // 2
+        delay_out = int(round(delay / down))
+        y = y[delay_out: delay_out + target_len]
+        return _trim_to_length(y, target_len).astype(np.complex64)
 
     # ---------- OFDM-Preamble -------------------------------------------------
     if w == "ofdm_preamble":
@@ -461,9 +474,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--oversampling",
-        type=int,
+        type=float,
         default=1,
-        help="Oversampling-Faktor nur für Zadoff-Chu (Standard: 1)",
+        help="Oversampling-Faktor nur für Zadoff-Chu (z. B. 1.25, Standard: 1)",
     )
 
     # OFDM-spezifisch
@@ -559,7 +572,7 @@ def main() -> None:
                 print(f"Info: samples={N_waveform} angepasst auf Primzahl {prime} für ZC.")
                 N_waveform = prime
 
-        N_output = N_waveform * max(1, int(args.oversampling))
+        N_output = int(round(N_waveform * float(args.oversampling)))
     elif args.waveform == "ofdm_preamble":
         N_output = (
             (args.ofdm_nfft + args.ofdm_cp)
