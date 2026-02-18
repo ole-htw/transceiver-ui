@@ -158,8 +158,16 @@ def _classify_visible_xcorr_peaks(
     )
     if not peak_indices:
         peak_indices = [highest_idx]
-    los_idx = int(peak_indices[0])
-    echo_indices = [int(idx) for idx in peak_indices[1:]]
+
+    # Stage 1: keep only peaks from the dominant group around the highest peak.
+    group_indices = sorted({int(idx) for idx in peak_indices})
+    if highest_idx not in group_indices:
+        group_indices.append(highest_idx)
+        group_indices.sort()
+
+    # Stage 2: classify based on lag-ordered group list.
+    los_idx = int(group_indices[0])
+    echo_indices = [int(idx) for idx in group_indices[1:]]
     return highest_idx, los_idx, echo_indices
 
 
@@ -1494,15 +1502,18 @@ def _add_draggable_markers(
     return los_marker, echo_marker
 
 
-def _crosscorr_peak_labels(
-    los_idx: int | None,
-    echo_indices: list[int],
-) -> dict[int, str]:
-    """Return labels for visible cross-correlation peak markers."""
+def _crosscorr_peak_labels(group_indices: list[int]) -> dict[int, str]:
+    """Return labels for visible cross-correlation peak markers.
+
+    ``group_indices`` is expected to be lag-sorted with LOS at index 0 and the
+    remaining entries representing Echo 1..N.
+    """
     labels: dict[int, str] = {}
-    if los_idx is not None:
-        labels[int(los_idx)] = "LOS"
-    for number, idx in enumerate(echo_indices, start=1):
+    if not group_indices:
+        return labels
+
+    labels[int(group_indices[0])] = "LOS"
+    for number, idx in enumerate(group_indices[1:], start=1):
         labels[int(idx)] = str(number)
     return labels
 
@@ -2550,10 +2561,11 @@ def _plot_on_pg(
             )
 
         filtered_echo_indices = _echo_indices_for_los(los_idx)
-        echo_idx = filtered_echo_indices[0] if filtered_echo_indices else None
-        visible_peak_indices = []
+        visible_group_indices = []
         if los_idx is not None:
-            visible_peak_indices = [int(los_idx)] + filtered_echo_indices
+            visible_group_indices = [int(los_idx), *filtered_echo_indices]
+        echo_idx = visible_group_indices[1] if len(visible_group_indices) > 1 else None
+        visible_peak_indices = list(visible_group_indices)
 
         echo_text = pg.TextItem(color=colors["text"], anchor=(0, 1))
 
@@ -2577,12 +2589,17 @@ def _plot_on_pg(
                 period_samples=period_samples,
             )
             adj_echo_indices = _echo_indices_for_los(adj_los_idx)
+            adj_group_indices = (
+                [int(adj_los_idx), *adj_echo_indices]
+                if adj_los_idx is not None
+                else []
+            )
             los_lag_value = _lag_value(los_lags, adj_los_idx)
-            if los_lag_value is None or not adj_echo_indices:
+            if los_lag_value is None or len(adj_group_indices) <= 1:
                 echo_text.setText("LOS-Echos: --")
             else:
                 rows = []
-                for i, peak_idx in enumerate(adj_echo_indices, start=1):
+                for i, peak_idx in enumerate(adj_group_indices[1:], start=1):
                     echo_lag_value = _lag_value(los_lags, peak_idx)
                     if echo_lag_value is None:
                         continue
@@ -2665,7 +2682,7 @@ def _plot_on_pg(
                 symbolPen=pg.mkPen(colors["text"]),
             )
 
-        peak_labels = _crosscorr_peak_labels(los_idx, filtered_echo_indices)
+        peak_labels = _crosscorr_peak_labels(visible_group_indices)
 
         for color_idx, peak_idx in enumerate(visible_peak_indices):
             if peak_idx == los_idx:
@@ -2942,8 +2959,9 @@ def _plot_on_mpl(
             period_samples,
         )
         echo_idx = filtered_echo_indices[0] if filtered_echo_indices else None
-        visible_peak_indices = [int(los_idx)] + filtered_echo_indices if los_idx is not None else []
-        peak_labels = _crosscorr_peak_labels(los_idx, filtered_echo_indices)
+        visible_group_indices = [int(los_idx), *filtered_echo_indices] if los_idx is not None else []
+        visible_peak_indices = list(visible_group_indices)
+        peak_labels = _crosscorr_peak_labels(visible_group_indices)
 
         for color_idx, peak_idx in enumerate(visible_peak_indices):
             if peak_idx == los_idx:
