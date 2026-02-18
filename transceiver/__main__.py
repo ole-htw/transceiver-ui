@@ -17,6 +17,7 @@ import math
 import contextlib
 import tempfile
 import os
+from fractions import Fraction
 from multiprocessing import shared_memory, Pipe, Process
 from pathlib import Path
 from datetime import datetime
@@ -134,6 +135,20 @@ XCORR_EXTRA_PEAK_COLORS = (
     "#FB8C00",
     "#3949AB",
 )
+MAX_OVERSAMPLING_DEN = 1024
+
+
+def _oversampling_ratio(oversampling: float) -> Fraction:
+    if oversampling <= 0:
+        raise ValueError("Oversampling muss > 0 sein.")
+    if math.isclose(oversampling, 1.0, rel_tol=0.0, abs_tol=1e-9):
+        return Fraction(1, 1)
+    return Fraction(oversampling).limit_denominator(MAX_OVERSAMPLING_DEN)
+
+
+def _format_oversampling_token(oversampling: float) -> str:
+    text = f"{oversampling:.6f}".rstrip("0").rstrip(".")
+    return text.replace("-", "m").replace(".", "p")
 
 
 def _classify_visible_xcorr_peaks(
@@ -1907,11 +1922,13 @@ def _gen_tx_filename(app) -> str:
     except Exception:
         samples = 0
     try:
-        oversampling = int(app.os_entry.get())
+        oversampling = parse_number_expr(app.os_entry.get())
+        if oversampling <= 0:
+            raise ValueError
     except Exception:
-        oversampling = 1
+        oversampling = 1.0
     if not getattr(app, "rrc_enable", tk.BooleanVar(value=False)).get():
-        oversampling = 1
+        oversampling = 1.0
 
     if w == "sinus":
         f = _try_parse_number_expr(app.f_entry.get(), default=0.0)
@@ -1924,7 +1941,7 @@ def _gen_tx_filename(app) -> str:
         q = app.q_entry.get() or "1"
         parts.append(f"q{q}")
         if oversampling != 1:
-            parts.append(f"os{oversampling}")
+            parts.append(f"os{_format_oversampling_token(oversampling)}")
     elif w == "chirp":
         f0 = _try_parse_number_expr(app.f_entry.get(), default=0.0)
         f1 = _try_parse_number_expr(app.f1_entry.get(), default=f0)
@@ -1951,7 +1968,7 @@ def _gen_tx_filename(app) -> str:
     if w == "zadoffchu":
         parts.append(f"Nsym{samples}")
         if oversampling != 1:
-            parts.append(f"Nsamp{samples * oversampling}")
+            parts.append(f"Nsamp{int(round(samples * oversampling))}")
     elif w == "ofdm_preamble":
         parts.append(f"N{samples}")
     else:
@@ -3393,10 +3410,21 @@ class TransceiverUI(ctk.CTk):
         self.os_entry.entry.bind(
             "<FocusOut>",
             lambda _e: (
+                self._update_oversampling_ratio_label(),
                 self.auto_update_tx_filename(),
                 self._reset_manual_xcorr_lags("Oversampling geändert"),
             ),
         )
+        self.os_entry.entry.bind(
+            "<KeyRelease>",
+            lambda _e: self._update_oversampling_ratio_label(),
+        )
+        self.os_ratio_label = ctk.CTkLabel(
+            filter_left,
+            text="Resampling: up/down = 1/1 (effektiv 1×)",
+            anchor="w",
+        )
+        self.os_ratio_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         if not self.rrc_enable.get():
             self.rrc_beta_entry.entry.configure(state="disabled")
@@ -4105,6 +4133,7 @@ class TransceiverUI(ctk.CTk):
             "Continuous": [],
         }
         self.update_waveform_fields()
+        self._update_oversampling_ratio_label()
         self.auto_update_tx_filename()
         self.auto_update_rx_filename()
         self.toggle_rate_sync(self.sync_var.get())
@@ -4192,8 +4221,25 @@ class TransceiverUI(ctk.CTk):
             self.pn_seed_label.grid(row=2, column=0, sticky="e", padx=self._label_padx)
             self.pn_seed_entry.grid(row=2, column=1, sticky="ew")
 
+        self._update_oversampling_ratio_label()
         self.auto_update_tx_filename()
         _apply_input_margins(self)
+
+    def _update_oversampling_ratio_label(self) -> None:
+        if not hasattr(self, "os_ratio_label"):
+            return
+        try:
+            oversampling = parse_number_expr(self.os_entry.get()) if self.os_entry.get() else 1.0
+            ratio = _oversampling_ratio(float(oversampling))
+            effective = ratio.numerator / ratio.denominator
+            self.os_ratio_label.configure(
+                text=(
+                    f"Resampling: up/down = {ratio.numerator}/{ratio.denominator} "
+                    f"(effektiv {effective:.6g}×)"
+                )
+            )
+        except ValueError:
+            self.os_ratio_label.configure(text="Resampling: ungültiger Oversampling-Wert")
 
     def _rrc_active(self) -> bool:
         return self.rrc_enable.get() and self.wave_var.get().lower() == "zadoffchu"
@@ -4225,6 +4271,7 @@ class TransceiverUI(ctk.CTk):
         self.rrc_beta_entry.entry.configure(state=state)
         self.rrc_span_entry.entry.configure(state=state)
         self.os_entry.entry.configure(state=state)
+        self._update_oversampling_ratio_label()
         self.auto_update_tx_filename()
         self._reset_manual_xcorr_lags("RRC/Oversampling geändert")
 
@@ -6047,16 +6094,23 @@ class TransceiverUI(ctk.CTk):
         try:
             fs = _parse_number_expr_or_error(self.fs_entry.get())
             samples = int(self.samples_entry.get())
-            oversampling = int(self.os_entry.get()) if self.os_entry.get() else 1
+            oversampling = (
+                _parse_number_expr_or_error(self.os_entry.get(), allow_empty=True, empty_value=1.0)
+                if self.os_entry.get()
+                else 1.0
+            )
+            if oversampling <= 0:
+                raise ValueError("Oversampling muss > 0 sein.")
             if not self.rrc_enable.get():
-                oversampling = 1
+                oversampling = 1.0
+            self._update_oversampling_ratio_label()
             repeats = self._get_repeat_count() if self.repeat_entry.get() else 1
             zeros_mode = self.zeros_var.get() if self.zeros_enable.get() else "none"
             amp = _parse_number_expr_or_error(self.amp_entry.get())
             waveform = self.wave_var.get()
             rrc_active = self._rrc_active()
             self._last_tx_os = 1
-            if waveform == "zadoffchu" and oversampling > 1 and rrc_active:
+            if waveform == "zadoffchu" and not math.isclose(oversampling, 1.0, rel_tol=0.0, abs_tol=1e-9) and rrc_active:
                 self._last_tx_os = oversampling
 
             unfiltered_data = None
@@ -6312,10 +6366,10 @@ class TransceiverUI(ctk.CTk):
             zeros_symbol_rate = None
             if waveform == "zadoffchu":
                 symbol_rate = fs
-                if oversampling > 1 and self.rrc_enable.get():
+                if not math.isclose(oversampling, 1.0, rel_tol=0.0, abs_tol=1e-9) and self.rrc_enable.get():
                     # Oversampling adds samples but does not change the DAC
                     # playback rate; keep the spectrum in Hz referenced to fs.
-                    filtered_symbol_rate = fs / oversampling
+                    filtered_symbol_rate = fs / float(oversampling)
                     repeated_symbol_rate = filtered_symbol_rate
                 else:
                     repeated_symbol_rate = symbol_rate
