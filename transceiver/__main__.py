@@ -33,7 +33,6 @@ import sys
 from .helpers.tx_generator import generate_waveform
 from .helpers.iq_utils import save_interleaved
 from .helpers import rx_convert
-from .helpers import doa_esprit
 from .helpers.correlation_utils import (
     apply_manual_lags as _apply_manual_lags,
     autocorr_fft as _autocorr_fft,
@@ -1605,35 +1604,6 @@ def _subtract_reference_at_lag(
     return residual, coeff
 
 
-def _find_peaks_simple(
-    mag: np.ndarray, rel_thresh: float = 0.2, min_dist: int = 200
-) -> list[int]:
-    """Find local maxima in *mag* with a relative threshold and spacing."""
-    if mag.size < 3:
-        return []
-    thr = rel_thresh * float(np.max(mag))
-    candidates = []
-    for i in range(1, len(mag) - 1):
-        if mag[i] >= thr and mag[i] >= mag[i - 1] and mag[i] >= mag[i + 1]:
-            candidates.append(i)
-
-    candidates.sort(key=lambda i: mag[i], reverse=True)
-    min_dist = int(min_dist)
-    block_radius = max(min_dist - 1, 0)
-    blocked = np.zeros(len(mag), dtype=bool)
-    picked = []
-    for i in candidates:
-        if blocked[i]:
-            continue
-        picked.append(i)
-        if block_radius > 0:
-            start = max(i - block_radius, 0)
-            end = min(i + block_radius + 1, len(mag))
-            blocked[start:end] = True
-    picked.sort()
-    return picked
-
-
 def _strip_trailing_zeros(
     data: np.ndarray, eps: float = 1e-12
 ) -> np.ndarray:
@@ -1644,91 +1614,6 @@ def _strip_trailing_zeros(
     if nz.size == 0:
         return data
     return data[: nz[-1] + 1]
-
-
-def _aoa_from_corr_peak(
-    cc1: np.ndarray,
-    cc2: np.ndarray,
-    peak_index: int,
-    antenna_spacing: float,
-    wavelength: float,
-    win: int = 50,
-) -> tuple[float, float]:
-    """Estimate AoA from correlation outputs around *peak_index*."""
-    if antenna_spacing <= 0 or wavelength <= 0:
-        return float("nan"), 0.0
-    start = max(0, peak_index - win)
-    end = min(len(cc1), peak_index + win + 1)
-    w1 = cc1[start:end]
-    w2 = cc2[start:end]
-    mag = np.abs(w1) + np.abs(w2)
-    if np.all(mag == 0):
-        return float("nan"), 0.0
-
-    weight = mag
-    z = np.sum(weight * (w2 * np.conj(w1)))
-    denom = np.sum(weight * (np.abs(w1) * np.abs(w2))) + 1e-12
-    coherence = float(np.abs(z) / denom)
-    phi = float(np.angle(z))
-    sin_theta = phi * wavelength / (2.0 * np.pi * antenna_spacing)
-    sin_theta = max(-1.0, min(1.0, sin_theta))
-    theta = float(np.degrees(np.arcsin(sin_theta)))
-    return theta, coherence
-
-
-def _correlate_and_estimate_echo_aoa(
-    rx_data: np.ndarray,
-    tx_data: np.ndarray,
-    antenna_spacing: float,
-    wavelength: float,
-    rel_thresh: float = 0.2,
-    min_dist: int = 200,
-    peak_win: int = 50,
-) -> dict:
-    """Cross-correlate per-channel RX with TX and estimate AoA per peak."""
-    rx = np.asarray(rx_data)
-    if rx.ndim != 2 or rx.shape[0] < 2:
-        raise ValueError("Need two RX channels for echo AoA estimation.")
-    ch1 = rx[0]
-    ch2 = rx[1]
-    n = min(len(ch1), len(ch2), len(tx_data))
-    ch1 = ch1[:n]
-    ch2 = ch2[:n]
-    txr = tx_data[:n]
-
-    cc1 = _xcorr_fft(ch1, txr)
-    cc2 = _xcorr_fft(ch2, txr)
-    lags = np.arange(-(len(txr) - 1), len(ch1))
-    mag = np.abs(cc1) + np.abs(cc2)
-    peaks = _find_peaks_simple(mag, rel_thresh=rel_thresh, min_dist=min_dist)
-    results = []
-    for p in peaks:
-        theta, coh = _aoa_from_corr_peak(
-            cc1,
-            cc2,
-            p,
-            antenna_spacing=antenna_spacing,
-            wavelength=wavelength,
-            win=peak_win,
-        )
-        results.append(
-            {
-                "peak_index": int(p),
-                "lag_samp": int(lags[p]),
-                "strength": float(mag[p]),
-                "theta_deg": float(theta),
-                "coherence": float(coh),
-            }
-        )
-
-    return {
-        "lags": lags,
-        "cc1": cc1,
-        "cc2": cc2,
-        "mag": mag,
-        "peaks": peaks,
-        "results": results,
-    }
 
 
 def _pretty(val: float) -> str:
@@ -1771,135 +1656,6 @@ def _decimate_for_display(data: np.ndarray, max_points: int = 4096) -> np.ndarra
     """Return *data* unchanged for UI rendering."""
     del max_points
     return np.asarray(data)
-
-
-def _continuous_processing_worker(
-    task_queue: multiprocessing.Queue,
-    result_queue: multiprocessing.Queue,
-) -> None:
-    """Process continuous RX frames and emit preprocessed UI payloads."""
-    cached_tx_path: str | None = None
-    cached_tx_data = np.array([], dtype=np.complex64)
-
-    while True:
-        task = task_queue.get()
-        if task is None:
-            break
-
-        started = time.monotonic()
-        data = np.asarray(task.get("data", np.array([], dtype=np.complex64)))
-        fs = float(task.get("fs", 1.0))
-        tx_path = task.get("tx_path")
-        trim_enabled = bool(task.get("trim_enabled", False))
-        trim_start = float(task.get("trim_start", 0.0))
-        trim_end = float(task.get("trim_end", 100.0))
-        antenna_spacing = task.get("antenna_spacing")
-        wavelength = task.get("wavelength")
-        magnitude_enabled = bool(task.get("magnitude_enabled", False))
-        rx_channel_view = str(task.get("rx_channel_view", "Kanal 1"))
-        path_cancel_enabled = bool(task.get("path_cancel_enabled", False))
-
-        if tx_path != cached_tx_path:
-            cached_tx_path = tx_path
-            cached_tx_data = np.array([], dtype=np.complex64)
-            if tx_path:
-                try:
-                    raw = np.fromfile(tx_path, dtype=np.int16)
-                    if raw.size % 2:
-                        raw = raw[:-1]
-                    raw = raw.reshape(-1, 2).astype(np.float32)
-                    cached_tx_data = raw[:, 0] + 1j * raw[:, 1]
-                except Exception:
-                    cached_tx_data = np.array([], dtype=np.complex64)
-
-        aoa_text = "AoA (ESPRIT): --"
-        echo_aoa_text = "Echo AoA: --"
-        aoa_series = None
-        aoa_time = None
-
-        if data.ndim == 2 and data.shape[0] >= 2:
-            aoa_raw = data[:2]
-            if trim_enabled:
-                s = int(round(aoa_raw.shape[1] * trim_start / 100.0))
-                e = int(round(aoa_raw.shape[1] * trim_end / 100.0))
-                e = max(s + 1, min(aoa_raw.shape[1], e))
-                aoa_raw = aoa_raw[:, s:e]
-            if antenna_spacing and wavelength:
-                try:
-                    aoa_angle = doa_esprit.estimate_aoa_esprit(
-                        aoa_raw, float(antenna_spacing), float(wavelength)
-                    )
-                    if not np.isnan(aoa_angle):
-                        aoa_text = f"AoA (ESPRIT): {aoa_angle:.1f}°"
-                        aoa_time, aoa_series = doa_esprit.estimate_aoa_esprit_series(
-                            aoa_raw,
-                            float(antenna_spacing),
-                            float(wavelength),
-                        )
-                except Exception as exc:
-                    aoa_text = f"AoA (ESPRIT): Fehler ({exc})"
-
-                if cached_tx_data.size > 0:
-                    try:
-                        echo_out = _correlate_and_estimate_echo_aoa(
-                            aoa_raw,
-                            cached_tx_data,
-                            antenna_spacing=float(antenna_spacing),
-                            wavelength=float(wavelength),
-                        )
-                        results = echo_out.get("results", [])
-                        if results:
-                            echo_aoa_text = "Echo AoA: " + ", ".join(
-                                f"{item['lag_samp']}→{item['theta_deg']:.1f}°"
-                                for item in results[:3]
-                            )
-                        else:
-                            echo_aoa_text = "Echo AoA: keine Peaks"
-                    except Exception:
-                        echo_aoa_text = "Echo AoA: Berechnung fehlgeschlagen"
-
-        plot_data = data
-        if plot_data.ndim == 2 and plot_data.shape[0] >= 2:
-            if rx_channel_view == "Kanal 2":
-                plot_data = plot_data[1]
-            elif rx_channel_view == "Differenz":
-                plot_data = plot_data[0] - plot_data[1]
-            else:
-                plot_data = plot_data[0]
-        if trim_enabled and plot_data.size:
-            s = int(round(plot_data.size * trim_start / 100.0))
-            e = int(round(plot_data.size * trim_end / 100.0))
-            e = max(s + 1, min(plot_data.size, e))
-            plot_data = plot_data[s:e]
-        if magnitude_enabled:
-            plot_data = np.abs(plot_data)
-
-        if path_cancel_enabled and cached_tx_data.size and plot_data.size:
-            try:
-                plot_data, _ = apply_path_cancellation(plot_data, cached_tx_data)
-            except Exception:
-                pass
-
-        plot_data = _decimate_for_display(np.asarray(plot_data))
-        aoa_series_plot = (
-            None if aoa_series is None else _decimate_for_display(np.asarray(aoa_series))
-        )
-        aoa_time_plot = (
-            None if aoa_time is None else _decimate_for_display(np.asarray(aoa_time))
-        )
-
-        result_queue.put(
-            {
-                "frame_ts": float(task.get("frame_ts", started)),
-                "fs": fs,
-                "plot_data": plot_data,
-                "aoa_text": aoa_text,
-                "echo_aoa_text": echo_aoa_text,
-                "aoa_series": aoa_series_plot,
-                "aoa_time": aoa_time_plot,
-                "processing_ms": (time.monotonic() - started) * 1000.0,
-            }
-        )
 
 
 def _try_parse_number_expr(text: str, default: float = 0.0) -> float:
@@ -3770,11 +3526,11 @@ class TransceiverUI(ctk.CTk):
         self.rx_wavelength.insert(0, "3e8/5.18e9")
         self.rx_wavelength.grid(row=0, column=3, sticky="ew", padx=(0, 8))
 
-        self.rx_aoa_label = ctk.CTkLabel(rx_ant_content, text="AoA (ESPRIT): --")
+        self.rx_aoa_label = ctk.CTkLabel(rx_ant_content, text="AoA (ESPRIT): deaktiviert")
         self.rx_aoa_label.grid(
             row=1, column=0, sticky="w", padx=label_padx, pady=(4, 0)
         )
-        self.rx_echo_aoa_label = ctk.CTkLabel(rx_ant_content, text="Echo AoA: --")
+        self.rx_echo_aoa_label = ctk.CTkLabel(rx_ant_content, text="Echo AoA: deaktiviert")
         self.rx_echo_aoa_label.grid(
             row=1, column=1, sticky="w", padx=label_padx, pady=(4, 0)
         )
@@ -4634,75 +4390,11 @@ class TransceiverUI(ctk.CTk):
             data = np.abs(data)
             ref_data = np.abs(ref_data)
         data_uncanceled = data
-        aoa_text = "AoA (ESPRIT): --"
-        echo_aoa_text = "Echo AoA: --"
+        aoa_text = "AoA (ESPRIT): deaktiviert"
+        echo_aoa_text = "Echo AoA: deaktiviert"
         self.echo_aoa_results = []
-        aoa_raw_data = None
         aoa_time = None
         aoa_series = None
-        if self.raw_rx_data.ndim == 2 and self.raw_rx_data.shape[0] >= 2:
-            aoa_raw_data = self.raw_rx_data[:2]
-            if self.trim_var.get():
-                aoa_raw_data = self._trim_data_multichannel(aoa_raw_data)
-            aoa_data = aoa_raw_data
-            try:
-                antenna_spacing = _parse_number_expr_or_error(
-                    self.rx_ant_spacing.get()
-                )
-                wavelength = _parse_number_expr_or_error(self.rx_wavelength.get())
-                aoa_angle = doa_esprit.estimate_aoa_esprit(
-                    aoa_data, antenna_spacing, wavelength
-                )
-                if not np.isnan(aoa_angle):
-                    aoa_text = f"AoA (ESPRIT): {aoa_angle:.1f}°"
-                    if self.rx_view.get() == "AoA (ESPRIT)":
-                        aoa_time, aoa_series = doa_esprit.estimate_aoa_esprit_series(
-                            aoa_data, antenna_spacing, wavelength
-                        )
-                if ref_data.size > 0:
-                    echo_data = aoa_data
-                    echo_out = _correlate_and_estimate_echo_aoa(
-                        echo_data,
-                        ref_data,
-                        antenna_spacing=antenna_spacing,
-                        wavelength=wavelength,
-                    )
-                    self.echo_aoa_results = echo_out["results"]
-                    if self.echo_aoa_results:
-                        items = []
-                        for result in self.echo_aoa_results[:3]:
-                            theta = result["theta_deg"]
-                            theta_text = (
-                                "nan" if np.isnan(theta) else f"{theta:.1f}°"
-                            )
-                            items.append(
-                                "Lag {lag}: {theta} (ρ {coh:.2f})".format(
-                                    lag=result["lag_samp"],
-                                    theta=theta_text,
-                                    coh=result["coherence"],
-                                )
-                            )
-                        if len(self.echo_aoa_results) > 3:
-                            items.append(
-                                f"+{len(self.echo_aoa_results) - 3} weitere"
-                            )
-                        echo_aoa_text = "Echo AoA:\n" + "\n".join(items)
-                    else:
-                        echo_aoa_text = "Echo AoA: keine Peaks"
-            except ValueError as exc:
-                messagebox.showerror("AoA (ESPRIT)", str(exc))
-                aoa_text = "AoA (ESPRIT): Parameter ungültig"
-                echo_aoa_text = "Echo AoA: Parameter ungültig"
-        else:
-            aoa_text = "AoA (ESPRIT): -"
-            echo_aoa_text = "Echo AoA: -"
-
-        if (
-            self.raw_rx_data.ndim == 2
-            and self.raw_rx_data.shape[0] >= 2
-            and ref_data.size == 0
-        ):
-            echo_aoa_text = "Echo AoA: TX-Daten erforderlich"
 
         cancel_info: dict[str, object] | None = None
         if self.rx_path_cancel_enable.get():
@@ -4828,45 +4520,6 @@ class TransceiverUI(ctk.CTk):
                 value_label.grid(row=row, column=col + 1, sticky="w", padx=6)
                 value_labels.append(value_label)
             self.rx_stats_labels.append(value_labels)
-            if self.rx_view.get() == "AoA (ESPRIT)":
-                aoa_plot = pg_state.get("aoa_plot")
-                if aoa_plot is not None:
-                    try:
-                        aoa_plot.get_tk_widget().destroy()
-                    except Exception:
-                        pass
-                fig = Figure(figsize=(5, 2), dpi=100)
-                ax = fig.add_subplot(111)
-                _apply_mpl_transparent(fig, ax)
-                if (
-                    aoa_plot_time is None
-                    or aoa_plot_series is None
-                    or aoa_plot_series.size == 0
-                ):
-                    ax.set_title("AoA (ESPRIT)")
-                    ax.text(
-                        0.5,
-                        0.5,
-                        "Keine AoA-Daten",
-                        ha="center",
-                        va="center",
-                        color="#9E9E9E",
-                    )
-                    ax.set_axis_off()
-                else:
-                    t = aoa_plot_time / plot_fs
-                    ax.plot(t, aoa_plot_series, "b")
-                    ax.set_title("AoA (ESPRIT)")
-                    ax.set_xlabel("Time [s]")
-                    ax.set_ylabel("Angle [deg]")
-                    ax.grid(True)
-                _apply_mpl_gray_style(ax)
-                canvas = FigureCanvasTkAgg(fig, master=target_frame)
-                canvas.draw()
-                widget = canvas.get_tk_widget()
-                widget.configure(bg=_resolve_ctk_frame_bg(target_frame))
-                widget.grid(row=len(modes) + 1, column=0, sticky="n", pady=2)
-                rx_canvas_list.append(canvas)
 
         def _render_rx_preview_pg(
             target_frame: ctk.CTkFrame,
@@ -5157,47 +4810,6 @@ class TransceiverUI(ctk.CTk):
                 value_label.configure(text=value)
                 self.rx_stats_labels.append([value_label])
 
-            if self.rx_view.get() == "AoA (ESPRIT)":
-                fig = Figure(figsize=(5, 2), dpi=100)
-                ax = fig.add_subplot(111)
-                _apply_mpl_transparent(fig, ax)
-                if (
-                    aoa_plot_time is None
-                    or aoa_plot_series is None
-                    or aoa_plot_series.size == 0
-                ):
-                    ax.set_title("AoA (ESPRIT)")
-                    ax.text(
-                        0.5,
-                        0.5,
-                        "Keine AoA-Daten",
-                        ha="center",
-                        va="center",
-                        color="#9E9E9E",
-                    )
-                    ax.set_axis_off()
-                else:
-                    t = aoa_plot_time / plot_fs
-                    ax.plot(t, aoa_plot_series, "b")
-                    ax.set_title("AoA (ESPRIT)")
-                    ax.set_xlabel("Time [s]")
-                    ax.set_ylabel("Angle [deg]")
-                    ax.grid(True)
-                _apply_mpl_gray_style(ax)
-                canvas = FigureCanvasTkAgg(fig, master=target_frame)
-                canvas.draw()
-                widget = canvas.get_tk_widget()
-                widget.configure(bg=_resolve_ctk_frame_bg(target_frame))
-                widget.grid(row=len(modes) + 1, column=0, sticky="n", pady=2)
-                pg_state["aoa_plot"] = canvas
-            else:
-                aoa_plot = pg_state.get("aoa_plot")
-                if aoa_plot is not None:
-                    try:
-                        aoa_plot.get_tk_widget().destroy()
-                    except Exception:
-                        pass
-                    pg_state["aoa_plot"] = None
 
         if target_name == "Continuous":
             _render_rx_preview_pg(
@@ -5776,39 +5388,13 @@ class TransceiverUI(ctk.CTk):
         if ref_data.size == 0:
             messagebox.showerror("XCorr Full", "No TX data available")
             return
-        if (
-            hasattr(self, "raw_rx_data")
-            and self.raw_rx_data is not None
-            and self.raw_rx_data.ndim == 2
-            and self.raw_rx_data.shape[0] >= 2
-        ):
-            echo_data = self.raw_rx_data[:2]
-            if self.trim_var.get():
-                echo_data = self._trim_data_multichannel(echo_data)
-            try:
-                antenna_spacing = _parse_number_expr_or_error(
-                    self.rx_ant_spacing.get()
-                )
-                wavelength = _parse_number_expr_or_error(self.rx_wavelength.get())
-            except ValueError as exc:
-                messagebox.showerror("XCorr Full", str(exc))
-                return
-            echo_out = _correlate_and_estimate_echo_aoa(
-                echo_data,
-                ref_data,
-                antenna_spacing=antenna_spacing,
-                wavelength=wavelength,
-            )
-            self.full_xcorr_lags = echo_out["lags"]
-            self.full_xcorr_mag = echo_out["mag"]
-            self.echo_aoa_results = echo_out["results"]
-        else:
-            data = self.latest_data
-            ref = np.abs(ref_data) if self.rx_magnitude_enable.get() else ref_data
-            n = min(len(data), len(ref))
-            cc = _xcorr_fft(data[:n], ref[:n])
-            self.full_xcorr_lags = np.arange(-n + 1, n)
-            self.full_xcorr_mag = np.abs(cc)
+        data = self.latest_data
+        ref = np.abs(ref_data) if self.rx_magnitude_enable.get() else ref_data
+        n = min(len(data), len(ref))
+        cc = _xcorr_fft(data[:n], ref[:n])
+        self.full_xcorr_lags = np.arange(-n + 1, n)
+        self.full_xcorr_mag = np.abs(cc)
+        self.echo_aoa_results = []
         self._show_toast("Cross-correlation calculated")
 
     # ----- Preset handling --------------------------------------------------
@@ -6610,19 +6196,10 @@ class TransceiverUI(ctk.CTk):
             messagebox.showerror("Continuous", str(exc))
             return
         tx_reference_path = _strip_zeros_tx_filename(self.tx_file.get())
-        antenna_spacing = None
-        wavelength = None
-        try:
-            antenna_spacing = _parse_number_expr_or_error(self.rx_ant_spacing.get())
-            wavelength = _parse_number_expr_or_error(self.rx_wavelength.get())
-        except ValueError:
-            pass
         self._cont_runtime_config = {
             'trim_enabled': bool(self.trim_var.get()),
             'trim_start': float(self.trim_start.get()),
             'trim_end': float(self.trim_end.get()),
-            'antenna_spacing': antenna_spacing,
-            'wavelength': wavelength,
             'rx_channel_view': self.rx_channel_view.get(),
             'magnitude_enabled': bool(self.rx_magnitude_enable.get()),
             'path_cancel_enabled': bool(self.rx_path_cancel_enable.get()),
@@ -6768,10 +6345,10 @@ class TransceiverUI(ctk.CTk):
         self._display_rx_plots(plot_data, fs, reset_manual=False, target_tab='Continuous')
 
         if hasattr(self, 'rx_aoa_label'):
-            self.rx_aoa_label.configure(text=str(payload.get('aoa_text', 'AoA (ESPRIT): --')))
+            self.rx_aoa_label.configure(text=str(payload.get('aoa_text', 'AoA (ESPRIT): deaktiviert')))
         if hasattr(self, 'rx_echo_aoa_label'):
             self.rx_echo_aoa_label.configure(
-                text=str(payload.get('echo_aoa_text', 'Echo AoA: --'))
+                text=str(payload.get('echo_aoa_text', 'Echo AoA: deaktiviert'))
             )
 
     def _wait_for_continuous_stop(
