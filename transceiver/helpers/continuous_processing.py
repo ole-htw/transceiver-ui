@@ -20,10 +20,18 @@ def _find_peaks_simple(mag: np.ndarray, rel_thresh: float = 0.2, min_dist: int =
             candidates.append(i)
 
     candidates.sort(key=lambda i: mag[i], reverse=True)
+    min_dist = int(min_dist)
+    block_radius = max(min_dist - 1, 0)
+    blocked = np.zeros(len(mag), dtype=bool)
     picked = []
     for i in candidates:
-        if all(abs(i - j) >= min_dist for j in picked):
-            picked.append(i)
+        if blocked[i]:
+            continue
+        picked.append(i)
+        if block_radius > 0:
+            start = max(i - block_radius, 0)
+            end = min(i + block_radius + 1, len(mag))
+            blocked[start:end] = True
     picked.sort()
     return picked
 
