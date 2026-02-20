@@ -5,12 +5,61 @@ import time
 
 import numpy as np
 
+from .correlation_utils import xcorr_fft as _xcorr_fft
 from .path_cancellation import apply_path_cancellation
 
 
 def _decimate_for_display(data: np.ndarray, max_points: int = 4096) -> np.ndarray:
     del max_points
     return np.asarray(data)
+
+
+def _xcorr_fft_two_channel_batched(
+    channels: np.ndarray,
+    tx_reference: np.ndarray,
+) -> np.ndarray:
+    """Return FFT-based full cross-correlation for two channels in one batch."""
+    if channels.ndim != 2 or channels.shape[0] != 2:
+        raise ValueError("channels must be shaped as (2, N)")
+
+    tx_reference = np.asarray(tx_reference)
+    n_channels, len_a = channels.shape
+    del n_channels
+    len_b = tx_reference.size
+    if len_a == 0 or len_b == 0:
+        return np.zeros((2, max(0, len_a + len_b - 1)), dtype=np.complex128)
+
+    n = len_a + len_b - 1
+    nfft = 1 << (n - 1).bit_length()
+
+    b_spec = np.fft.fft(tx_reference, nfft)
+    a_spec = np.fft.fft(channels, nfft, axis=1)
+    corr = np.fft.ifft(a_spec * np.conj(b_spec)[np.newaxis, :], axis=1)
+
+    corr_tail = corr[:, -(len_b - 1) :] if len_b > 1 else corr[:, :0]
+    return np.concatenate((corr_tail, corr[:, :len_a]), axis=1)
+
+
+def _correlate_and_estimate_echo_aoa(
+    ch1: np.ndarray,
+    ch2: np.ndarray,
+    txr: np.ndarray,
+    *,
+    validate: bool = False,
+    rtol: float = 1e-6,
+    atol: float = 1e-6,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Correlate channel 1 and 2 against ``txr`` using a single batched FFT pass."""
+    ch = np.vstack((np.asarray(ch1), np.asarray(ch2)))
+    cc = _xcorr_fft_two_channel_batched(ch, np.asarray(txr))
+    if validate:
+        cc1_ref = _xcorr_fft(np.asarray(ch1), np.asarray(txr))
+        cc2_ref = _xcorr_fft(np.asarray(ch2), np.asarray(txr))
+        if not np.allclose(cc[0], cc1_ref, rtol=rtol, atol=atol):
+            raise AssertionError("Batched FFT correlation mismatch for channel 1")
+        if not np.allclose(cc[1], cc2_ref, rtol=rtol, atol=atol):
+            raise AssertionError("Batched FFT correlation mismatch for channel 2")
+    return cc[0], cc[1]
 
 
 def continuous_processing_worker(
