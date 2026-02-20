@@ -2918,16 +2918,16 @@ def _plot_on_mpl(
         if crosscorr_compare is not None and crosscorr_compare.size:
             crosscorr_compare = crosscorr_compare[::step_r]
         fs /= step_r
-        n = min(len(data), len(ref_data))
-        cc = _xcorr_fft(data[:n], ref_data[:n])
-        lags = np.arange(-n + 1, n) * step_r
+        cc = _xcorr_fft(data, ref_data)
+        lags = np.arange(-(len(ref_data) - 1), len(data)) * step_r
         mag = np.abs(cc)
         ax.plot(lags, mag, color=mpl_colors["crosscorr"])
         compare_handles: list[Line2D] = []
         if crosscorr_compare is not None and crosscorr_compare.size:
-            n2 = min(len(crosscorr_compare), len(ref_data))
-            cc2 = _xcorr_fft(crosscorr_compare[:n2], ref_data[:n2])
-            lags2 = np.arange(-n2 + 1, n2) * step_r
+            cc2 = _xcorr_fft(crosscorr_compare, ref_data)
+            lags2 = np.arange(
+                -(len(ref_data) - 1), len(crosscorr_compare)
+            ) * step_r
             mag2 = np.abs(cc2)
             ax.plot(
                 lags2,
