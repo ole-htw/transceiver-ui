@@ -1612,26 +1612,53 @@ def _find_peaks_simple(
     if mag.size < 3:
         return []
     thr = rel_thresh * float(np.max(mag))
-    candidates = []
-    for i in range(1, len(mag) - 1):
-        if mag[i] >= thr and mag[i] >= mag[i - 1] and mag[i] >= mag[i + 1]:
-            candidates.append(i)
+    core = mag[1:-1]
+    local_max_mask = (core >= mag[:-2]) & (core >= mag[2:])
+    above_thr_mask = core >= thr
+    candidates = np.nonzero(local_max_mask & above_thr_mask)[0] + 1
+    if candidates.size == 0:
+        return []
 
-    candidates.sort(key=lambda i: mag[i], reverse=True)
     min_dist = int(min_dist)
     block_radius = max(min_dist - 1, 0)
+    if block_radius == 0:
+        return candidates.tolist()
+
+    cand_mag = mag[candidates]
+    max_picks = max(1, (len(mag) + block_radius) // (block_radius + 1))
+    top_k = min(candidates.size, max(32, 2 * max_picks))
+
     blocked = np.zeros(len(mag), dtype=bool)
-    picked = []
-    for i in candidates:
-        if blocked[i]:
-            continue
-        picked.append(i)
-        if block_radius > 0:
-            start = max(i - block_radius, 0)
-            end = min(i + block_radius + 1, len(mag))
+    picked = np.empty(candidates.size, dtype=np.int64)
+
+    while True:
+        blocked.fill(False)
+        pick_count = 0
+
+        if top_k < candidates.size:
+            strongest = np.argpartition(cand_mag, -top_k)[-top_k:]
+        else:
+            strongest = np.arange(candidates.size)
+
+        order = np.lexsort((candidates[strongest], -cand_mag[strongest]))
+        ranked = candidates[strongest[order]]
+
+        for idx in ranked:
+            if blocked[idx]:
+                continue
+            picked[pick_count] = idx
+            pick_count += 1
+            start = max(idx - block_radius, 0)
+            end = min(idx + block_radius + 1, len(mag))
             blocked[start:end] = True
-    picked.sort()
-    return picked
+            if pick_count >= max_picks:
+                break
+
+        if pick_count >= max_picks or top_k >= candidates.size:
+            result = np.sort(picked[:pick_count])
+            return result.tolist()
+
+        top_k = min(candidates.size, top_k * 2)
 
 
 def _strip_trailing_zeros(
