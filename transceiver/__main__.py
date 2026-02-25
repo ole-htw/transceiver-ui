@@ -4448,7 +4448,7 @@ class TransceiverUI(ctk.CTk):
         self._reset_manual_xcorr_lags("Interpolationsfaktor geändert")
         self.update_trim()
 
-    def _on_rx_interpolation_toggle(self) -> None:
+    def _sync_rx_interpolation_controls_only(self) -> None:
         state = "normal" if self.rx_interpolation_enable.get() else "disabled"
         for widget in (
             getattr(self, "rx_interpolation_method_box", None),
@@ -4466,6 +4466,11 @@ class TransceiverUI(ctk.CTk):
             self._cont_runtime_config["interpolation_enabled"] = bool(
                 self.rx_interpolation_enable.get()
             )
+
+    def _on_rx_interpolation_toggle(self, recompute: bool = True) -> None:
+        self._sync_rx_interpolation_controls_only()
+        if not recompute:
+            return
         self._reset_manual_xcorr_lags("Interpolation geändert")
         self.update_trim()
 
@@ -6294,7 +6299,7 @@ class TransceiverUI(ctk.CTk):
             self._cont_runtime_config["interpolation_factor"] = (
                 self._rx_interpolation_factor_text()
             )
-        self._on_rx_interpolation_toggle()
+        self._sync_rx_interpolation_controls_only()
         self._update_path_cancellation_status()
         self.rx_channel_2.set(params.get("rx_channel_2", False))
         self.rx_channel_view.set(params.get("rx_channel_view", "Kanal 1"))
@@ -7084,7 +7089,7 @@ class TransceiverUI(ctk.CTk):
             if self._cont_runtime_config:
                 self._cont_runtime_config['interpolation_factor'] = self._rx_interpolation_factor_text()
 
-        self._on_rx_interpolation_toggle()
+        self._on_rx_interpolation_toggle(recompute=False)
 
         self._last_continuous_payload = dict(payload)
         self._display_rx_plots(
