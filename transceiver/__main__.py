@@ -4086,7 +4086,7 @@ class TransceiverUI(ctk.CTk):
                 self._update_rx_scrollbar(tab_name),
             ),
         )
-        rx_continuous_tab.rowconfigure(4, weight=1)
+        rx_continuous_tab.rowconfigure(5, weight=1)
 
         self._rx_scroll_active: dict[str, bool] = {
             "Single": False,
