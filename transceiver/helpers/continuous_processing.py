@@ -98,10 +98,11 @@ def _correlate_and_estimate_echo_aoa(
     ch2: np.ndarray,
     txr: np.ndarray,
     *,
+    return_debug_arrays: bool = False,
     validate: bool = False,
     rtol: float = 1e-6,
     atol: float = 1e-6,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> dict[str, object]:
     """Correlate channel 1 and 2 against ``txr`` using a single batched FFT pass."""
     ch = np.vstack((np.asarray(ch1), np.asarray(ch2)))
     cc = _xcorr_fft_two_channel_batched(ch, np.asarray(txr))
@@ -112,7 +113,22 @@ def _correlate_and_estimate_echo_aoa(
             raise AssertionError("Batched FFT correlation mismatch for channel 1")
         if not np.allclose(cc[1], cc2_ref, rtol=rtol, atol=atol):
             raise AssertionError("Batched FFT correlation mismatch for channel 2")
-    return cc[0], cc[1]
+
+    result: dict[str, object] = {
+        "results": (cc[0], cc[1]),
+    }
+    if return_debug_arrays:
+        mag = np.abs(cc)
+        result.update(
+            {
+                "cc1": cc[0],
+                "cc2": cc[1],
+                "mag": mag,
+                "lags": np.arange(-np.asarray(txr).size + 1, np.asarray(ch1).size),
+                "max_strength": float(np.max(mag)) if mag.size else 0.0,
+            }
+        )
+    return result
 
 
 def continuous_processing_worker(

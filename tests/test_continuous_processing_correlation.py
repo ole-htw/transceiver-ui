@@ -28,7 +28,28 @@ def test_correlate_and_estimate_echo_aoa_validation_mode():
     ch2 = rng.standard_normal(1024) + 1j * rng.standard_normal(1024)
     txr = rng.standard_normal(257) + 1j * rng.standard_normal(257)
 
-    cc1, cc2 = _correlate_and_estimate_echo_aoa(ch1, ch2, txr, validate=True)
+    out = _correlate_and_estimate_echo_aoa(ch1, ch2, txr, validate=True)
+    cc1, cc2 = out["results"]
 
     assert np.allclose(cc1, xcorr_fft(ch1, txr), rtol=1e-6, atol=1e-6)
     assert np.allclose(cc2, xcorr_fft(ch2, txr), rtol=1e-6, atol=1e-6)
+
+
+def test_correlate_and_estimate_echo_aoa_debug_arrays_optional():
+    rng = np.random.default_rng(123)
+    ch1 = rng.standard_normal(256) + 1j * rng.standard_normal(256)
+    ch2 = rng.standard_normal(256) + 1j * rng.standard_normal(256)
+    txr = rng.standard_normal(64) + 1j * rng.standard_normal(64)
+
+    out = _correlate_and_estimate_echo_aoa(ch1, ch2, txr)
+    assert set(out.keys()) == {"results"}
+
+    out_debug = _correlate_and_estimate_echo_aoa(
+        ch1,
+        ch2,
+        txr,
+        return_debug_arrays=True,
+    )
+    assert {"results", "cc1", "cc2", "mag", "lags", "max_strength"}.issubset(
+        out_debug.keys()
+    )
