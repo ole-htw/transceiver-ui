@@ -1940,6 +1940,7 @@ def _calc_stats(
     include_amp: bool = True,
     include_echo: bool = True,
     precomputed_crosscorr: dict[str, object] | None = None,
+    xcorr_normalized: bool = False,
 ) -> dict:
     """Return basic signal statistics for display.
 
@@ -2018,6 +2019,7 @@ def _calc_stats(
                 xcorr_ref,
                 manual_lags=manual_lags,
                 lag_step=xcorr_step,
+                normalize=xcorr_normalized,
             )
             stats["echo_delay"] = _echo_delay_samples(
                 crosscorr_ctx["lags"],
@@ -2417,7 +2419,6 @@ def _plot_on_pg(
                 crosscorr_compare=crosscorr_compare,
                 manual_lags=manual_lags,
                 lag_step=step_r,
-                normalized=xcorr_normalized,
                 normalize=xcorr_normalized,
             )
         lags = crosscorr_ctx["lags"]
@@ -4258,6 +4259,10 @@ class TransceiverUI(ctk.CTk):
         self.update_trim()
 
     def _on_rx_xcorr_normalized_toggle(self) -> None:
+        normalized_enabled = bool(self.rx_xcorr_normalized_enable.get())
+        if self._cont_runtime_config:
+            self._cont_runtime_config["xcorr_normalized_enabled"] = normalized_enabled
+            self._cont_runtime_config["normalize_enabled"] = normalized_enabled
         self._reset_manual_xcorr_lags("XCorr-Normierung geändert")
         self.update_trim()
 
@@ -4709,6 +4714,7 @@ class TransceiverUI(ctk.CTk):
                 manual_lags=self.manual_xcorr_lags,
                 xcorr_reduce=True,
                 path_cancel_info=path_cancel_info,
+                xcorr_normalized=self.rx_xcorr_normalized_enable.get(),
             )
             stats_rows = _format_rx_stats_rows(stats)
             stats_frame = ctk.CTkFrame(target_frame, fg_color="transparent")
@@ -4887,7 +4893,6 @@ class TransceiverUI(ctk.CTk):
                     crosscorr_compare=compare_reduced,
                     manual_lags=self.manual_xcorr_lags,
                     lag_step=step_r,
-                    normalized=self.rx_xcorr_normalized_enable.get(),
                     normalize=self.rx_xcorr_normalized_enable.get(),
                 )
             crosscorr_title = (
@@ -4997,6 +5002,7 @@ class TransceiverUI(ctk.CTk):
                 include_amp=(mode == "Signal"),
                 include_echo=(mode == "Crosscorr"),
                 precomputed_crosscorr=crosscorr_ctx,
+                xcorr_normalized=self.rx_xcorr_normalized_enable.get(),
             )
             stats_labels = pg_state.get("stats_labels", {})
             if mode == "Freq":
@@ -5081,6 +5087,11 @@ class TransceiverUI(ctk.CTk):
         has_rx_data = hasattr(self, "raw_rx_data") and self.raw_rx_data is not None
         if not has_rx_data:
             return
+        runtime_normalize = self._cont_runtime_config.get("normalize_enabled")
+        if runtime_normalize is None:
+            runtime_normalize = self._cont_runtime_config.get("xcorr_normalized_enabled")
+        if runtime_normalize is not None:
+            self.rx_xcorr_normalized_enable.set(bool(runtime_normalize))
         fs = getattr(self, "latest_fs_raw", self.latest_fs)
         self._display_rx_plots(
             self.raw_rx_data,
@@ -5487,6 +5498,7 @@ class TransceiverUI(ctk.CTk):
             manual_lags=self.manual_xcorr_lags,
             xcorr_reduce=True,
             path_cancel_info=path_cancel_info,
+            xcorr_normalized=self.rx_xcorr_normalized_enable.get(),
         )
         stats_rows = _format_rx_stats_rows(stats)
         text = "\n".join(f"{label}: {value}" for label, value in stats_rows)
@@ -6291,6 +6303,7 @@ class TransceiverUI(ctk.CTk):
             'rx_channel_view': self.rx_channel_view.get(),
             'magnitude_enabled': bool(self.rx_magnitude_enable.get()),
             'xcorr_normalized_enabled': bool(self.rx_xcorr_normalized_enable.get()),
+            'normalize_enabled': bool(self.rx_xcorr_normalized_enable.get()),
             'path_cancel_enabled': bool(self.rx_path_cancel_enable.get()),
             'tx_path': tx_reference_path,
         }
@@ -6515,6 +6528,16 @@ class TransceiverUI(ctk.CTk):
         self._cont_last_processing_ms = float(payload.get('processing_ms', 0.0))
         frame_ts = float(payload.get('frame_ts', time.monotonic()))
         self._cont_last_end_to_end_ms = (time.monotonic() - frame_ts) * 1000.0
+
+        normalize_enabled = payload.get('normalize_enabled')
+        if normalize_enabled is None:
+            normalize_enabled = payload.get('xcorr_normalized_enabled')
+        if normalize_enabled is not None:
+            normalize_bool = bool(normalize_enabled)
+            self.rx_xcorr_normalized_enable.set(normalize_bool)
+            if self._cont_runtime_config:
+                self._cont_runtime_config['normalize_enabled'] = normalize_bool
+                self._cont_runtime_config['xcorr_normalized_enabled'] = normalize_bool
 
         self._display_rx_plots(plot_data, fs, reset_manual=False, target_tab='Continuous')
 
