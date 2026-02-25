@@ -2073,6 +2073,7 @@ def _format_rx_stats_rows(
     stats: dict,
     *,
     interpolation_enabled: bool = False,
+    interpolation_factor: float = 1.0,
 ) -> list[tuple[str, str]]:
     """Return rows for RX stats with a fixed layout order."""
     echo_value = "--"
@@ -2080,6 +2081,7 @@ def _format_rx_stats_rows(
         echo_value = _format_echo_delay_display(
             stats["echo_delay"],
             interpolation_enabled=interpolation_enabled,
+            interpolation_factor=interpolation_factor,
         )
     return [
         ("fmin", _format_hz(stats["f_low"])),
@@ -2094,13 +2096,25 @@ def _format_echo_delay_display(
     echo_delay: int | float,
     *,
     interpolation_enabled: bool = False,
+    interpolation_factor: float = 1.0,
 ) -> str:
     """Format LOS/echo delay and document the active sample raster.
 
     With RX interpolation enabled, ``echo_delay`` is reported in the
     interpolated sample domain (i.e. samples of the upsampled stream).
     """
-    meters = float(echo_delay) * 1.5
+    factor = 1.0
+    try:
+        factor = float(interpolation_factor)
+    except (TypeError, ValueError):
+        factor = 1.0
+    if factor <= 0.0:
+        factor = 1.0
+
+    samples = float(echo_delay)
+    meters = samples * 1.5
+    if interpolation_enabled:
+        meters = (samples / factor) * 1.5
     suffix = " (interp. Raster)" if interpolation_enabled else ""
     return f"{echo_delay} samp ({meters:.1f} m){suffix}"
 
@@ -4506,6 +4520,35 @@ class TransceiverUI(ctk.CTk):
                 return widget.get().strip()
         return "2"
 
+    def _rx_effective_interpolation_factor(self) -> float:
+        factor = _try_parse_number_expr(self._rx_interpolation_factor_text(), default=1.0)
+        if factor > 0:
+            return float(factor)
+
+        latest_fs = float(getattr(self, "latest_fs", 0.0) or 0.0)
+        latest_fs_raw = float(getattr(self, "latest_fs_raw", 0.0) or 0.0)
+        if latest_fs > 0 and latest_fs_raw > 0:
+            ratio = latest_fs / latest_fs_raw
+            if ratio > 0:
+                return float(ratio)
+
+        if self._cont_runtime_config:
+            runtime_factor = self._cont_runtime_config.get("interpolation_factor")
+            if runtime_factor is not None:
+                parsed_runtime = _try_parse_number_expr(str(runtime_factor), default=1.0)
+                if parsed_runtime > 0:
+                    return float(parsed_runtime)
+
+        payload = getattr(self, "_last_continuous_payload", None)
+        if isinstance(payload, dict):
+            payload_factor = payload.get("interpolation_factor")
+            if payload_factor is not None:
+                parsed_payload = _try_parse_number_expr(str(payload_factor), default=1.0)
+                if parsed_payload > 0:
+                    return float(parsed_payload)
+
+        return 1.0
+
     def _set_rx_interpolation_factor_text(self, text: object) -> None:
         value = str(text).strip()
         if not value:
@@ -5123,6 +5166,7 @@ class TransceiverUI(ctk.CTk):
             stats_rows = _format_rx_stats_rows(
                 stats,
                 interpolation_enabled=interpolation_enabled,
+                interpolation_factor=self._rx_effective_interpolation_factor(),
             )
             stats_frame = ctk.CTkFrame(target_frame, fg_color="transparent")
             stats_frame.grid(row=len(modes), column=0, sticky="ew", pady=2)
@@ -5432,6 +5476,7 @@ class TransceiverUI(ctk.CTk):
                     echo_value = _format_echo_delay_display(
                         stats["echo_delay"],
                         interpolation_enabled=interpolation_enabled,
+                        interpolation_factor=self._rx_effective_interpolation_factor(),
                     )
                 value = echo_value
             value_label = stats_labels.get(mode)
@@ -5939,6 +5984,7 @@ class TransceiverUI(ctk.CTk):
         stats_rows = _format_rx_stats_rows(
             stats,
             interpolation_enabled=bool(self.rx_interpolation_enable.get()),
+            interpolation_factor=self._rx_effective_interpolation_factor(),
         )
         text = "\n".join(f"{label}: {value}" for label, value in stats_rows)
         for label_group in label_groups:

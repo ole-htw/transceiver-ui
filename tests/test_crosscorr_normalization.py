@@ -42,7 +42,11 @@ def _install_pyqtgraph_stub() -> None:
 _install_pyqtgraph_stub()
 sys.modules.setdefault("uhd", types.ModuleType("uhd"))
 
-from transceiver.__main__ import _build_crosscorr_ctx
+from transceiver.__main__ import (
+    _build_crosscorr_ctx,
+    _format_echo_delay_display,
+    _format_rx_stats_rows,
+)
 
 
 def _make_reference_and_rx() -> tuple[np.ndarray, np.ndarray]:
@@ -109,3 +113,39 @@ def test_crosscorr_normalization_keeps_los_and_echo_indices_stable() -> None:
     assert ctx_raw["los_idx"] == ctx_normalized["los_idx"]
     assert ctx_raw["echo_indices"] == ctx_normalized["echo_indices"]
     assert ctx_raw["peak_source_highest_idx"] == ctx_normalized["peak_source_highest_idx"]
+
+
+def test_format_echo_delay_display_with_and_without_interpolation_factor() -> None:
+    plain = _format_echo_delay_display(12, interpolation_enabled=False, interpolation_factor=2.0)
+    assert plain == "12 samp (18.0 m)"
+
+    interp_x2 = _format_echo_delay_display(12, interpolation_enabled=True, interpolation_factor=2.0)
+    assert interp_x2 == "12 samp (9.0 m) (interp. Raster)"
+
+    interp_x15 = _format_echo_delay_display(12, interpolation_enabled=True, interpolation_factor=1.5)
+    assert interp_x15 == "12 samp (12.0 m) (interp. Raster)"
+
+    interp_invalid = _format_echo_delay_display(12, interpolation_enabled=True, interpolation_factor="bad")
+    assert interp_invalid == "12 samp (18.0 m) (interp. Raster)"
+
+    interp_zero = _format_echo_delay_display(12, interpolation_enabled=True, interpolation_factor=0)
+    assert interp_zero == "12 samp (18.0 m) (interp. Raster)"
+
+
+def test_format_rx_stats_rows_scales_echo_distance_when_interpolated() -> None:
+    stats = {
+        "f_low": 100.0,
+        "f_high": 200.0,
+        "amp": 1.0,
+        "bw": 50.0,
+        "echo_delay": 12,
+    }
+
+    rows = _format_rx_stats_rows(
+        stats,
+        interpolation_enabled=True,
+        interpolation_factor=2.0,
+    )
+
+    as_dict = dict(rows)
+    assert as_dict["LOS-Echo"] == "12 samp (9.0 m) (interp. Raster)"
