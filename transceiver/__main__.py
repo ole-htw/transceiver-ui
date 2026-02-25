@@ -3136,6 +3136,7 @@ class TransceiverUI(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         if _STATE:
             self._apply_params(_STATE)
+        self._restore_gen_preview_from_file()
         self._last_saved_state = self._get_current_params()
         self.after(AUTOSAVE_INTERVAL * 1000, self._autosave_state)
 
@@ -4889,6 +4890,28 @@ class TransceiverUI(ctk.CTk):
 
         if tabs:
             notebook.set(tabs[-1][0])
+
+    def _restore_gen_preview_from_file(self) -> None:
+        """Load the last TX file and render it in the generation column."""
+        tx_path = self.tx_file.get().strip()
+        if not tx_path:
+            return
+        try:
+            raw = np.fromfile(tx_path, dtype=np.int16)
+            if raw.size < 2:
+                return
+            if raw.size % 2 != 0:
+                raw = raw[:-1]
+            data = raw[0::2].astype(np.float32) + 1j * raw[1::2].astype(np.float32)
+            if data.size == 0:
+                return
+            fs = _try_parse_number_expr(self.fs_entry.get(), default=1.0)
+            if not np.isfinite(fs) or fs <= 0.0:
+                fs = 1.0
+            self._display_gen_plots(data.astype(np.complex64, copy=False), fs)
+        except Exception:
+            # Missing/corrupt file should not block application startup.
+            return
 
     def _select_rx_display_data(self, data: np.ndarray) -> tuple[np.ndarray, str]:
         """Return the RX data according to the channel view selection."""
