@@ -2100,8 +2100,8 @@ def _format_echo_delay_display(
 ) -> str:
     """Format LOS/echo delay and document the active sample raster.
 
-    With RX interpolation enabled, ``echo_delay`` is reported in the
-    interpolated sample domain (i.e. samples of the upsampled stream).
+    With RX interpolation enabled, ``echo_delay`` is converted back to the
+    original RX sample raster for both sample and distance readout.
     """
     factor = 1.0
     try:
@@ -2112,11 +2112,14 @@ def _format_echo_delay_display(
         factor = 1.0
 
     samples = float(echo_delay)
-    meters = samples * 1.5
     if interpolation_enabled:
-        meters = (samples / factor) * 1.5
+        samples /= factor
+    meters = samples * 1.5
     suffix = " (interp. Raster)" if interpolation_enabled else ""
-    return f"{echo_delay} samp ({meters:.1f} m){suffix}"
+    sample_text = f"{samples:.2f}" if interpolation_enabled else str(echo_delay)
+    if interpolation_enabled and sample_text.endswith(".00"):
+        sample_text = sample_text[:-3]
+    return f"{sample_text} samp ({meters:.1f} m){suffix}"
 
 
 def _format_stats_text(
@@ -2248,6 +2251,8 @@ def _spawn_plot_worker(
     crosscorr_compare: np.ndarray | None = None,
     fullscreen: bool = False,
     xcorr_normalized: bool = False,
+    interpolation_enabled: bool = False,
+    interpolation_factor: float = 1.0,
 ) -> str | None:
     """Launch the PyQtGraph plot worker in a separate process."""
     temp_dir = Path(tempfile.mkdtemp(prefix="transceiver_plot_"))
@@ -2297,6 +2302,8 @@ def _spawn_plot_worker(
         "fs": fs,
         "fullscreen": fullscreen,
         "reduction_step": reduction_step,
+        "interpolation_enabled": bool(interpolation_enabled),
+        "interpolation_factor": float(interpolation_factor),
     }
     if shm_name:
         payload["shm_name"] = shm_name
@@ -2396,6 +2403,8 @@ def _plot_on_pg(
     *,
     reduce_data: bool = True,
     reduction_step: int = 1,
+    interpolation_enabled: bool = False,
+    interpolation_factor: float = 1.0,
 ) -> None:
     """Helper to draw the selected visualization on a PyQtGraph PlotItem."""
     colors = PLOT_COLORS
@@ -2504,6 +2513,14 @@ def _plot_on_pg(
 
         echo_text = pg.TextItem(color=colors["text"], anchor=(0, 1))
 
+        interpolation_factor_value = 1.0
+        try:
+            interpolation_factor_value = float(interpolation_factor)
+        except (TypeError, ValueError):
+            interpolation_factor_value = 1.0
+        if interpolation_factor_value <= 0:
+            interpolation_factor_value = 1.0
+
         def _lag_value(source_lags: np.ndarray, idx: int | None) -> float | None:
             if idx is None or source_lags.size == 0:
                 return None
@@ -2559,9 +2576,15 @@ def _plot_on_pg(
                     echo_lag_value = _lag_value(los_lags, peak_idx)
                     if echo_lag_value is None:
                         continue
-                    delay = int(round(abs(echo_lag_value - los_lag_value)))
+                    delay = abs(echo_lag_value - los_lag_value)
+                    if interpolation_enabled:
+                        delay /= interpolation_factor_value
+                    delay_text = f"{delay:.2f}" if interpolation_enabled else str(int(round(delay)))
+                    if interpolation_enabled and delay_text.endswith(".00"):
+                        delay_text = delay_text[:-3]
                     meters = delay * 1.5
-                    rows.append(f"Echo {i}: {delay} samp ({meters:.1f} m)")
+                    suffix = " (interp. Raster)" if interpolation_enabled else ""
+                    rows.append(f"Echo {i}: {delay_text} samp ({meters:.1f} m){suffix}")
                 if rows:
                     echo_text.setText("LOS-Echos:\n" + "\n".join(rows))
                 else:
@@ -5366,6 +5389,8 @@ class TransceiverUI(ctk.CTk):
                 manual_lags=self.manual_xcorr_lags if mode == "Crosscorr" else None,
                 crosscorr_ctx=crosscorr_ctx,
                 xcorr_normalized=self.rx_xcorr_normalized_enable.get(),
+                interpolation_enabled=bool(getattr(self, "_latest_rx_data_interpolated", False)),
+                interpolation_factor=self._rx_effective_interpolation_factor(),
             )
             if mode == "Signal":
                 signal_ranges = _signal_dynamic_view_ranges(plot_data)
@@ -6093,6 +6118,8 @@ class TransceiverUI(ctk.CTk):
             crosscorr_compare=crosscorr_compare,
             fullscreen=True,
             xcorr_normalized=self.rx_xcorr_normalized_enable.get(),
+            interpolation_enabled=bool(getattr(self, "_latest_rx_data_interpolated", False)),
+            interpolation_factor=self._rx_effective_interpolation_factor(),
         )
         if mode == "Crosscorr":
             self._start_manual_xcorr_polling(output_path)
