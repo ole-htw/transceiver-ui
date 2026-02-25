@@ -2,9 +2,12 @@ import numpy as np
 
 from transceiver.helpers.correlation_utils import (
     classify_peak_group,
+    classify_peak_group_from_mag,
     filter_peak_indices_to_period_group,
     find_local_maxima_around_peak,
+    find_local_maxima_around_peak_from_mag,
     find_los_echo,
+    find_los_echo_from_mag,
     resolve_manual_los_idx,
 )
 
@@ -182,3 +185,62 @@ def test_find_los_echo_uses_classified_peak_group() -> None:
 
     assert los_idx == expected_los_idx
     assert echo_idx == (expected_echoes[0] if expected_echoes else None)
+
+
+def test_from_mag_variants_match_cc_wrappers() -> None:
+    n = 320
+    mag = _sinc_lobe(n, 120, 1.0) + _sinc_lobe(n, 150, 0.72) + _sinc_lobe(n, 180, 0.66)
+    cc = mag.astype(np.complex128)
+
+    maxima_cc = find_local_maxima_around_peak(
+        cc,
+        center_idx=120,
+        peaks_before=1,
+        peaks_after=2,
+        min_rel_height=0.05,
+    )
+    maxima_mag = find_local_maxima_around_peak_from_mag(
+        mag,
+        center_idx=120,
+        peaks_before=1,
+        peaks_after=2,
+        min_rel_height=0.05,
+    )
+    assert maxima_mag == maxima_cc
+
+    classified_cc = classify_peak_group(
+        cc,
+        peaks_before=1,
+        peaks_after=2,
+        min_rel_height=0.05,
+    )
+    classified_mag = classify_peak_group_from_mag(
+        mag,
+        peaks_before=1,
+        peaks_after=2,
+        min_rel_height=0.05,
+    )
+    assert classified_mag == classified_cc
+
+    los_echo_cc = find_los_echo(cc)
+    los_echo_mag = find_los_echo_from_mag(mag)
+    assert los_echo_mag == los_echo_cc
+
+
+def test_cc_wrapper_computes_abs_once(monkeypatch) -> None:
+    n = 256
+    mag = _sinc_lobe(n, 100, 1.0) + _sinc_lobe(n, 126, 0.7)
+    cc = mag.astype(np.complex128)
+
+    abs_calls = {"count": 0}
+    original_abs = np.abs
+
+    def counted_abs(value):
+        abs_calls["count"] += 1
+        return original_abs(value)
+
+    monkeypatch.setattr(np, "abs", counted_abs)
+
+    find_local_maxima_around_peak(cc, center_idx=100)
+
+    assert abs_calls["count"] == 1
