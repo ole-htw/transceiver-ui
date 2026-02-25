@@ -36,13 +36,18 @@ def autocorr_fft(x: np.ndarray) -> np.ndarray:
     return xcorr_fft(x, x)
 
 
-def find_los_echo(cc: np.ndarray) -> tuple[int | None, int | None]:
+def find_los_echo(
+    cc: np.ndarray,
+    *,
+    repetition_period_samples: int | None = None,
+) -> tuple[int | None, int | None]:
     """Return LOS + first echo indices using the shared peak grouping logic."""
     _highest_idx, los_idx, echo_indices, _group_indices = classify_peak_group(
         cc,
         peaks_before=0,
         peaks_after=1,
         min_rel_height=0.1,
+        repetition_period_samples=repetition_period_samples,
     )
     echo_idx = echo_indices[0] if echo_indices else None
     return los_idx, echo_idx

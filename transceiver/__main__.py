@@ -156,9 +156,15 @@ def _format_oversampling_token(oversampling: float) -> str:
     return text.replace("-", "m").replace(".", "p")
 
 
+def _repetition_period_samples_from_tx(tx_length_samples: int, lag_step: int = 1) -> int:
+    """Return TX repetition period in the active xcorr sample domain."""
+    return max(1, int(tx_length_samples) * max(1, int(lag_step)))
+
+
 def _classify_visible_xcorr_peaks(
     cc: np.ndarray,
     *,
+    repetition_period_samples: int,
     peaks_before: int = XCORR_EXTRA_PEAKS_BEFORE,
     peaks_after: int = XCORR_EXTRA_PEAKS_AFTER,
     min_rel_height: float = XCORR_EXTRA_PEAK_MIN_REL_HEIGHT,
@@ -169,6 +175,7 @@ def _classify_visible_xcorr_peaks(
         peaks_before=peaks_before,
         peaks_after=peaks_after,
         min_rel_height=min_rel_height,
+        repetition_period_samples=repetition_period_samples,
     )
     return highest_idx, los_idx, echo_indices
 
@@ -1553,7 +1560,11 @@ def _build_crosscorr_ctx(
         "mag": mag,
     }
 
-    highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(cc)
+    period_samples = _repetition_period_samples_from_tx(len(ref_data), step)
+    highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(
+        cc,
+        repetition_period_samples=period_samples,
+    )
     los_lags = lags
 
     compare_available = crosscorr_compare is not None and np.size(crosscorr_compare) != 0
@@ -1562,10 +1573,12 @@ def _build_crosscorr_ctx(
         lags2 = np.arange(-(len(ref_data) - 1), len(crosscorr_compare)) * step
         mag2 = np.abs(cc2)
         crosscorr_ctx.update({"cc2": cc2, "lags2": lags2, "mag2": mag2})
-        highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(cc2)
+        highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(
+            cc2,
+            repetition_period_samples=period_samples,
+        )
         los_lags = lags2
 
-    period_samples = int(len(ref_data) * step)
     current_peak_group = _current_peak_group_indices(
         los_lags,
         base_los_idx,
@@ -1638,8 +1651,8 @@ def _estimate_los_lag(
         return None
     cc = _xcorr_fft(data_red[:n], ref_red[:n])
     lags = np.arange(-n + 1, n) * step
-    los_idx, _echo_idx = _find_los_echo(cc)
-    period_samples = int(len(ref_red[:n]) * step)
+    period_samples = _repetition_period_samples_from_tx(len(ref_red[:n]), step)
+    los_idx, _echo_idx = _find_los_echo(cc, repetition_period_samples=period_samples)
     current_peak_group = _current_peak_group_indices(
         lags,
         los_idx,
@@ -2784,17 +2797,23 @@ def _plot_on_mpl(
                     label="ohne Pfad-Cancellation",
                 ),
             ]
-        highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(cc)
+        period_samples = _repetition_period_samples_from_tx(len(ref_data), step_r)
+        highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(
+            cc,
+            repetition_period_samples=period_samples,
+        )
         los_lags = lags
         los_mag = mag
         if crosscorr_compare is not None and crosscorr_compare.size:
-            highest_idx2, base_los_idx2, base_echo_indices2 = _classify_visible_xcorr_peaks(cc2)
+            highest_idx2, base_los_idx2, base_echo_indices2 = _classify_visible_xcorr_peaks(
+                cc2,
+                repetition_period_samples=period_samples,
+            )
             highest_idx = highest_idx2
             base_los_idx = base_los_idx2
             base_echo_indices = base_echo_indices2
             los_lags = lags2
             los_mag = mag2
-        period_samples = int(len(ref_data) * step_r)
         current_peak_group = _current_peak_group_indices(
             los_lags,
             base_los_idx,
