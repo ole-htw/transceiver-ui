@@ -70,6 +70,9 @@ def continuous_processing_worker(
             interpolation_enabled = bool(task.get("interpolation_enabled", False))
             interpolation_method = str(task.get("interpolation_method", "interp1d"))
             interpolation_factor = str(task.get("interpolation_factor", "2"))
+            active_plot_tab = str(task.get("active_plot_tab", "Signal"))
+            needs_crosscorr = active_plot_tab == "X-Corr"
+            should_apply_path_cancel = needs_crosscorr and path_cancel_enabled
 
             if use_shared_input:
                 if slot_id < 0 or slot_id >= len(input_slots) or nbytes <= 0 or nbytes > input_slot_size:
@@ -99,7 +102,7 @@ def continuous_processing_worker(
 
             try:
 
-                if tx_path != cached_tx_path:
+                if should_apply_path_cancel and tx_path != cached_tx_path:
                     cached_tx_path = tx_path
                     cached_tx_data = np.array([], dtype=np.complex64)
                     if tx_path:
@@ -138,7 +141,7 @@ def continuous_processing_worker(
                 if magnitude_enabled:
                     plot_data = np.abs(plot_data)
 
-                if path_cancel_enabled and cached_tx_data.size and plot_data.size:
+                if should_apply_path_cancel and cached_tx_data.size and plot_data.size:
                     try:
                         plot_data, _ = apply_path_cancellation(plot_data, cached_tx_data)
                     except Exception:

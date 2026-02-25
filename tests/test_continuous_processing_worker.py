@@ -1,4 +1,5 @@
 import multiprocessing as mp
+import threading
 
 import numpy as np
 
@@ -47,3 +48,38 @@ def test_continuous_worker_keeps_full_resolution_for_plot_data():
 
     assert proc.exitcode == 0
     assert result["plot_data"].shape[0] == sample_count
+
+
+def test_continuous_worker_skips_tx_loading_outside_crosscorr_tab(monkeypatch):
+    tasks: mp.Queue = mp.Queue()
+    results: mp.Queue = mp.Queue()
+
+    def _fail_fromfile(*_args, **_kwargs):
+        raise AssertionError("np.fromfile should not be called for non-X-Corr tabs")
+
+    monkeypatch.setattr(np, "fromfile", _fail_fromfile)
+
+    worker = threading.Thread(
+        target=continuous_processing_worker,
+        args=(tasks, results),
+        daemon=True,
+    )
+    worker.start()
+
+    frame = np.ones((2, 128), dtype=np.complex64)
+    tasks.put(
+        {
+            "data": frame,
+            "fs": 1.0,
+            "rx_channel_view": "Kanal 1",
+            "path_cancel_enabled": True,
+            "tx_path": "signals/tx/nonexistent.bin",
+            "active_plot_tab": "Signal",
+        }
+    )
+
+    result = results.get(timeout=5)
+    tasks.put(None)
+    worker.join(timeout=5)
+
+    assert result["plot_data"].size == 128
