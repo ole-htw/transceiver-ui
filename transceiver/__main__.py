@@ -4844,120 +4844,150 @@ class TransceiverUI(ctk.CTk):
         fs: float,
         reset_manual: bool = True,
         target_tab: str | None = None,
+        source: str = "single_raw",
+        preprocessed_payload: dict[str, object] | None = None,
     ) -> None:
         """Render preview plots below the receive parameters."""
+        is_continuous_preprocessed = source == "continuous_preprocessed"
+        payload = preprocessed_payload if isinstance(preprocessed_payload, dict) else {}
         if reset_manual:
             self._reset_manual_xcorr_lags("Neue RX-Daten")
         self.rx_stats_labels = []
         self.raw_rx_data = data
         self.latest_fs_raw = fs
-        if data.ndim == 2 and data.shape[0] >= 2:
-            self.rx_channel_view_box.configure(state="normal")
-            selection_label = self.rx_channel_view.get()
-        else:
-            self.rx_channel_view.set("Kanal 1")
-            self.rx_channel_view_box.configure(state="disabled")
-            selection_label = ""
-        data, channel_label = self._select_rx_display_data(data)
-        if selection_label and not channel_label:
-            channel_label = selection_label
-        self.range_slider.set_data(data)
-        if self.trim_var.get():
-            data = self._trim_data(data)
-
-        def _load_tx_samples(path: str) -> np.ndarray:
-            raw = np.fromfile(path, dtype=np.int16)
-            if raw.size % 2:
-                raw = raw[:-1]
-            raw = raw.reshape(-1, 2).astype(np.float32)
-            return raw[:, 0] + 1j * raw[:, 1]
-
-        tx_reference_path = _strip_zeros_tx_filename(self.tx_file.get())
-        if tx_reference_path == self._cached_tx_path:
-            self.tx_data = self._cached_tx_data
-        else:
-            try:
-                tx_data = _load_tx_samples(tx_reference_path)
-            except Exception as exc:
-                self.tx_data = np.array([], dtype=np.complex64)
-                self._cached_tx_path = tx_reference_path
-                self._cached_tx_data = self.tx_data
-                if self._cached_tx_load_error_path != tx_reference_path:
-                    logging.warning(
-                        "TX-Referenzdatei konnte nicht geladen werden (%s): %s",
-                        tx_reference_path,
-                        exc,
-                    )
-                    self._cached_tx_load_error_path = tx_reference_path
-            else:
-                self.tx_data = tx_data
-                self._cached_tx_path = tx_reference_path
-                self._cached_tx_data = tx_data
-                self._cached_tx_load_error_path = None
-        ref_data, ref_label = self._get_crosscorr_reference()
-        if self.rx_magnitude_enable.get():
-            data = np.abs(data)
-            ref_data = np.abs(ref_data)
-        data_uncanceled = data
+        channel_label = ""
         aoa_text = "AoA (ESPRIT): deaktiviert"
         echo_aoa_text = "Echo AoA: deaktiviert"
         self.echo_aoa_results = []
         aoa_time = None
         aoa_series = None
-
         cancel_info: dict[str, object] | None = None
-        if self.rx_path_cancel_enable.get():
-            data, cancel_info = self._apply_path_cancellation(data, ref_data)
-            if cancel_info is not None:
-                self._log_path_cancellation(cancel_info, "RX")
-            self._last_path_cancel_info = cancel_info
-        else:
-            self._last_path_cancel_info = None
 
-        interpolation_enabled = bool(self.rx_interpolation_enable.get())
-        interpolation_method = self.rx_interpolation_method.get()
-        interpolation_factor_text = self._rx_interpolation_factor_text()
-        data_for_plot = data
-        fs_for_plot = fs
-        ref_data_for_plot = ref_data
-        compare_for_plot = data_uncanceled if self.rx_path_cancel_enable.get() else None
-        if interpolation_enabled:
-            try:
-                data_for_plot, fs_for_plot = _apply_rx_interpolation(
-                    data,
-                    fs=fs,
-                    enabled=interpolation_enabled,
-                    method=interpolation_method,
-                    factor_expr=interpolation_factor_text,
-                )
-                ref_data_for_plot, _ = _apply_rx_interpolation(
-                    ref_data,
-                    fs=fs,
-                    enabled=interpolation_enabled,
-                    method=interpolation_method,
-                    factor_expr=interpolation_factor_text,
-                )
-                if compare_for_plot is not None:
-                    compare_for_plot, _ = _apply_rx_interpolation(
-                        compare_for_plot,
+        if is_continuous_preprocessed:
+            if data.ndim == 2 and data.shape[0] >= 2:
+                self.rx_channel_view_box.configure(state="normal")
+            else:
+                self.rx_channel_view_box.configure(state="disabled")
+            self.range_slider.set_data(data)
+            ref_data = np.asarray(payload.get("plot_ref_data", np.array([], dtype=np.complex64)))
+            ref_label = str(payload.get("plot_ref_label", "TX"))
+            compare_for_plot = payload.get("crosscorr_compare")
+            compare_for_plot = (
+                np.asarray(compare_for_plot)
+                if isinstance(compare_for_plot, np.ndarray)
+                else None
+            )
+            cancel_payload = payload.get("path_cancel_info")
+            if isinstance(cancel_payload, dict) and cancel_payload.get("applied"):
+                cancel_info = cancel_payload
+                self._last_path_cancel_info = cancel_payload
+            else:
+                self._last_path_cancel_info = None
+            interpolation_enabled = bool(payload.get("interpolation_enabled", False))
+            data = np.asarray(payload.get("plot_data", data))
+            fs = float(payload.get("fs", fs))
+        else:
+            if data.ndim == 2 and data.shape[0] >= 2:
+                self.rx_channel_view_box.configure(state="normal")
+                selection_label = self.rx_channel_view.get()
+            else:
+                self.rx_channel_view.set("Kanal 1")
+                self.rx_channel_view_box.configure(state="disabled")
+                selection_label = ""
+            data, channel_label = self._select_rx_display_data(data)
+            if selection_label and not channel_label:
+                channel_label = selection_label
+            self.range_slider.set_data(data)
+            if self.trim_var.get():
+                data = self._trim_data(data)
+
+            def _load_tx_samples(path: str) -> np.ndarray:
+                raw = np.fromfile(path, dtype=np.int16)
+                if raw.size % 2:
+                    raw = raw[:-1]
+                raw = raw.reshape(-1, 2).astype(np.float32)
+                return raw[:, 0] + 1j * raw[:, 1]
+
+            tx_reference_path = _strip_zeros_tx_filename(self.tx_file.get())
+            if tx_reference_path == self._cached_tx_path:
+                self.tx_data = self._cached_tx_data
+            else:
+                try:
+                    tx_data = _load_tx_samples(tx_reference_path)
+                except Exception as exc:
+                    self.tx_data = np.array([], dtype=np.complex64)
+                    self._cached_tx_path = tx_reference_path
+                    self._cached_tx_data = self.tx_data
+                    if self._cached_tx_load_error_path != tx_reference_path:
+                        logging.warning(
+                            "TX-Referenzdatei konnte nicht geladen werden (%s): %s",
+                            tx_reference_path,
+                            exc,
+                        )
+                        self._cached_tx_load_error_path = tx_reference_path
+                else:
+                    self.tx_data = tx_data
+                    self._cached_tx_path = tx_reference_path
+                    self._cached_tx_data = tx_data
+                    self._cached_tx_load_error_path = None
+            ref_data, ref_label = self._get_crosscorr_reference()
+            if self.rx_magnitude_enable.get():
+                data = np.abs(data)
+                ref_data = np.abs(ref_data)
+            data_uncanceled = data
+
+            if self.rx_path_cancel_enable.get():
+                data, cancel_info = self._apply_path_cancellation(data, ref_data)
+                if cancel_info is not None:
+                    self._log_path_cancellation(cancel_info, "RX")
+                self._last_path_cancel_info = cancel_info
+            else:
+                self._last_path_cancel_info = None
+
+            interpolation_enabled = bool(self.rx_interpolation_enable.get())
+            interpolation_method = self.rx_interpolation_method.get()
+            interpolation_factor_text = self._rx_interpolation_factor_text()
+            data_for_plot = data
+            fs_for_plot = fs
+            ref_data_for_plot = ref_data
+            compare_for_plot = data_uncanceled if self.rx_path_cancel_enable.get() else None
+            if interpolation_enabled:
+                try:
+                    data_for_plot, fs_for_plot = _apply_rx_interpolation(
+                        data,
                         fs=fs,
                         enabled=interpolation_enabled,
                         method=interpolation_method,
                         factor_expr=interpolation_factor_text,
                     )
-            except Exception as exc:
-                messagebox.showerror(
-                    "RX-Interpolation",
-                    f"Interpolation fehlgeschlagen ({exc}). Verwende Originaldaten.",
-                )
-                data_for_plot = data
-                fs_for_plot = fs
-                ref_data_for_plot = ref_data
-                compare_for_plot = data_uncanceled if self.rx_path_cancel_enable.get() else None
+                    ref_data_for_plot, _ = _apply_rx_interpolation(
+                        ref_data,
+                        fs=fs,
+                        enabled=interpolation_enabled,
+                        method=interpolation_method,
+                        factor_expr=interpolation_factor_text,
+                    )
+                    if compare_for_plot is not None:
+                        compare_for_plot, _ = _apply_rx_interpolation(
+                            compare_for_plot,
+                            fs=fs,
+                            enabled=interpolation_enabled,
+                            method=interpolation_method,
+                            factor_expr=interpolation_factor_text,
+                        )
+                except Exception as exc:
+                    messagebox.showerror(
+                        "RX-Interpolation",
+                        f"Interpolation fehlgeschlagen ({exc}). Verwende Originaldaten.",
+                    )
+                    data_for_plot = data
+                    fs_for_plot = fs
+                    ref_data_for_plot = ref_data
+                    compare_for_plot = data_uncanceled if self.rx_path_cancel_enable.get() else None
 
-        data = data_for_plot
-        fs = fs_for_plot
-        ref_data = ref_data_for_plot
+            data = data_for_plot
+            fs = fs_for_plot
+            ref_data = ref_data_for_plot
 
         self.latest_fs = fs
         self.latest_data = data
@@ -5445,11 +5475,12 @@ class TransceiverUI(ctk.CTk):
             )
 
     def _on_rx_cont_plot_tab_change(self, *_args) -> None:
+        active_tab = self._get_rx_cont_active_plot_tab()
+        if self._cont_runtime_config:
+            self._cont_runtime_config["active_plot_tab"] = active_tab
         has_rx_data = hasattr(self, "raw_rx_data") and self.raw_rx_data is not None
         if not has_rx_data:
             return
-        if self._cont_runtime_config:
-            self._cont_runtime_config["active_plot_tab"] = self._get_rx_cont_active_plot_tab()
         runtime_normalize = self._cont_runtime_config.get("normalize_enabled")
         if runtime_normalize is None:
             runtime_normalize = self._cont_runtime_config.get("xcorr_normalized_enabled")
@@ -5461,6 +5492,8 @@ class TransceiverUI(ctk.CTk):
             fs,
             reset_manual=False,
             target_tab="Continuous",
+            source="continuous_preprocessed",
+            preprocessed_payload=getattr(self, "_last_continuous_payload", None),
         )
 
     def _get_rx_cont_active_plot_tab(self) -> str:
@@ -6812,6 +6845,8 @@ class TransceiverUI(ctk.CTk):
                 tabview.set("Signal")
             except Exception:
                 pass
+        if self._cont_runtime_config:
+            self._cont_runtime_config['active_plot_tab'] = self._get_rx_cont_active_plot_tab()
         self._cmd_running = True
         if hasattr(self, "rx_cont_start"):
             self.rx_cont_start.configure(state="disabled")
@@ -7000,6 +7035,10 @@ class TransceiverUI(ctk.CTk):
         frame_ts = float(payload.get('frame_ts', time.monotonic()))
         self._cont_last_end_to_end_ms = (time.monotonic() - frame_ts) * 1000.0
 
+        active_plot_tab = payload.get('active_plot_tab')
+        if active_plot_tab is not None and self._cont_runtime_config:
+            self._cont_runtime_config['active_plot_tab'] = str(active_plot_tab)
+
         normalize_enabled = payload.get('normalize_enabled')
         if normalize_enabled is None:
             normalize_enabled = payload.get('xcorr_normalized_enabled')
@@ -7038,7 +7077,15 @@ class TransceiverUI(ctk.CTk):
 
         self._on_rx_interpolation_toggle()
 
-        self._display_rx_plots(plot_data, fs, reset_manual=False, target_tab='Continuous')
+        self._last_continuous_payload = dict(payload)
+        self._display_rx_plots(
+            plot_data,
+            fs,
+            reset_manual=False,
+            target_tab='Continuous',
+            source='continuous_preprocessed',
+            preprocessed_payload=payload,
+        )
 
         if hasattr(self, 'rx_aoa_label'):
             self.rx_aoa_label.configure(text=str(payload.get('aoa_text', 'AoA (ESPRIT): deaktiviert')))
@@ -7118,7 +7165,9 @@ class TransceiverUI(ctk.CTk):
                     'fs': rate,
                     'frame_ts': time.monotonic(),
                 }
-                payload.update(dict(self._cont_runtime_config))
+                runtime_snapshot = dict(self._cont_runtime_config)
+                runtime_snapshot['active_plot_tab'] = str(runtime_snapshot.get('active_plot_tab', 'Signal'))
+                payload.update(runtime_snapshot)
                 self._enqueue_continuous_task(payload)
 
             rx_continous.main(callback=_callback, args=args, stop_event=stop_event)
