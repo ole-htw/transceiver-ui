@@ -55,8 +55,7 @@ class TestPathCancellation(unittest.TestCase):
             f=1.0,
             N=1024,
             q=1,
-            rrc_span=0,
-            oversampling=1,
+            fd_zeroing_bandwidth=0.5,
         )
         self.lags = _corr_lags(len(self.tx_ref))
 

@@ -13,10 +13,10 @@ Option **--no-zeros**
     Gibt an, dass *keine* Null-Samples an die Wellenform angehängt werden.
     Standard ist weiterhin das alte Verhalten (Waveform + Null-Sequenz).
 
-Option **--oversampling**
-    Oversampling-Faktor nur für Zadoff-Chu. Wird korrekt als:
-        Symbole (1 Sample/Symbol) -> (Upsampling + RRC-FIR in einem Schritt)
-    implementiert (scipy.signal.upfirdn).
+Option **--fd-zeroing-bandwidth**
+    Obligatorische Grenzbandbreite in Hz für ein nachgelagertes
+    Frequenzbereich-Zeroing. Frequenzen außerhalb ±Bandbreite werden auf
+    0 gesetzt.
 
 Die erzeugte Folge wird als interleaved int16 (IQ IQ …) in eine Binärdatei
 geschrieben.
@@ -24,19 +24,13 @@ geschrieben.
 
 import argparse
 import math
-from fractions import Fraction
 from typing import Optional
 from pathlib import Path
 from datetime import datetime
 
 import numpy as np
-from scipy.signal import upfirdn
 
 from .iq_utils import complex_to_interleaved_int16
-
-
-MAX_OVERSAMPLING_DEN = 1024
-MAX_RESAMPLING_FACTOR_WARN = 4096
 
 
 # ---------- Hilfsfunktionen --------------------------------------------------
@@ -92,12 +86,6 @@ def _pretty(val: float) -> str:
     return f"{int(val)}"
 
 
-def _format_oversampling_token(val: float) -> str:
-    """Formatiert Oversampling für Dateinamen (z. B. 1.25 -> 1p25)."""
-    text = f"{val:.6f}".rstrip("0").rstrip(".")
-    return text.replace("-", "m").replace(".", "p")
-
-
 def generate_filename(args) -> Path:
     """Erzeuge einen Dateinamen basierend auf den Parametern."""
     parts = [args.waveform]
@@ -107,8 +95,7 @@ def generate_filename(args) -> Path:
         parts.append(f"{_pretty(args.f)}_{_pretty(args.f2)}")
     elif args.waveform == "zadoffchu":
         parts.append(f"q{args.q}")
-        if args.oversampling != 1:
-            parts.append(f"os{_format_oversampling_token(args.oversampling)}")
+        parts.append(f"fdz{_pretty(args.fd_zeroing_bandwidth)}")
     elif args.waveform == "chirp":
         parts.append(f"{_pretty(args.f0)}_{_pretty(args.f1)}")
     elif args.waveform == "ofdm_preamble":
@@ -123,8 +110,6 @@ def generate_filename(args) -> Path:
 
     if args.waveform == "zadoffchu":
         parts.append(f"Nsym{args.samples}")
-        if args.oversampling != 1:
-            parts.append(f"Nsamp{int(round(args.samples * args.oversampling))}")
     elif args.waveform == "ofdm_preamble":
         parts.append(f"N{args.samples}")
     else:
@@ -135,47 +120,20 @@ def generate_filename(args) -> Path:
     return Path(args.output_dir) / name
 
 
-def rrc_coeffs(beta: float, span: int, sps: int = 1) -> np.ndarray:
-    """Koeffizienten für einen Root-Raised-Cosine-Filter erzeugen.
+def _apply_fd_zeroing(signal: np.ndarray, fs: float, bandwidth: float) -> np.ndarray:
+    """Zero frequencies outside ±bandwidth in the spectrum domain."""
+    if bandwidth <= 0:
+        raise ValueError("fd_zeroing_bandwidth muss > 0 sein")
+    nyquist = fs / 2.0
+    if bandwidth > nyquist:
+        raise ValueError(
+            f"fd_zeroing_bandwidth darf Nyquist ({nyquist:g} Hz) nicht überschreiten"
+        )
 
-    span: Filterlänge in Symbolen (typ. 6..12)
-    sps:  Samples per Symbol (Oversampling-Faktor)
-    """
-    if span <= 0:
-        return np.array([1.0], dtype=np.float32)
-    if sps <= 0:
-        raise ValueError("sps muss >= 1 sein.")
-    if beta < 0 or beta > 1:
-        raise ValueError("beta muss im Bereich [0, 1] liegen.")
-
-    num_taps = span * sps + 1              # span = Gesamtlänge in Symbolen
-    t = (np.arange(num_taps) - (num_taps - 1) / 2) / sps
-    h = np.zeros_like(t, dtype=np.float64)
-    
-    eps = 1e-8
-    for i, ti in enumerate(t):
-        if np.isclose(ti, 0.0, atol=eps):
-            h[i] = 1.0 - beta + 4 * beta / np.pi
-        elif beta > 0 and np.isclose(abs(ti), 1.0 / (4.0 * beta), atol=eps):
-            h[i] = (
-                beta
-                / np.sqrt(2.0)
-                * (
-                    (1.0 + 2.0 / np.pi) * np.sin(np.pi / (4.0 * beta))
-                    + (1.0 - 2.0 / np.pi) * np.cos(np.pi / (4.0 * beta))
-                )
-            )
-
-        else:
-            num = np.sin(np.pi * ti * (1.0 - beta)) + 4.0 * beta * ti * np.cos(
-                np.pi * ti * (1.0 + beta)
-            )
-            den = np.pi * ti * (1.0 - (4.0 * beta * ti) ** 2)
-            h[i] = num / den
-
-    # Energie-Normierung (üblich bei Pulse-Shaping)
-    h /= np.sqrt(np.sum(h**2) + 1e-30)
-    return h.astype(np.float32)
+    spec = np.fft.fft(signal)
+    freqs = np.fft.fftfreq(signal.size, d=1.0 / fs)
+    spec[np.abs(freqs) > bandwidth] = 0.0
+    return np.fft.ifft(spec).astype(np.complex64)
 
 
 def _trim_to_length(x: np.ndarray, length: int) -> np.ndarray:
@@ -202,9 +160,7 @@ def generate_waveform(
     q: int = 1,
     f0: Optional[float] = None,
     f1: Optional[float] = None,
-    rrc_beta: float = 0.25,
-    rrc_span: int = 6,
-    oversampling: float = 1.0,
+    fd_zeroing_bandwidth: float | None = None,
     ofdm_nfft: int = 64,
     ofdm_cp_len: int = 16,
     ofdm_active_subcarriers: int = 52,
@@ -215,31 +171,20 @@ def generate_waveform(
 ) -> np.ndarray:
     """Erzeugt komplexe Samples einer der unterstützten Wellenformen.
 
-    Wichtigste Fixes ggü. deiner Version:
-    - RRC-Taps werden erzeugt, bevor sie benutzt werden.
-    - Für Zadoff-Chu ist Oversampling korrekt als upfirdn(RRC, symbols, up=OS)
-      implementiert (Upsampling + FIR in einem Schritt).
-    - Kein doppeltes Filtern mehr.
-    - Für den oversampleten ZC-Fall wird Delay kompensiert und auf exakt
-      N*oversampling Samples getrimmt.
+    Nach Erzeugung wird optional ein Frequenzbereich-Zeroing angewendet.
     """
     w = waveform.lower()
     if w != "ofdm_preamble" and N <= 0:
         raise ValueError("N muss > 0 sein.")
-    if oversampling <= 0:
-        raise ValueError("oversampling muss > 0 sein")
+    if fd_zeroing_bandwidth is None:
+        raise ValueError("fd_zeroing_bandwidth ist ein Pflichtfeld")
 
     # ---------- Sinus ---------------------------------------------------------
     if w == "sinus":
         n = np.arange(N)
         sig = np.exp(2j * np.pi * f * n / fs).astype(np.complex64)
 
-        # Optional: RRC auf "normales" kontinuierliches Sinussignal ist meist nicht sinnvoll,
-        # aber wir behalten dein Verhalten bei: Wenn rrc_span > 0, wird gefiltert.
-        if rrc_span > 0:
-            h = rrc_coeffs(rrc_beta, rrc_span, sps=1).astype(np.float32)
-            sig = np.convolve(sig, h, mode="same").astype(np.complex64)
-        return sig
+        return _apply_fd_zeroing(sig, fs, float(fd_zeroing_bandwidth))
 
     # ---------- Doppelsinus ---------------------------------------------------
     if w == "doppelsinus":
@@ -251,10 +196,7 @@ def generate_waveform(
             + 0.5 * np.exp(2j * np.pi * f1 * n / fs)
         ).astype(np.complex64)
 
-        if rrc_span > 0:
-            h = rrc_coeffs(rrc_beta, rrc_span, sps=1).astype(np.float32)
-            sig = np.convolve(sig, h, mode="same").astype(np.complex64)
-        return sig
+        return _apply_fd_zeroing(sig, fs, float(fd_zeroing_bandwidth))
 
     # ---------- Chirp ---------------------------------------------------------
     if w == "chirp":
@@ -267,10 +209,7 @@ def generate_waveform(
         phi = 2 * np.pi * (f0 * t + 0.5 * k * t**2)
         sig = np.exp(1j * phi).astype(np.complex64)
 
-        if rrc_span > 0:
-            h = rrc_coeffs(rrc_beta, rrc_span, sps=1).astype(np.float32)
-            sig = np.convolve(sig, h, mode="same").astype(np.complex64)
-        return sig
+        return _apply_fd_zeroing(sig, fs, float(fd_zeroing_bandwidth))
 
     # ---------- Zadoff–Chu ----------------------------------------------------
     if w == "zadoffchu":
@@ -285,35 +224,7 @@ def generate_waveform(
         else:
             symbols = np.exp(-1j * np.pi * q * n * (n + 1) / N).astype(np.complex64)
 
-        oversampling_float = float(oversampling)
-        if np.isclose(oversampling_float, 1.0, atol=1e-9, rtol=0.0):
-            ratio = Fraction(1, 1)
-        else:
-            ratio = Fraction(oversampling_float).limit_denominator(MAX_OVERSAMPLING_DEN)
-        up = ratio.numerator
-        down = ratio.denominator
-        if up > MAX_RESAMPLING_FACTOR_WARN or down > MAX_RESAMPLING_FACTOR_WARN:
-            print(
-                "WARNUNG: Resampling-Verhältnis ist sehr groß "
-                f"(up/down={up}/{down})."
-            )
-
-        # RRC auf internem Upsampling-Grid designen, sps bleibt ganzzahlig.
-        sps = up
-
-        if rrc_span > 0:
-            h = rrc_coeffs(rrc_beta, rrc_span, sps=sps).astype(np.float32)
-        else:
-            # Kein Pulse-Shaping: upfirdn mit [1] macht nur Zero-Stuffing.
-            # Hinweis: Das ist *kein* "glattes" Interpolieren.
-            h = np.array([1.0], dtype=np.float32)
-
-        y = upfirdn(h, symbols, up=up, down=down).astype(np.complex64)
-        target_len = int(round(N * up / down))
-        delay = (len(h) - 1) // 2
-        delay_out = int(round(delay / down))
-        y = y[delay_out: delay_out + target_len]
-        return _trim_to_length(y, target_len).astype(np.complex64)
+        return _apply_fd_zeroing(symbols, fs, float(fd_zeroing_bandwidth))
 
     # ---------- OFDM-Preamble -------------------------------------------------
     if w == "ofdm_preamble":
@@ -355,7 +266,7 @@ def generate_waveform(
         if ofdm_short_repeats > 0:
             short_block = np.tile(symbols[0], ofdm_short_repeats).astype(np.complex64)
             payload = np.concatenate([short_block, payload]).astype(np.complex64)
-        return payload.astype(np.complex64)
+        return _apply_fd_zeroing(payload.astype(np.complex64), fs, float(fd_zeroing_bandwidth))
 
     # ---------- Pseudo-Noise -------------------------------------------------
     if w == "pseudo_noise":
@@ -366,7 +277,7 @@ def generate_waveform(
         rng = np.random.default_rng(pn_seed)
         chips = rng.choice([-1.0, 1.0], size=num_chips)
         tiled = np.repeat(chips, samples_per_chip)[:N]
-        return tiled.astype(np.complex64)
+        return _apply_fd_zeroing(tiled.astype(np.complex64), fs, float(fd_zeroing_bandwidth))
 
     raise ValueError(f"Unbekannte Wellenform: {waveform}")
 
@@ -430,19 +341,13 @@ def main() -> None:
         help="Zweite Frequenz in Hz – nur für doppelsinus (Standard: None)",
     )
 
-    # Zadoff–Chu-spezifisch + RRC
+    # Zadoff–Chu-spezifisch
     parser.add_argument("--q", type=int, default=1, help="Zadoff-Chu-Parameter q (Standard: 1)")
     parser.add_argument(
-        "--rrc-beta",
+        "--fd-zeroing-bandwidth",
         type=float,
-        default=0.25,
-        help="RRC-Rollofffaktor (Standard: 0.25)",
-    )
-    parser.add_argument(
-        "--rrc-span",
-        type=int,
-        default=6,
-        help="RRC-Filterspan in Symbolen (Standard: 6; 0 deaktiviert)",
+        required=True,
+        help="Pflichtfeld: Frequenzbereich-Zeroing-Bandbreite in Hz (0 < bw <= fs/2)",
     )
 
     # Chirp-spezifisch
@@ -472,13 +377,6 @@ def main() -> None:
         default=40000,
         help="Anzahl Samples der Wellenform (Zadoff-Chu: Symbolanzahl, Standard: 40000)",
     )
-    parser.add_argument(
-        "--oversampling",
-        type=float,
-        default=1,
-        help="Oversampling-Faktor nur für Zadoff-Chu (z. B. 1.25, Standard: 1)",
-    )
-
     # OFDM-spezifisch
     parser.add_argument(
         "--ofdm-nfft",
@@ -562,32 +460,18 @@ def main() -> None:
             raise ValueError("--ofdm-short-repeats muss >= 0 sein.")
 
     N_waveform = args.samples
-    N_output = N_waveform
-
     if args.waveform == "zadoffchu":
-        # Dein altes Verhalten beibehalten: nur bei OS<=1 auf Primzahl anpassen
-        if args.oversampling <= 1:
-            prime = find_prime_near(N_waveform, search_up=True)
-            if prime != N_waveform:
-                print(f"Info: samples={N_waveform} angepasst auf Primzahl {prime} für ZC.")
-                N_waveform = prime
-
-        N_output = int(round(N_waveform * float(args.oversampling)))
-    elif args.waveform == "ofdm_preamble":
-        N_output = (
-            (args.ofdm_nfft + args.ofdm_cp)
-            * (args.ofdm_symbols + args.ofdm_short_repeats)
-        )
+        prime = find_prime_near(N_waveform, search_up=True)
+        if prime != N_waveform:
+            print(f"Info: samples={N_waveform} angepasst auf Primzahl {prime} für ZC.")
+            N_waveform = prime
 
     append_zeros = not args.no_zeros
 
     if append_zeros:
-        print(f"Erzeuge {N_output} Samples {args.waveform} + {N_output} Null-Samples")
+        print(f"Erzeuge {N_waveform} Samples {args.waveform} + {N_waveform} Null-Samples")
     else:
-        print(f"Erzeuge {N_output} Samples {args.waveform} (ohne Null-Samples)")
-
-    if args.waveform == "zadoffchu" and args.oversampling != 1:
-        print(f"  Oversampling: {args.oversampling}× (Upsampling + RRC via upfirdn)")
+        print(f"Erzeuge {N_waveform} Samples {args.waveform} (ohne Null-Samples)")
 
     if args.waveform == "chirp":
         print(f"  Chirp: {args.f0/1e6:.3f} MHz → {args.f1/1e6:.3f} MHz")
@@ -602,9 +486,7 @@ def main() -> None:
         args.q,
         f0=args.f0,
         f1=f1_value,
-        rrc_beta=args.rrc_beta,
-        rrc_span=args.rrc_span,
-        oversampling=args.oversampling,
+        fd_zeroing_bandwidth=args.fd_zeroing_bandwidth,
         ofdm_nfft=args.ofdm_nfft,
         ofdm_cp_len=args.ofdm_cp,
         ofdm_active_subcarriers=args.ofdm_active,
@@ -615,7 +497,7 @@ def main() -> None:
     ).astype(np.complex64)
 
     # (Sicherstellen, dass die Länge genau den Erwartungen entspricht)
-    waveform_signal = _trim_to_length(waveform_signal, N_output).astype(np.complex64)
+    waveform_signal = _trim_to_length(waveform_signal, N_waveform).astype(np.complex64)
 
     final_len = len(waveform_signal)
     if append_zeros:

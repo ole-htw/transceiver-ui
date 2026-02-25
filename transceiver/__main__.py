@@ -1773,9 +1773,9 @@ def _gen_tx_filename(app) -> str:
     except Exception:
         samples = 0
     try:
-        bandwidth = parse_number_expr(app.bandwidth_entry.get())
+        fd_zeroing_bandwidth = parse_number_expr(app.bandwidth_entry.get())
     except Exception:
-        bandwidth = 0.0
+        fd_zeroing_bandwidth = 0.0
 
     if w == "sinus":
         f = _try_parse_number_expr(app.f_entry.get(), default=0.0)
@@ -1787,8 +1787,8 @@ def _gen_tx_filename(app) -> str:
     elif w == "zadoffchu":
         q = app.q_entry.get() or "1"
         parts.append(f"q{q}")
-        if bandwidth > 0:
-            parts.append(f"bw{_pretty(bandwidth)}")
+        if fd_zeroing_bandwidth > 0:
+            parts.append(f"fdz{_pretty(fd_zeroing_bandwidth)}")
     elif w == "chirp":
         f0 = _try_parse_number_expr(app.f_entry.get(), default=0.0)
         f1 = _try_parse_number_expr(app.f1_entry.get(), default=f0)
@@ -3244,7 +3244,7 @@ class TransceiverUI(ctk.CTk):
         filter_left = ctk.CTkFrame(filter_body, fg_color="transparent")
         filter_left.grid(row=0, column=1, sticky="nsew")
         filter_left.columnconfigure(1, weight=1)
-        ctk.CTkLabel(filter_left, text="Bandwidth (Hz)", anchor="e").grid(
+        ctk.CTkLabel(filter_left, text="FD Zeroing Bandwidth (Hz)", anchor="e").grid(
             row=0, column=0, sticky="e", padx=label_padx
         )
         self.bandwidth_entry = SuggestEntry(filter_left, "bandwidth_entry")
@@ -5416,7 +5416,7 @@ class TransceiverUI(ctk.CTk):
             "f1": self.f1_entry.get(),
             "q": self.q_entry.get(),
             "samples": self.samples_entry.get(),
-            "bandwidth": self.bandwidth_entry.get(),
+            "fd_zeroing_bandwidth": self.bandwidth_entry.get(),
             "repeats": self.repeat_entry.get(),
             "repeats_enabled": self.repeat_enable.get(),
             "zeros": self.zeros_var.get(),
@@ -5486,7 +5486,7 @@ class TransceiverUI(ctk.CTk):
         self.bandwidth_entry.delete(0, tk.END)
         self.bandwidth_entry.insert(
             0,
-            params.get("bandwidth", "1e6"),
+            params.get("fd_zeroing_bandwidth", params.get("bandwidth", "1e6")),
         )
         self.repeat_entry.delete(0, tk.END)
         repeats_value = params.get("repeats", "1")
@@ -5686,9 +5686,12 @@ class TransceiverUI(ctk.CTk):
         try:
             fs = _parse_number_expr_or_error(self.fs_entry.get())
             samples = int(self.samples_entry.get())
-            bandwidth = _parse_number_expr_or_error(self.bandwidth_entry.get())
-            if bandwidth <= 0:
-                raise ValueError("Bandwidth muss > 0 Hz sein.")
+            fd_zeroing_bandwidth = _parse_number_expr_or_error(self.bandwidth_entry.get())
+            if fd_zeroing_bandwidth <= 0:
+                raise ValueError("FD-Zeroing Bandwidth muss > 0 Hz sein.")
+            nyquist = fs / 2.0
+            if fd_zeroing_bandwidth > nyquist:
+                raise ValueError(f"FD-Zeroing Bandwidth darf Nyquist ({nyquist:g} Hz) nicht überschreiten.")
             repeats = self._get_repeat_count() if self.repeat_entry.get() else 1
             zeros_mode = self.zeros_var.get() if self.zeros_enable.get() else "none"
             amp = _parse_number_expr_or_error(self.amp_entry.get())
@@ -5699,7 +5702,7 @@ class TransceiverUI(ctk.CTk):
                     self.f_entry.get(), allow_empty=True, empty_value=0.0
                 )
                 data = generate_waveform(
-                    waveform, fs, freq, samples, oversampling=1
+                    waveform, fs, freq, samples, fd_zeroing_bandwidth=fd_zeroing_bandwidth
                 )
             elif waveform == "doppelsinus":
                 f1 = _parse_number_expr_or_error(
@@ -5712,7 +5715,7 @@ class TransceiverUI(ctk.CTk):
                     f1,
                     samples,
                     f1=f2,
-                    oversampling=1,
+                    fd_zeroing_bandwidth=fd_zeroing_bandwidth,
                 )
             elif waveform == "zadoffchu":
                 q = int(self.q_entry.get()) if self.q_entry.get() else 1
@@ -5722,7 +5725,7 @@ class TransceiverUI(ctk.CTk):
                     0.0,
                     samples,
                     q=q,
-                    oversampling=1,
+                    fd_zeroing_bandwidth=fd_zeroing_bandwidth,
                 )
             elif waveform == "ofdm_preamble":
                 nfft = int(_parse_number_expr_or_error(self.ofdm_nfft_entry.get()))
@@ -5750,6 +5753,7 @@ class TransceiverUI(ctk.CTk):
                     ofdm_cp_len=cp_len,
                     ofdm_num_symbols=num_symbols,
                     ofdm_short_repeats=short_repeats,
+                    fd_zeroing_bandwidth=fd_zeroing_bandwidth,
                 )
             elif waveform == "pseudo_noise":
                 pn_chip_rate = _parse_number_expr_or_error(self.pn_chip_entry.get())
@@ -5761,6 +5765,7 @@ class TransceiverUI(ctk.CTk):
                     samples,
                     pn_chip_rate=pn_chip_rate,
                     pn_seed=pn_seed,
+                    fd_zeroing_bandwidth=fd_zeroing_bandwidth,
                 )
             else:  # chirp
                 f0 = _parse_number_expr_or_error(
@@ -5778,7 +5783,7 @@ class TransceiverUI(ctk.CTk):
                     samples,
                     f0=f0,
                     f1=f1,
-                    oversampling=1,
+                    fd_zeroing_bandwidth=fd_zeroing_bandwidth,
                 )
 
             zeros = 0
