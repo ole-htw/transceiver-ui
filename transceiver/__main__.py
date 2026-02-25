@@ -4770,14 +4770,6 @@ class TransceiverUI(ctk.CTk):
         self.range_slider.set_data(data)
         if self.trim_var.get():
             data = self._trim_data(data)
-        interpolation_factor_text = self._rx_interpolation_factor_text()
-        data, fs = _apply_rx_interpolation(
-            data,
-            fs=fs,
-            enabled=bool(self.rx_interpolation_enable.get()),
-            method=self.rx_interpolation_method.get(),
-            factor_expr=interpolation_factor_text,
-        )
 
         def _load_tx_samples(path: str) -> np.ndarray:
             raw = np.fromfile(path, dtype=np.int16)
@@ -4827,6 +4819,51 @@ class TransceiverUI(ctk.CTk):
             self._last_path_cancel_info = cancel_info
         else:
             self._last_path_cancel_info = None
+
+        interpolation_enabled = bool(self.rx_interpolation_enable.get())
+        interpolation_method = self.rx_interpolation_method.get()
+        interpolation_factor_text = self._rx_interpolation_factor_text()
+        data_for_plot = data
+        fs_for_plot = fs
+        ref_data_for_plot = ref_data
+        compare_for_plot = data_uncanceled if self.rx_path_cancel_enable.get() else None
+        if interpolation_enabled:
+            try:
+                data_for_plot, fs_for_plot = _apply_rx_interpolation(
+                    data,
+                    fs=fs,
+                    enabled=interpolation_enabled,
+                    method=interpolation_method,
+                    factor_expr=interpolation_factor_text,
+                )
+                ref_data_for_plot, _ = _apply_rx_interpolation(
+                    ref_data,
+                    fs=fs,
+                    enabled=interpolation_enabled,
+                    method=interpolation_method,
+                    factor_expr=interpolation_factor_text,
+                )
+                if compare_for_plot is not None:
+                    compare_for_plot, _ = _apply_rx_interpolation(
+                        compare_for_plot,
+                        fs=fs,
+                        enabled=interpolation_enabled,
+                        method=interpolation_method,
+                        factor_expr=interpolation_factor_text,
+                    )
+            except Exception as exc:
+                messagebox.showerror(
+                    "RX-Interpolation",
+                    f"Interpolation fehlgeschlagen ({exc}). Verwende Originaldaten.",
+                )
+                data_for_plot = data
+                fs_for_plot = fs
+                ref_data_for_plot = ref_data
+                compare_for_plot = data_uncanceled if self.rx_path_cancel_enable.get() else None
+
+        data = data_for_plot
+        fs = fs_for_plot
+        ref_data = ref_data_for_plot
 
         self.latest_fs = fs
         self.latest_data = data
@@ -5237,7 +5274,7 @@ class TransceiverUI(ctk.CTk):
                 aoa_time,
                 aoa_series,
                 cancel_info if cancel_info and cancel_info.get("applied") else None,
-                data_uncanceled if self.rx_path_cancel_enable.get() else None,
+                compare_for_plot,
             )
         else:
             rx_canvas_list = self.rx_canvases[target_name]
@@ -5250,7 +5287,7 @@ class TransceiverUI(ctk.CTk):
                 aoa_time,
                 aoa_series,
                 cancel_info if cancel_info and cancel_info.get("applied") else None,
-                data_uncanceled if self.rx_path_cancel_enable.get() else None,
+                compare_for_plot,
             )
         self._center_canvas_window(target_canvas, target_window)
         self._update_rx_scrollbar(target_name)
