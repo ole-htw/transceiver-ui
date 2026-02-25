@@ -4006,22 +4006,28 @@ class TransceiverUI(ctk.CTk):
             row=3, column=0, columnspan=2, sticky="ew", pady=(0, 6)
         )
 
-        rx_cont_btn_frame = ctk.CTkFrame(rx_continuous_tab)
-        rx_cont_btn_frame.grid(row=4, column=0, columnspan=2, pady=(0, 5))
+        rx_cont_btn_frame = ctk.CTkFrame(rx_continuous_tab, fg_color="transparent")
+        rx_cont_btn_frame.grid(
+            row=4,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(0, 2),
+        )
         rx_cont_btn_frame.columnconfigure((0, 1), weight=1)
         self.rx_cont_start = ctk.CTkButton(
             rx_cont_btn_frame,
             text="Start",
             command=self.start_continuous,
         )
-        self.rx_cont_start.grid(row=0, column=0, padx=2)
+        self.rx_cont_start.grid(row=0, column=0, padx=2, pady=0, sticky="e")
         self.rx_cont_stop = ctk.CTkButton(
             rx_cont_btn_frame,
             text="Stop",
             command=self.stop_continuous,
             state="disabled",
         )
-        self.rx_cont_stop.grid(row=0, column=1, padx=2)
+        self.rx_cont_stop.grid(row=0, column=1, padx=2, pady=0, sticky="w")
         rx_cont_scroll_container = ctk.CTkFrame(
             rx_continuous_tab,
             fg_color=terminal_container_fg,
