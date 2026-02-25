@@ -2069,12 +2069,18 @@ def _format_stats_rows(
     return rows
 
 
-def _format_rx_stats_rows(stats: dict) -> list[tuple[str, str]]:
+def _format_rx_stats_rows(
+    stats: dict,
+    *,
+    interpolation_enabled: bool = False,
+) -> list[tuple[str, str]]:
     """Return rows for RX stats with a fixed layout order."""
     echo_value = "--"
     if stats.get("echo_delay") is not None:
-        meters = stats["echo_delay"] * 1.5
-        echo_value = f"{stats['echo_delay']} samp ({meters:.1f} m)"
+        echo_value = _format_echo_delay_display(
+            stats["echo_delay"],
+            interpolation_enabled=interpolation_enabled,
+        )
     return [
         ("fmin", _format_hz(stats["f_low"])),
         ("fmax", _format_hz(stats["f_high"])),
@@ -2082,6 +2088,21 @@ def _format_rx_stats_rows(stats: dict) -> list[tuple[str, str]]:
         ("LOS-Echo", echo_value),
         ("BW (3dB)", _format_hz(stats["bw"])),
     ]
+
+
+def _format_echo_delay_display(
+    echo_delay: int | float,
+    *,
+    interpolation_enabled: bool = False,
+) -> str:
+    """Format LOS/echo delay and document the active sample raster.
+
+    With RX interpolation enabled, ``echo_delay`` is reported in the
+    interpolated sample domain (i.e. samples of the upsampled stream).
+    """
+    meters = float(echo_delay) * 1.5
+    suffix = " (interp. Raster)" if interpolation_enabled else ""
+    return f"{echo_delay} samp ({meters:.1f} m){suffix}"
 
 
 def _format_stats_text(
@@ -3504,6 +3525,7 @@ class TransceiverUI(ctk.CTk):
         self.gen_canvases = []
         self.latest_data = None
         self.latest_fs = 0.0
+        self._latest_rx_data_interpolated = False
 
         # ----- Column 2: Transmit -----
         tx_frame, tx_body = _make_section(self, "Transmit")
@@ -4471,6 +4493,59 @@ class TransceiverUI(ctk.CTk):
             widget.delete(0, tk.END)
             widget.insert(0, value)
 
+
+    def _apply_crosscorr_interpolation(
+        self,
+        data: np.ndarray,
+        fs: float,
+        ref_data: np.ndarray | None,
+        crosscorr_compare: np.ndarray | None = None,
+        *,
+        data_is_interpolated: bool = False,
+        ref_is_interpolated: bool = False,
+        compare_is_interpolated: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None, float]:
+        interpolation_enabled = bool(self.rx_interpolation_enable.get())
+        if not interpolation_enabled:
+            return data, ref_data, crosscorr_compare, fs
+
+        interpolation_method = self.rx_interpolation_method.get()
+        interpolation_factor_text = self._rx_interpolation_factor_text()
+
+        data_out = data
+        ref_out = ref_data
+        compare_out = crosscorr_compare
+        fs_out = fs
+
+        if not data_is_interpolated:
+            data_out, fs_out = _apply_rx_interpolation(
+                data_out,
+                fs=fs,
+                enabled=interpolation_enabled,
+                method=interpolation_method,
+                factor_expr=interpolation_factor_text,
+            )
+
+        if ref_out is not None and not ref_is_interpolated:
+            ref_out, _ = _apply_rx_interpolation(
+                ref_out,
+                fs=fs,
+                enabled=interpolation_enabled,
+                method=interpolation_method,
+                factor_expr=interpolation_factor_text,
+            )
+
+        if compare_out is not None and not compare_is_interpolated:
+            compare_out, _ = _apply_rx_interpolation(
+                compare_out,
+                fs=fs,
+                enabled=interpolation_enabled,
+                method=interpolation_method,
+                factor_expr=interpolation_factor_text,
+            )
+
+        return data_out, ref_out, compare_out, fs_out
+
     def _on_rx_xcorr_normalized_toggle(self) -> None:
         normalized_enabled = bool(self.rx_xcorr_normalized_enable.get())
         if self._cont_runtime_config:
@@ -4642,15 +4717,19 @@ class TransceiverUI(ctk.CTk):
         if zeros_data is not None:
             self.latest_data = zeros_data
             self.latest_fs = zeros_fs if zeros_fs is not None else fs
+            self._latest_rx_data_interpolated = False
         elif repeated_data is not None:
             self.latest_data = repeated_data
             self.latest_fs = repeated_fs if repeated_fs is not None else fs
+            self._latest_rx_data_interpolated = False
         elif filtered_data is not None:
             self.latest_data = filtered_data
             self.latest_fs = filtered_fs if filtered_fs is not None else fs
+            self._latest_rx_data_interpolated = False
         else:
             self.latest_data = data
             self.latest_fs = fs
+            self._latest_rx_data_interpolated = False
 
         for child in self.gen_plots_frame.winfo_children():
             child.destroy()
@@ -4882,6 +4961,7 @@ class TransceiverUI(ctk.CTk):
 
         self.latest_fs = fs
         self.latest_data = data
+        self._latest_rx_data_interpolated = bool(interpolation_enabled)
 
         target_container = self._get_rx_plot_target(target_tab)
         target_name = target_container["name"]
@@ -4949,7 +5029,15 @@ class TransceiverUI(ctk.CTk):
                         c=crosscorr_compare,
                         t=crosscorr_title: (
                             self._show_fullscreen(
-                                d, s, m, t, ref_data=r, crosscorr_compare=c
+                                d,
+                                s,
+                                m,
+                                t,
+                                ref_data=r,
+                                crosscorr_compare=c,
+                                data_is_interpolated=True,
+                                ref_is_interpolated=True,
+                                compare_is_interpolated=True,
                             )
                         )
                     )
@@ -4974,7 +5062,10 @@ class TransceiverUI(ctk.CTk):
                 path_cancel_info=path_cancel_info,
                 xcorr_normalized=self.rx_xcorr_normalized_enable.get(),
             )
-            stats_rows = _format_rx_stats_rows(stats)
+            stats_rows = _format_rx_stats_rows(
+                stats,
+                interpolation_enabled=interpolation_enabled,
+            )
             stats_frame = ctk.CTkFrame(target_frame, fg_color="transparent")
             stats_frame.grid(row=len(modes), column=0, sticky="ew", pady=2)
             stats_frame.columnconfigure((0, 1, 2, 3, 4, 5), weight=1)
@@ -5237,7 +5328,17 @@ class TransceiverUI(ctk.CTk):
                     r=ref,
                     c=crosscorr_compare,
                     t=crosscorr_title: (
-                        self._show_fullscreen(d, s, m, t, ref_data=r, crosscorr_compare=c)
+                        self._show_fullscreen(
+                            d,
+                            s,
+                            m,
+                            t,
+                            ref_data=r,
+                            crosscorr_compare=c,
+                            data_is_interpolated=True,
+                            ref_is_interpolated=True,
+                            compare_is_interpolated=True,
+                        )
                     )
                 )
             else:
@@ -5270,8 +5371,10 @@ class TransceiverUI(ctk.CTk):
             else:
                 echo_value = "--"
                 if stats.get("echo_delay") is not None:
-                    meters = stats["echo_delay"] * 1.5
-                    echo_value = f"{stats['echo_delay']} samp ({meters:.1f} m)"
+                    echo_value = _format_echo_delay_display(
+                        stats["echo_delay"],
+                        interpolation_enabled=interpolation_enabled,
+                    )
                 value = echo_value
             value_label = stats_labels.get(mode)
             if value_label is not None:
@@ -5758,7 +5861,10 @@ class TransceiverUI(ctk.CTk):
             path_cancel_info=path_cancel_info,
             xcorr_normalized=self.rx_xcorr_normalized_enable.get(),
         )
-        stats_rows = _format_rx_stats_rows(stats)
+        stats_rows = _format_rx_stats_rows(
+            stats,
+            interpolation_enabled=bool(self.rx_interpolation_enable.get()),
+        )
         text = "\n".join(f"{label}: {value}" for label, value in stats_rows)
         for label_group in label_groups:
             if isinstance(label_group, (list, tuple)):
@@ -5816,17 +5922,38 @@ class TransceiverUI(ctk.CTk):
         title: str,
         ref_data: np.ndarray | None = None,
         crosscorr_compare: np.ndarray | None = None,
+        *,
+        data_is_interpolated: bool = False,
+        ref_is_interpolated: bool = False,
+        compare_is_interpolated: bool = False,
     ) -> None:
         if data is None:
             return
-        if mode == "Crosscorr" and ref_data is None:
-            ref_data, _ref_label = self._get_crosscorr_reference()
-        if (
-            mode == "Crosscorr"
-            and ref_data is not None
-            and self.rx_magnitude_enable.get()
-        ):
-            ref_data = np.abs(ref_data)
+        if mode == "Crosscorr":
+            if ref_data is None:
+                ref_data, _ref_label = self._get_crosscorr_reference()
+            if self.rx_magnitude_enable.get():
+                data = np.abs(data)
+                if ref_data is not None:
+                    ref_data = np.abs(ref_data)
+                if crosscorr_compare is not None:
+                    crosscorr_compare = np.abs(crosscorr_compare)
+            try:
+                data, ref_data, crosscorr_compare, fs = self._apply_crosscorr_interpolation(
+                    data,
+                    fs,
+                    ref_data,
+                    crosscorr_compare,
+                    data_is_interpolated=data_is_interpolated,
+                    ref_is_interpolated=ref_is_interpolated,
+                    compare_is_interpolated=compare_is_interpolated,
+                )
+            except Exception as exc:
+                messagebox.showerror(
+                    "RX-Interpolation",
+                    f"Interpolation für Vollbildansicht fehlgeschlagen ({exc}).",
+                )
+                return
         output_path = _spawn_plot_worker(
             data,
             fs,
@@ -5864,7 +5991,25 @@ class TransceiverUI(ctk.CTk):
             messagebox.showerror("XCorr Full", "No TX data available")
             return
         data = self.latest_data
-        ref = np.abs(ref_data) if self.rx_magnitude_enable.get() else ref_data
+        ref = ref_data
+        if self.rx_magnitude_enable.get():
+            data = np.abs(data)
+            ref = np.abs(ref)
+        try:
+            data, ref, _compare, _interp_fs = self._apply_crosscorr_interpolation(
+                data,
+                self.latest_fs,
+                ref,
+                None,
+                data_is_interpolated=bool(getattr(self, "_latest_rx_data_interpolated", False)),
+                ref_is_interpolated=False,
+            )
+        except Exception as exc:
+            messagebox.showerror("RX-Interpolation", f"Interpolation fehlgeschlagen ({exc}).")
+            return
+        if ref is None:
+            messagebox.showerror("XCorr Full", "No TX data available")
+            return
         n = min(len(data), len(ref))
         cc = _xcorr_fft(data[:n], ref[:n])
         self.full_xcorr_lags = np.arange(-n + 1, n)
