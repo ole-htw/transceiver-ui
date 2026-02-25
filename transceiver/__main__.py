@@ -1547,6 +1547,102 @@ def _echo_delay_samples(
     return int(abs(lags[echo_idx] - lags[los_idx]))
 
 
+def _build_crosscorr_ctx(
+    data: np.ndarray,
+    ref_data: np.ndarray,
+    *,
+    crosscorr_compare: np.ndarray | None = None,
+    manual_lags: dict[str, int | None] | None = None,
+    lag_step: int = 1,
+) -> dict[str, object]:
+    """Return cross-correlation context for one frame.
+
+    The returned dict contains at least ``cc``, ``lags``, ``mag``, ``los_idx``,
+    ``echo_indices``, ``highest_idx`` and ``peak``. When a comparison trace is
+    present, ``cc2``, ``lags2`` and ``mag2`` are included as well.
+    """
+    step = max(1, int(lag_step))
+    cc = _xcorr_fft(data, ref_data)
+    lags = np.arange(-(len(ref_data) - 1), len(data)) * step
+    mag = np.abs(cc)
+    crosscorr_ctx: dict[str, object] = {
+        "cc": cc,
+        "lags": lags,
+        "mag": mag,
+    }
+
+    highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(cc)
+    los_lags = lags
+
+    compare_available = crosscorr_compare is not None and np.size(crosscorr_compare) != 0
+    if compare_available:
+        cc2 = _xcorr_fft(crosscorr_compare, ref_data)
+        lags2 = np.arange(-(len(ref_data) - 1), len(crosscorr_compare)) * step
+        mag2 = np.abs(cc2)
+        crosscorr_ctx.update({"cc2": cc2, "lags2": lags2, "mag2": mag2})
+        highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(cc2)
+        los_lags = lags2
+
+    period_samples = int(len(ref_data) * step)
+    current_peak_group = _current_peak_group_indices(
+        los_lags,
+        base_los_idx,
+        list(base_echo_indices),
+        highest_idx,
+        period_samples,
+    )
+    los_idx, _ = _resolve_manual_los_idx(
+        los_lags,
+        base_los_idx,
+        manual_lags,
+        peak_group_indices=current_peak_group,
+        highest_idx=highest_idx,
+        period_samples=period_samples,
+    )
+    filtered_echo_indices = _filter_peak_indices_to_period_group(
+        los_lags,
+        [idx for idx in base_echo_indices if idx is not None],
+        los_idx,
+        period_samples,
+    )
+    echo_idx = filtered_echo_indices[0] if filtered_echo_indices else None
+    _, manual_echo_idx = _apply_manual_lags(
+        los_lags,
+        los_idx,
+        echo_idx,
+        {
+            "los": None,
+            "echo": manual_lags.get("echo") if manual_lags else None,
+        },
+    )
+    if manual_echo_idx is not None:
+        filtered_echo_indices = [
+            int(manual_echo_idx),
+            *[int(idx) for idx in filtered_echo_indices if int(idx) != int(manual_echo_idx)],
+        ]
+
+    peak = float(np.max(mag)) if mag.size else 0.0
+    if compare_available:
+        mag2 = crosscorr_ctx.get("mag2")
+        if isinstance(mag2, np.ndarray) and mag2.size:
+            peak = max(peak, float(np.max(mag2)))
+
+    crosscorr_ctx.update(
+        {
+            "highest_idx": int(highest_idx) if highest_idx is not None else None,
+            "los_idx": int(los_idx) if los_idx is not None else None,
+            "echo_indices": [int(idx) for idx in filtered_echo_indices],
+            "peak": peak,
+            "period_samples": period_samples,
+            "current_peak_group": [int(idx) for idx in current_peak_group],
+            "peak_source_los_idx": int(base_los_idx) if base_los_idx is not None else None,
+            "peak_source_echo_indices": [int(idx) for idx in base_echo_indices],
+            "peak_source_highest_idx": int(highest_idx) if highest_idx is not None else None,
+        }
+    )
+    return crosscorr_ctx
+
+
 def _estimate_los_lag(
     data: np.ndarray,
     ref_data: np.ndarray,
@@ -1812,6 +1908,7 @@ def _calc_stats(
     include_spectrum: bool = True,
     include_amp: bool = True,
     include_echo: bool = True,
+    precomputed_crosscorr: dict[str, object] | None = None,
 ) -> dict:
     """Return basic signal statistics for display.
 
@@ -1863,38 +1960,39 @@ def _calc_stats(
 
     if include_echo:
         xcorr_data = spectrum_data if include_spectrum else data
-        if ref_data is not None and ref_data.size and xcorr_data.size:
+        if precomputed_crosscorr is not None:
+            lags = precomputed_crosscorr.get("lags2")
+            if not isinstance(lags, np.ndarray):
+                lags = precomputed_crosscorr.get("lags")
+            los_idx = precomputed_crosscorr.get("los_idx")
+            echo_indices = precomputed_crosscorr.get("echo_indices")
+            echo_idx = None
+            if isinstance(echo_indices, list) and echo_indices:
+                echo_idx = echo_indices[0]
+            if isinstance(lags, np.ndarray):
+                stats["echo_delay"] = _echo_delay_samples(
+                    lags,
+                    int(los_idx) if los_idx is not None else None,
+                    int(echo_idx) if echo_idx is not None else None,
+                )
+        elif ref_data is not None and ref_data.size and xcorr_data.size:
             xcorr_ref = ref_data
             xcorr_step = 1
             if xcorr_reduce:
                 xcorr_data, xcorr_ref, xcorr_step = _reduce_pair(
                     xcorr_data, xcorr_ref
                 )
-            cc = _xcorr_fft(xcorr_data, xcorr_ref)
-            lags = (
-                np.arange(-(len(xcorr_ref) - 1), len(xcorr_data)) * xcorr_step
+            crosscorr_ctx = _build_crosscorr_ctx(
+                xcorr_data,
+                xcorr_ref,
+                manual_lags=manual_lags,
+                lag_step=xcorr_step,
             )
-            los_idx, echo_idx = _find_los_echo(cc)
-            period_samples = int(len(xcorr_ref) * xcorr_step)
-            current_peak_group = _current_peak_group_indices(
-                lags,
-                los_idx,
-                [echo_idx] if echo_idx is not None else [],
-                los_idx,
-                period_samples,
+            stats["echo_delay"] = _echo_delay_samples(
+                crosscorr_ctx["lags"],
+                crosscorr_ctx["los_idx"],
+                crosscorr_ctx["echo_indices"][0] if crosscorr_ctx["echo_indices"] else None,
             )
-            los_idx, _ = _resolve_manual_los_idx(
-                lags,
-                los_idx,
-                manual_lags,
-                peak_group_indices=current_peak_group,
-                highest_idx=los_idx,
-                period_samples=period_samples,
-            )
-            _, echo_idx = _apply_manual_lags(
-                lags, los_idx, echo_idx, {"los": None, "echo": manual_lags.get("echo") if manual_lags else None}
-            )
-            stats["echo_delay"] = _echo_delay_samples(lags, los_idx, echo_idx)
         elif path_cancel_info is not None:
             if (
                 path_cancel_info.get("k0") is not None
@@ -2211,6 +2309,7 @@ def _plot_on_pg(
     ref_data: np.ndarray | None = None,
     crosscorr_compare: np.ndarray | None = None,
     manual_lags: dict[str, int | None] | None = None,
+    crosscorr_ctx: dict[str, object] | None = None,
     on_los_drag=None,
     on_echo_drag=None,
     on_los_drag_end=None,
@@ -2271,29 +2370,45 @@ def _plot_on_pg(
             plot.showGrid(x=True, y=True)
             return
         step_r = step
+        compare_available = crosscorr_compare is not None and crosscorr_compare.size
         if reduce_data:
             data, ref_data, step_r = _reduce_pair(data, ref_data)
             fs /= step_r
-            if crosscorr_compare is not None and crosscorr_compare.size:
+            if compare_available:
                 crosscorr_compare = crosscorr_compare[::step_r]
-        cc = _xcorr_fft(data, ref_data)
-        lags = np.arange(-(len(ref_data) - 1), len(data)) * step_r
-        mag = np.abs(cc)
+        if crosscorr_ctx is None:
+            crosscorr_ctx = _build_crosscorr_ctx(
+                data,
+                ref_data,
+                crosscorr_compare=crosscorr_compare,
+                manual_lags=manual_lags,
+                lag_step=step_r,
+            )
+        lags = crosscorr_ctx["lags"]
+        mag = crosscorr_ctx["mag"]
+        los_lags = crosscorr_ctx["lags2"] if isinstance(crosscorr_ctx.get("lags2"), np.ndarray) else lags
+        los_mag = crosscorr_ctx["mag2"] if isinstance(crosscorr_ctx.get("mag2"), np.ndarray) else mag
+        peak_source_highest_idx = crosscorr_ctx.get("highest_idx")
+        peak_source_los_idx = crosscorr_ctx.get("peak_source_los_idx", crosscorr_ctx.get("los_idx"))
+        peak_source_echo_indices = list(crosscorr_ctx.get("peak_source_echo_indices", []))
+        period_samples = int(crosscorr_ctx.get("period_samples", len(ref_data) * step_r))
+        current_peak_group = list(crosscorr_ctx.get("current_peak_group", []))
+        los_idx = crosscorr_ctx.get("los_idx")
+        filtered_echo_indices = list(crosscorr_ctx.get("echo_indices", []))
+        visible_group_indices = [int(los_idx), *filtered_echo_indices] if los_idx is not None else []
+        echo_idx = visible_group_indices[1] if len(visible_group_indices) > 1 else None
+        visible_peak_indices = list(visible_group_indices)
         legend = plot.addLegend()
         main_label = (
             "mit Pfad-Cancellation"
-            if crosscorr_compare is not None and crosscorr_compare.size
+            if compare_available
             else "Kreuzkorrelation"
         )
         plot.plot(lags, mag, pen=pg.mkPen(colors["crosscorr"]), name=main_label)
-        max_peak = float(np.max(mag)) if mag.size else 0.0
         visible_peak_traces: list[tuple[np.ndarray, np.ndarray]] = [(lags, mag)]
-        if crosscorr_compare is not None and crosscorr_compare.size:
-            cc2 = _xcorr_fft(crosscorr_compare, ref_data)
-            lags2 = np.arange(
-                -(len(ref_data) - 1), len(crosscorr_compare)
-            ) * step_r
-            mag2 = np.abs(cc2)
+        if compare_available and isinstance(crosscorr_ctx.get("lags2"), np.ndarray) and isinstance(crosscorr_ctx.get("mag2"), np.ndarray):
+            lags2 = crosscorr_ctx["lags2"]
+            mag2 = crosscorr_ctx["mag2"]
             visible_peak_traces.append((lags2, mag2))
             plot.plot(
                 lags2,
@@ -2301,58 +2416,11 @@ def _plot_on_pg(
                 pen=pg.mkPen(colors["compare"], style=QtCore.Qt.DashLine),
                 name="ohne Pfad-Cancellation",
             )
-            if mag2.size:
-                max_peak = max(max_peak, float(np.max(mag2)))
         if legend is None:
             legend = plot.addLegend()
         if legend is not None:
             legend.show()
-        highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(cc)
-        los_lags = lags
-        los_mag = mag
-        peak_source_cc = cc
-        peak_source_highest_idx = highest_idx
-        peak_source_los_idx = base_los_idx
-        peak_source_echo_indices = list(base_echo_indices)
-        if crosscorr_compare is not None and crosscorr_compare.size:
-            highest_idx2, los_idx2, echo_indices2 = _classify_visible_xcorr_peaks(cc2)
-            los_lags = lags2
-            los_mag = mag2
-            peak_source_cc = cc2
-            peak_source_highest_idx = highest_idx2
-            peak_source_los_idx = los_idx2
-            peak_source_echo_indices = list(echo_indices2)
-        period_samples = int(len(ref_data) * step_r)
-        current_peak_group = _current_peak_group_indices(
-            los_lags,
-            peak_source_los_idx,
-            peak_source_echo_indices,
-            peak_source_highest_idx,
-            period_samples,
-        )
-        los_idx, _ = _resolve_manual_los_idx(
-            los_lags,
-            peak_source_los_idx,
-            manual_lags,
-            peak_group_indices=current_peak_group,
-            highest_idx=peak_source_highest_idx,
-            period_samples=period_samples,
-        )
-
-        def _echo_indices_for_los(anchor_idx: int | None) -> list[int]:
-            return _filter_peak_indices_to_period_group(
-                los_lags,
-                [idx for idx in peak_source_echo_indices if idx is not None],
-                anchor_idx,
-                period_samples,
-            )
-
-        filtered_echo_indices = _echo_indices_for_los(los_idx)
-        visible_group_indices = []
-        if los_idx is not None:
-            visible_group_indices = [int(los_idx), *filtered_echo_indices]
-        echo_idx = visible_group_indices[1] if len(visible_group_indices) > 1 else None
-        visible_peak_indices = list(visible_group_indices)
+        max_peak = float(crosscorr_ctx.get("peak", 0.0) or 0.0)
 
         echo_text = pg.TextItem(color=colors["text"], anchor=(0, 1))
 
@@ -2365,6 +2433,27 @@ def _plot_on_pg(
             view_box = plot.getViewBox()
             x_range, y_range = view_box.viewRange()
             echo_text.setPos(x_range[0], y_range[0])
+
+        def _echo_indices_for_los(anchor_idx: int | None) -> list[int]:
+            indices = _filter_peak_indices_to_period_group(
+                los_lags,
+                [int(idx) for idx in peak_source_echo_indices if idx is not None],
+                anchor_idx,
+                period_samples,
+            )
+            echo_idx_local = indices[0] if indices else None
+            _, echo_idx_local = _apply_manual_lags(
+                los_lags,
+                anchor_idx,
+                echo_idx_local,
+                {
+                    "los": None,
+                    "echo": manual_lags.get("echo") if manual_lags else None,
+                },
+            )
+            if echo_idx_local is not None:
+                return [int(echo_idx_local), *[int(idx) for idx in indices if int(idx) != int(echo_idx_local)]]
+            return [int(idx) for idx in indices]
 
         def _update_echo_text() -> None:
             adj_los_idx, _ = _resolve_manual_los_idx(
@@ -4575,57 +4664,15 @@ class TransceiverUI(ctk.CTk):
             zoom_half_window = 50
 
             def _crosscorr_zoom_range(
-                preview_data: np.ndarray,
-                preview_ref: np.ndarray,
-                preview_compare: np.ndarray | None,
-                manual_lags: dict[str, int | None] | None,
+                precomputed_ctx: dict[str, object] | None,
             ) -> tuple[float, float] | None:
-                if preview_ref is None or preview_ref.size == 0:
+                if not precomputed_ctx:
                     return None
-                preview_data, preview_ref, step_r = _reduce_pair(
-                    preview_data, preview_ref
-                )
-                compare = preview_compare
-                if compare is not None and compare.size:
-                    compare = compare[::step_r]
-                cc = _xcorr_fft(preview_data, preview_ref)
-                lags = np.arange(
-                    -(len(preview_ref) - 1), len(preview_data)
-                ) * step_r
-                highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(cc)
-                los_lags = lags
-                if compare is not None and compare.size:
-                    cc2 = _xcorr_fft(compare, preview_ref)
-                    lags2 = np.arange(
-                        -(len(preview_ref) - 1), len(compare)
-                    ) * step_r
-                    highest_idx2, base_los_idx2, base_echo_indices2 = _classify_visible_xcorr_peaks(cc2)
-                    highest_idx = highest_idx2
-                    base_los_idx = base_los_idx2
-                    base_echo_indices = base_echo_indices2
-                    los_lags = lags2
-                period_samples = int(len(preview_ref) * step_r)
-                current_peak_group = _current_peak_group_indices(
-                    los_lags,
-                    base_los_idx,
-                    list(base_echo_indices),
-                    highest_idx,
-                    period_samples,
-                )
-                los_idx, _ = _resolve_manual_los_idx(
-                    los_lags,
-                    base_los_idx,
-                    manual_lags,
-                    peak_group_indices=current_peak_group,
-                    highest_idx=highest_idx,
-                    period_samples=period_samples,
-                )
-                base_echo_indices = _filter_peak_indices_to_period_group(
-                    los_lags,
-                    [idx for idx in base_echo_indices if idx is not None],
-                    los_idx,
-                    period_samples,
-                )
+                los_lags = precomputed_ctx.get("lags2")
+                if not isinstance(los_lags, np.ndarray):
+                    los_lags = precomputed_ctx.get("lags")
+                if not isinstance(los_lags, np.ndarray) or los_lags.size == 0:
+                    return None
 
                 def _lag_value(source_lags: np.ndarray, idx: int | None) -> float | None:
                     if idx is None or source_lags.size == 0:
@@ -4635,13 +4682,16 @@ class TransceiverUI(ctk.CTk):
                     )
 
                 focus_lags = []
-                los_lag = _lag_value(los_lags, los_idx)
+                los_idx = precomputed_ctx.get("los_idx")
+                echo_indices = precomputed_ctx.get("echo_indices")
+                los_lag = _lag_value(los_lags, int(los_idx) if los_idx is not None else None)
                 if los_lag is not None:
                     focus_lags.append(los_lag)
-                for idx in base_echo_indices:
-                    echo_lag = _lag_value(los_lags, idx)
-                    if echo_lag is not None:
-                        focus_lags.append(echo_lag)
+                if isinstance(echo_indices, list):
+                    for idx in echo_indices:
+                        echo_lag = _lag_value(los_lags, int(idx) if idx is not None else None)
+                        if echo_lag is not None:
+                            focus_lags.append(echo_lag)
                 if not focus_lags:
                     return None
                 center = float(sum(focus_lags) / len(focus_lags))
@@ -4734,6 +4784,19 @@ class TransceiverUI(ctk.CTk):
             plot_item = plot_info["plot"]
             _clear_pg_plot(plot_item)
             ref = plot_ref_data if mode == "Crosscorr" else None
+            crosscorr_ctx = None
+            if mode == "Crosscorr" and ref is not None and ref.size:
+                reduced_data, reduced_ref, step_r = _reduce_pair(plot_data, ref)
+                compare_reduced = None
+                if crosscorr_compare is not None and crosscorr_compare.size:
+                    compare_reduced = crosscorr_compare[::step_r]
+                crosscorr_ctx = _build_crosscorr_ctx(
+                    reduced_data,
+                    reduced_ref,
+                    crosscorr_compare=compare_reduced,
+                    manual_lags=self.manual_xcorr_lags,
+                    lag_step=step_r,
+                )
             crosscorr_title = (
                 f"RX {mode}{title_suffix} ({plot_ref_label})"
                 if mode == "Crosscorr" and plot_ref_label
@@ -4748,6 +4811,7 @@ class TransceiverUI(ctk.CTk):
                 ref_data=ref,
                 crosscorr_compare=crosscorr_compare if mode == "Crosscorr" else None,
                 manual_lags=self.manual_xcorr_lags if mode == "Crosscorr" else None,
+                crosscorr_ctx=crosscorr_ctx,
             )
             if not plot_info["initialized"]:
                 plot_item.enableAutoRange(axis="xy", enable=True)
@@ -4755,12 +4819,7 @@ class TransceiverUI(ctk.CTk):
                 plot_item.enableAutoRange(axis="xy", enable=False)
                 plot_info["initialized"] = True
             if mode == "Crosscorr":
-                zoom_range = _crosscorr_zoom_range(
-                    plot_data,
-                    plot_ref_data,
-                    crosscorr_compare,
-                    self.manual_xcorr_lags,
-                )
+                zoom_range = _crosscorr_zoom_range(crosscorr_ctx)
                 if zoom_range is not None:
                     plot_item.setXRange(*zoom_range, padding=0.0)
                 peak = getattr(plot_item, "_crosscorr_peak", None)
@@ -4826,6 +4885,7 @@ class TransceiverUI(ctk.CTk):
                 include_spectrum=(mode == "Freq"),
                 include_amp=(mode == "Signal"),
                 include_echo=(mode == "Crosscorr"),
+                precomputed_crosscorr=crosscorr_ctx,
             )
             stats_labels = pg_state.get("stats_labels", {})
             if mode == "Freq":
