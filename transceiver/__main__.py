@@ -4865,6 +4865,24 @@ class TransceiverUI(ctk.CTk):
         if self.trim_var.get():
             data = self._trim_data(data)
 
+        target_container = self._get_rx_plot_target(target_tab)
+        target_name = target_container["name"]
+        target_frame = target_container["frame"]
+        target_canvas = target_container["canvas"]
+        target_window = target_container["window"]
+
+        active_cont_mode = "Signal"
+        if target_name == "Continuous":
+            pg_state = getattr(self, "_rx_cont_pg_state", None)
+            tabview = pg_state.get("tabview") if isinstance(pg_state, dict) else None
+            if tabview is not None:
+                try:
+                    active_cont_mode = str(tabview.get())
+                except Exception:
+                    active_cont_mode = "Signal"
+        needs_crosscorr_reference = target_name != "Continuous" or active_cont_mode == "X-Corr"
+        needs_tx_reference = needs_crosscorr_reference or bool(self.rx_path_cancel_enable.get())
+
         def _load_tx_samples(path: str) -> np.ndarray:
             raw = np.fromfile(path, dtype=np.int16)
             if raw.size % 2:
@@ -4872,32 +4890,39 @@ class TransceiverUI(ctk.CTk):
             raw = raw.reshape(-1, 2).astype(np.float32)
             return raw[:, 0] + 1j * raw[:, 1]
 
-        tx_reference_path = _strip_zeros_tx_filename(self.tx_file.get())
-        if tx_reference_path == self._cached_tx_path:
-            self.tx_data = self._cached_tx_data
-        else:
-            try:
-                tx_data = _load_tx_samples(tx_reference_path)
-            except Exception as exc:
-                self.tx_data = np.array([], dtype=np.complex64)
-                self._cached_tx_path = tx_reference_path
-                self._cached_tx_data = self.tx_data
-                if self._cached_tx_load_error_path != tx_reference_path:
-                    logging.warning(
-                        "TX-Referenzdatei konnte nicht geladen werden (%s): %s",
-                        tx_reference_path,
-                        exc,
-                    )
-                    self._cached_tx_load_error_path = tx_reference_path
+        ref_data = np.array([], dtype=np.complex64)
+        ref_label = ""
+        if needs_tx_reference:
+            tx_reference_path = _strip_zeros_tx_filename(self.tx_file.get())
+            if tx_reference_path == self._cached_tx_path:
+                self.tx_data = self._cached_tx_data
             else:
-                self.tx_data = tx_data
-                self._cached_tx_path = tx_reference_path
-                self._cached_tx_data = tx_data
-                self._cached_tx_load_error_path = None
-        ref_data, ref_label = self._get_crosscorr_reference()
+                try:
+                    tx_data = _load_tx_samples(tx_reference_path)
+                except Exception as exc:
+                    self.tx_data = np.array([], dtype=np.complex64)
+                    self._cached_tx_path = tx_reference_path
+                    self._cached_tx_data = self.tx_data
+                    if self._cached_tx_load_error_path != tx_reference_path:
+                        logging.warning(
+                            "TX-Referenzdatei konnte nicht geladen werden (%s): %s",
+                            tx_reference_path,
+                            exc,
+                        )
+                        self._cached_tx_load_error_path = tx_reference_path
+                else:
+                    self.tx_data = tx_data
+                    self._cached_tx_path = tx_reference_path
+                    self._cached_tx_data = tx_data
+                    self._cached_tx_load_error_path = None
+
+            ref_data, ref_label = self._get_crosscorr_reference()
+            if not needs_crosscorr_reference:
+                ref_label = ""
         if self.rx_magnitude_enable.get():
             data = np.abs(data)
-            ref_data = np.abs(ref_data)
+            if ref_data.size:
+                ref_data = np.abs(ref_data)
         data_uncanceled = data
         aoa_text = "AoA (ESPRIT): deaktiviert"
         echo_aoa_text = "Echo AoA: deaktiviert"
@@ -4930,13 +4955,14 @@ class TransceiverUI(ctk.CTk):
                     method=interpolation_method,
                     factor_expr=interpolation_factor_text,
                 )
-                ref_data_for_plot, _ = _apply_rx_interpolation(
-                    ref_data,
-                    fs=fs,
-                    enabled=interpolation_enabled,
-                    method=interpolation_method,
-                    factor_expr=interpolation_factor_text,
-                )
+                if ref_data.size:
+                    ref_data_for_plot, _ = _apply_rx_interpolation(
+                        ref_data,
+                        fs=fs,
+                        enabled=interpolation_enabled,
+                        method=interpolation_method,
+                        factor_expr=interpolation_factor_text,
+                    )
                 if compare_for_plot is not None:
                     compare_for_plot, _ = _apply_rx_interpolation(
                         compare_for_plot,
@@ -4962,12 +4988,6 @@ class TransceiverUI(ctk.CTk):
         self.latest_fs = fs
         self.latest_data = data
         self._latest_rx_data_interpolated = bool(interpolation_enabled)
-
-        target_container = self._get_rx_plot_target(target_tab)
-        target_name = target_container["name"]
-        target_frame = target_container["frame"]
-        target_canvas = target_container["canvas"]
-        target_window = target_container["window"]
 
         if target_name != "Continuous":
             for c in self.rx_canvases[target_name]:
