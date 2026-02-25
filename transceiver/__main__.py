@@ -4140,7 +4140,6 @@ class TransceiverUI(ctk.CTk):
 
         filter_visible = w == "zadoffchu"
         if filter_visible:
-            self.fdz_label.grid(row=0, column=0, sticky="e", padx=self._label_padx)
             self.filter_bandwidth_label.grid(
                 row=0, column=0, sticky="e", padx=self._label_padx
             )
@@ -4148,7 +4147,6 @@ class TransceiverUI(ctk.CTk):
             state = "normal" if self.fdz_enable.get() else "disabled"
             self.filter_bandwidth_entry.entry.configure(state=state)
         else:
-            self.fdz_label.grid_remove()
             self.filter_bandwidth_label.grid_remove()
             self.filter_bandwidth_entry.grid_remove()
             self.filter_bandwidth_entry.entry.configure(state="disabled")
