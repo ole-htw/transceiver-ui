@@ -6062,8 +6062,15 @@ class TransceiverUI(ctk.CTk):
         self.rx_path_cancel_enable.set(
             params.get("rx_path_cancellation_enabled", False)
         )
-        self.rx_interpolation_enable.set(params.get("rx_interpolation_enabled", False))
-        interpolation_method = str(params.get("rx_interpolation_method", "interp1d"))
+        interpolation_enabled = params.get("rx_interpolation_enabled")
+        if interpolation_enabled is None:
+            interpolation_enabled = params.get("interpolation_enabled", False)
+        self.rx_interpolation_enable.set(bool(interpolation_enabled))
+
+        interpolation_method = params.get("rx_interpolation_method")
+        if interpolation_method is None:
+            interpolation_method = params.get("interpolation_method", "interp1d")
+        interpolation_method = str(interpolation_method)
         if interpolation_method == "scipy.signal.resample_poly":
             interpolation_method = "resample_poly"
         elif interpolation_method == "scipy.interpolate.interp1d":
@@ -6076,7 +6083,10 @@ class TransceiverUI(ctk.CTk):
             if interpolation_method == "resample_poly"
             else "scipy.interpolate.interp1d"
         )
-        interpolation_factor = str(params.get("rx_interpolation_factor", "2"))
+        interpolation_factor = params.get("rx_interpolation_factor")
+        if interpolation_factor is None:
+            interpolation_factor = params.get("interpolation_factor", "2")
+        interpolation_factor = str(interpolation_factor).strip() or "2"
         for widget in (
             getattr(self, "rx_interpolation_factor_single", None),
             getattr(self, "rx_interpolation_factor_cont", None),
@@ -6086,6 +6096,16 @@ class TransceiverUI(ctk.CTk):
             widget.delete(0, tk.END)
             widget.insert(0, interpolation_factor)
         self._sync_rx_interpolation_factor_entries("single")
+        if hasattr(self, "_cont_runtime_config"):
+            self._cont_runtime_config["interpolation_enabled"] = bool(
+                self.rx_interpolation_enable.get()
+            )
+            self._cont_runtime_config["interpolation_method"] = (
+                self.rx_interpolation_method.get()
+            )
+            self._cont_runtime_config["interpolation_factor"] = (
+                self._rx_interpolation_factor_text()
+            )
         self._on_rx_interpolation_toggle()
         self._update_path_cancellation_status()
         self.rx_channel_2.set(params.get("rx_channel_2", False))
