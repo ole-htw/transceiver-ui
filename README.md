@@ -54,6 +54,10 @@ The GUI shows basic signal statistics (minimum/maximum frequency, maximum
 amplitude and 3\ dB bandwidth) for both the generated and the received
 signals.
 
-The receive view now also offers optional oversampling which can be applied
-after capturing the data.  This improves the accuracy of the channel impulse
-response when using the built‑in cross‑correlation tools.
+In the TX generate column, the optional shaping uses
+**frequency-domain zeroing** with a **hard edge / harte Kante** and the input
+field **Bandwidth [Hz]**.
+
+The receive view still offers optional oversampling after capture. This RX
+option is unchanged and can improve channel-impulse-response accuracy when
+using the built-in cross-correlation tools.
