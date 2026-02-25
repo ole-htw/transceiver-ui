@@ -2100,9 +2100,8 @@ def _format_echo_delay_display(
 ) -> str:
     """Format LOS/echo delay and document the active sample raster.
 
-    With RX interpolation enabled, ``echo_delay`` is converted back to the
-    base RX sample raster so receive stats stay comparable regardless of the
-    temporary interpolation factor.
+    With RX interpolation enabled, ``echo_delay`` is reported in the
+    interpolated sample domain (i.e. samples of the upsampled stream).
     """
     factor = 1.0
     try:
@@ -2113,17 +2112,11 @@ def _format_echo_delay_display(
         factor = 1.0
 
     samples = float(echo_delay)
-    if interpolation_enabled:
-        samples = samples / factor
-
     meters = samples * 1.5
-    if float(samples).is_integer():
-        samples_display = f"{int(samples)}"
-    else:
-        samples_display = f"{samples:.2f}".rstrip("0").rstrip(".")
-
+    if interpolation_enabled:
+        meters = (samples / factor) * 1.5
     suffix = " (interp. Raster)" if interpolation_enabled else ""
-    return f"{samples_display} samp ({meters:.1f} m){suffix}"
+    return f"{echo_delay} samp ({meters:.1f} m){suffix}"
 
 
 def _format_stats_text(
