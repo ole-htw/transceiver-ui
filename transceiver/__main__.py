@@ -1712,6 +1712,29 @@ def _pretty(val: float) -> str:
     return f"{int(val)}"
 
 
+def _format_bandwidth_token(val_hz: float) -> str:
+    """Return robust bandwidth token (e.g. bw2p5M, bw500k, bw125)."""
+    if not math.isfinite(val_hz) or val_hz <= 0:
+        return "bw0"
+
+    abs_v = abs(val_hz)
+    if abs_v >= 1e6:
+        scaled = abs_v / 1e6
+        suffix = "M"
+    elif abs_v >= 1e3:
+        scaled = abs_v / 1e3
+        suffix = "k"
+    else:
+        scaled = abs_v
+        suffix = ""
+
+    if math.isclose(scaled, round(scaled), rel_tol=0.0, abs_tol=1e-9):
+        number = str(int(round(scaled)))
+    else:
+        number = f"{scaled:.3f}".rstrip("0").rstrip(".").replace(".", "p")
+    return f"bw{number}{suffix}"
+
+
 def _format_hz(val: float) -> str:
     """Return *val* in a human friendly frequency unit."""
     abs_v = abs(val)
@@ -1787,8 +1810,6 @@ def _gen_tx_filename(app) -> str:
     elif w == "zadoffchu":
         q = app.q_entry.get() or "1"
         parts.append(f"q{q}")
-        if fdz_enabled and filter_bandwidth > 0:
-            parts.append(f"bw{_pretty(filter_bandwidth)}")
     elif w == "chirp":
         f0 = _try_parse_number_expr(app.f_entry.get(), default=0.0)
         f1 = _try_parse_number_expr(app.f1_entry.get(), default=f0)
@@ -1811,6 +1832,9 @@ def _gen_tx_filename(app) -> str:
         parts.append(f"pn{_pretty(pn_rate)}")
         parts.append(f"seed{pn_seed}")
 
+    if fdz_enabled and filter_bandwidth > 0:
+        parts.append(_format_bandwidth_token(filter_bandwidth))
+
     parts.append(f"fs{_pretty(fs)}")
     if w == "zadoffchu":
         parts.append(f"Nsym{samples}")
@@ -1824,7 +1848,7 @@ def _gen_tx_filename(app) -> str:
 
 
 def _gen_filtered_tx_filename(filename: str) -> str:
-    """Return a filtered filename derived from *filename*."""
+    """Return an FDZ-filtered filename derived from *filename*."""
     path = Path(filename)
     stem = path.stem if path.suffix else path.name
     return str(path.with_name(f"{stem}_fdz{path.suffix}"))

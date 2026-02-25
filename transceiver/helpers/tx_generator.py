@@ -85,6 +85,29 @@ def _pretty(val: float) -> str:
     return f"{int(val)}"
 
 
+def _format_bandwidth_token(val_hz: float) -> str:
+    """Return robust bandwidth token (e.g. bw2p5M, bw500k, bw125)."""
+    if not math.isfinite(val_hz) or val_hz <= 0:
+        return "bw0"
+
+    abs_v = abs(val_hz)
+    if abs_v >= 1e6:
+        scaled = abs_v / 1e6
+        suffix = "M"
+    elif abs_v >= 1e3:
+        scaled = abs_v / 1e3
+        suffix = "k"
+    else:
+        scaled = abs_v
+        suffix = ""
+
+    if math.isclose(scaled, round(scaled), rel_tol=0.0, abs_tol=1e-9):
+        number = str(int(round(scaled)))
+    else:
+        number = f"{scaled:.3f}".rstrip("0").rstrip(".").replace(".", "p")
+    return f"bw{number}{suffix}"
+
+
 def generate_filename(args) -> Path:
     """Erzeuge einen Dateinamen basierend auf den Parametern."""
     parts = [args.waveform]
@@ -105,6 +128,9 @@ def generate_filename(args) -> Path:
     elif args.waveform == "pseudo_noise":
         parts.append(f"pn{_pretty(args.pn_chip_rate)}")
         parts.append(f"seed{args.pn_seed}")
+
+    if args.bandwidth is not None and args.bandwidth > 0:
+        parts.append(_format_bandwidth_token(args.bandwidth))
 
     if args.waveform == "zadoffchu":
         parts.append(f"Nsym{args.samples}")
