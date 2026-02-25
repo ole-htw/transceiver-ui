@@ -3320,7 +3320,7 @@ class TransceiverUI(ctk.CTk):
 
         self.fdz_label = ctk.CTkLabel(
             filter_left,
-            text="Frequency-domain zeroing",
+            text="frequency-domain zeroing (hard edge / harte Kante)",
             anchor="e",
         )
         self.fdz_label.grid(row=0, column=0, sticky="e", padx=label_padx)
@@ -4138,13 +4138,17 @@ class TransceiverUI(ctk.CTk):
 
     def _on_filter_bandwidth_changed(self) -> None:
         self.auto_update_tx_filename()
-        self._reset_manual_xcorr_lags("Filter/Bandbreite geändert")
+        self._reset_manual_xcorr_lags(
+            "frequency-domain zeroing/Bandbreite geändert"
+        )
 
     def _on_filter_toggle(self) -> None:
         state = "normal" if self.fdz_enable.get() else "disabled"
         self.filter_bandwidth_entry.entry.configure(state=state)
         self.auto_update_tx_filename()
-        self._reset_manual_xcorr_lags("Filter/Bandbreite geändert")
+        self._reset_manual_xcorr_lags(
+            "frequency-domain zeroing/Bandbreite geändert"
+        )
 
     def _get_repeat_count(self) -> int:
         try:
