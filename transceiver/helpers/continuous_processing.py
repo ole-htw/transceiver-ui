@@ -157,6 +157,12 @@ def continuous_processing_worker(
                 data = np.frombuffer(slot_view, dtype=dtype)
                 if shape:
                     data = data.reshape(shape)
+                # Detach worker data from shared-memory buffer immediately so
+                # shutdown can close segments without lingering exported
+                # pointers from NumPy views.
+                data = np.array(data, copy=True)
+                slot_view.release()
+                slot_view = None
             else:
                 slot_view = None
                 data = np.asarray(task.get("data", np.array([], dtype=np.complex64)))
