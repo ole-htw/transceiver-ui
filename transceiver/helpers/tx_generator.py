@@ -13,8 +13,9 @@ Option **--no-zeros**
     Gibt an, dass *keine* Null-Samples an die Wellenform angehängt werden.
     Standard ist weiterhin das alte Verhalten (Waveform + Null-Sequenz).
 
-Option **--bandwidth**
-    Optionale harte Frequenzbegrenzung per FFT-Bin-Zeroing:
+Option **--filter-bandwidth**
+    Optionale Bandbegrenzung nach der Wellenformerzeugung.
+    Standardmäßig wird dabei im Frequenzbereich maskiert:
         Alle Bins außerhalb |f| <= bandwidth/2 werden auf 0 gesetzt.
 
 Die erzeugte Folge wird als interleaved int16 (IQ IQ …) in eine Binärdatei
@@ -129,8 +130,12 @@ def generate_filename(args) -> Path:
         parts.append(f"pn{_pretty(args.pn_chip_rate)}")
         parts.append(f"seed{args.pn_seed}")
 
-    if args.bandwidth is not None and args.bandwidth > 0:
-        parts.append(_format_bandwidth_token(args.bandwidth))
+    if (
+        not args.disable_filter
+        and args.filter_bandwidth is not None
+        and args.filter_bandwidth > 0
+    ):
+        parts.append(_format_bandwidth_token(args.filter_bandwidth))
 
     if args.waveform == "zadoffchu":
         parts.append(f"Nsym{args.samples}")
@@ -165,6 +170,19 @@ def apply_frequency_domain_zeroing(
     freqs = np.fft.fftfreq(signal.size, d=1.0 / fs)
     spectrum[np.abs(freqs) > (bandwidth_hz / 2.0)] = 0.0
     return np.fft.ifft(spectrum).astype(np.complex64)
+
+
+def apply_post_filter(
+    signal: np.ndarray,
+    fs: float,
+    filter_mode: str,
+    filter_bandwidth_hz: float,
+) -> np.ndarray:
+    """Wendet eine optionale Nachfilterung auf die erzeugte Wellenform an."""
+    mode = filter_mode.lower()
+    if mode == "fft_zeroing":
+        return apply_frequency_domain_zeroing(signal, fs=fs, bandwidth_hz=filter_bandwidth_hz)
+    raise ValueError(f"Unbekannter Filtermodus: {filter_mode}")
 
 
 def _trim_to_length(x: np.ndarray, length: int) -> np.ndarray:
@@ -394,10 +412,21 @@ def main() -> None:
         help="Anzahl Samples der Wellenform (Zadoff-Chu: Symbolanzahl, Standard: 40000)",
     )
     parser.add_argument(
-        "--bandwidth",
+        "--filter-bandwidth",
         type=float,
         default=None,
-        help="Optionale harte Bandbegrenzung in Hz via FFT-Zeroing (|f| <= BW/2).",
+        help="Optionale Filterbandbreite in Hz für Nachfilterung (|f| <= BW/2).",
+    )
+    parser.add_argument(
+        "--filter-mode",
+        choices=["fft_zeroing"],
+        default="fft_zeroing",
+        help="Filtermodus für Nachfilterung (Standard: fft_zeroing)",
+    )
+    parser.add_argument(
+        "--disable-filter",
+        action="store_true",
+        help="Deaktiviert die optionale Nachfilterung vollständig.",
     )
 
     # OFDM-spezifisch
@@ -482,6 +511,12 @@ def main() -> None:
         if args.ofdm_short_repeats < 0:
             raise ValueError("--ofdm-short-repeats muss >= 0 sein.")
 
+    if args.filter_bandwidth is not None:
+        if args.filter_bandwidth <= 0:
+            raise ValueError("--filter-bandwidth muss > 0 sein.")
+        if args.filter_bandwidth > args.fs:
+            raise ValueError("--filter-bandwidth muss <= --fs sein (komplexes Basisband).")
+
     N_waveform = args.samples
     N_output = N_waveform
 
@@ -528,11 +563,12 @@ def main() -> None:
     # (Sicherstellen, dass die Länge genau den Erwartungen entspricht)
     waveform_signal = _trim_to_length(waveform_signal, N_output).astype(np.complex64)
 
-    if args.bandwidth is not None:
-        waveform_signal = apply_frequency_domain_zeroing(
+    if not args.disable_filter and args.filter_bandwidth is not None:
+        waveform_signal = apply_post_filter(
             waveform_signal,
             fs=args.fs,
-            bandwidth_hz=args.bandwidth,
+            filter_mode=args.filter_mode,
+            filter_bandwidth_hz=args.filter_bandwidth,
         )
 
     final_len = len(waveform_signal)
