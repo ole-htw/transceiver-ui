@@ -31,7 +31,7 @@ import pyqtgraph as pg
 from pyqtgraph import exporters as pg_exporters
 
 import sys
-from .helpers.tx_generator import generate_waveform
+from .helpers.tx_generator import apply_frequency_domain_zeroing, generate_waveform
 from .helpers.iq_utils import save_interleaved
 from .helpers import rx_convert
 from .helpers.correlation_utils import (
@@ -5888,7 +5888,7 @@ class TransceiverUI(ctk.CTk):
                     self.f_entry.get(), allow_empty=True, empty_value=0.0
                 )
                 data = generate_waveform(
-                    waveform, fs, freq, samples, oversampling=1
+                    waveform, fs, freq, samples
                 )
             elif waveform == "doppelsinus":
                 f1 = _parse_number_expr_or_error(
@@ -5901,7 +5901,6 @@ class TransceiverUI(ctk.CTk):
                     f1,
                     samples,
                     f1=f2,
-                    oversampling=1,
                 )
             elif waveform == "zadoffchu":
                 q = int(self.q_entry.get()) if self.q_entry.get() else 1
@@ -5923,9 +5922,6 @@ class TransceiverUI(ctk.CTk):
                         0.0,
                         samples,
                         q=q,
-                        rrc_beta=beta,
-                        rrc_span=0,
-                        oversampling=1,
                     )
                     filtered_data = generate_waveform(
                         waveform,
@@ -5933,10 +5929,12 @@ class TransceiverUI(ctk.CTk):
                         0.0,
                         samples,
                         q=q,
-                        rrc_beta=beta,
-                        rrc_span=span,
-                        oversampling=oversampling,
                     )
+                    if span > 0:
+                        # Legacy-RRC-Pfad ersetzt durch harte FFT-Bandbegrenzung.
+                        # Die bestehende UI nutzt weiterhin Oversampling+β als Bandbreitensteuerung.
+                        bandwidth_hz = max(1.0, fs / float(oversampling) * (1.0 + float(beta)))
+                        filtered_data = apply_frequency_domain_zeroing(filtered_data, fs, bandwidth_hz)
                     data = filtered_data
                 else:
                     data = generate_waveform(
@@ -5945,9 +5943,6 @@ class TransceiverUI(ctk.CTk):
                         0.0,
                         samples,
                         q=q,
-                        rrc_beta=beta,
-                        rrc_span=span,
-                        oversampling=oversampling,
                     )
             elif waveform == "ofdm_preamble":
                 nfft = int(_parse_number_expr_or_error(self.ofdm_nfft_entry.get()))
@@ -6003,7 +5998,6 @@ class TransceiverUI(ctk.CTk):
                     samples,
                     f0=f0,
                     f1=f1,
-                    oversampling=1,
                 )
 
             zeros = 0
