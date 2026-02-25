@@ -25,6 +25,7 @@ def _decimate_for_display(data: np.ndarray, max_points: int = 4096) -> np.ndarra
 def continuous_processing_worker(
     task_queue: multiprocessing.Queue,
     result_queue: multiprocessing.Queue,
+    worker_id: int = 0,
 ) -> None:
     """Process continuous RX frames and emit preprocessed UI payloads."""
     cached_tx_path: str | None = None
@@ -56,6 +57,7 @@ def continuous_processing_worker(
             break
 
         started = time.monotonic()
+        seq_no = int(task.get("seq_no", -1))
         slot_id = int(task.get("slot_id", -1))
         data_shape = tuple(task.get("data_shape", ()))
         data_dtype = np.dtype(task.get("data_dtype", np.complex64))
@@ -82,6 +84,20 @@ def continuous_processing_worker(
         magnitude_enabled = bool(task.get("magnitude_enabled", False))
         rx_channel_view = str(task.get("rx_channel_view", "Kanal 1"))
         path_cancel_enabled = bool(task.get("path_cancel_enabled", False))
+        heavy_every = max(1, int(task.get("heavy_every", 1)))
+        adaptive_load_enabled = bool(task.get("adaptive_load_enabled", False))
+        target_processing_ms = float(task.get("adaptive_target_processing_ms", 150.0))
+        target_end_to_end_ms = float(task.get("adaptive_target_end_to_end_ms", 300.0))
+        last_processing_ms = float(task.get("last_processing_ms", 0.0))
+        last_end_to_end_ms = float(task.get("last_end_to_end_ms", 0.0))
+        adaptive_factor = 1
+        if adaptive_load_enabled:
+            if last_processing_ms > target_processing_ms or last_end_to_end_ms > target_end_to_end_ms:
+                adaptive_factor = 2
+            if last_processing_ms > (target_processing_ms * 1.7) or last_end_to_end_ms > (target_end_to_end_ms * 1.7):
+                adaptive_factor = 3
+        effective_heavy_every = max(1, heavy_every * adaptive_factor)
+        should_run_heavy = seq_no < 0 or (seq_no % effective_heavy_every == 0)
 
         if tx_path != cached_tx_path:
             cached_tx_path = tx_path
@@ -115,7 +131,7 @@ def continuous_processing_worker(
         if magnitude_enabled:
             plot_data = np.abs(plot_data)
 
-        if path_cancel_enabled and cached_tx_data.size and plot_data.size:
+        if should_run_heavy and path_cancel_enabled and cached_tx_data.size and plot_data.size:
             try:
                 plot_data, _ = apply_path_cancellation(plot_data, cached_tx_data)
             except Exception:
@@ -125,6 +141,7 @@ def continuous_processing_worker(
         result_queue.put(
             {
                 "frame_ts": float(task.get("frame_ts", started)),
+                "seq_no": seq_no,
                 "fs": fs,
                 "plot_data": plot_data,
                 "aoa_text": aoa_text,
@@ -132,6 +149,9 @@ def continuous_processing_worker(
                 "aoa_series": None,
                 "aoa_time": None,
                 "processing_ms": (time.monotonic() - started) * 1000.0,
+                "worker_latency_ms": (time.monotonic() - float(task.get("frame_ts", started))) * 1000.0,
+                "worker_id": worker_id,
+                "effective_heavy_every": effective_heavy_every,
                 "slot_id": slot_id,
             }
         )
