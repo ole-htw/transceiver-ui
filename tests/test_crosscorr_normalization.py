@@ -120,10 +120,10 @@ def test_format_echo_delay_display_with_and_without_interpolation_factor() -> No
     assert plain == "12 samp (18.0 m)"
 
     interp_x2 = _format_echo_delay_display(12, interpolation_enabled=True, interpolation_factor=2.0)
-    assert interp_x2 == "12 samp (9.0 m) (interp. Raster)"
+    assert interp_x2 == "6 samp (9.0 m) (interp. Raster)"
 
     interp_x15 = _format_echo_delay_display(12, interpolation_enabled=True, interpolation_factor=1.5)
-    assert interp_x15 == "12 samp (12.0 m) (interp. Raster)"
+    assert interp_x15 == "8 samp (12.0 m) (interp. Raster)"
 
     interp_invalid = _format_echo_delay_display(12, interpolation_enabled=True, interpolation_factor="bad")
     assert interp_invalid == "12 samp (18.0 m) (interp. Raster)"
@@ -148,4 +148,4 @@ def test_format_rx_stats_rows_scales_echo_distance_when_interpolated() -> None:
     )
 
     as_dict = dict(rows)
-    assert as_dict["LOS-Echo"] == "12 samp (9.0 m) (interp. Raster)"
+    assert as_dict["LOS-Echo"] == "6 samp (9.0 m) (interp. Raster)"
