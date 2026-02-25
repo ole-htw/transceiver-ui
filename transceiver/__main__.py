@@ -6977,8 +6977,11 @@ class TransceiverUI(ctk.CTk):
             'dtype': raw.dtype.str,
             'fs': task.get('fs'),
             'frame_ts': task.get('frame_ts'),
+            'active_plot_tab': self._get_rx_cont_active_plot_tab(),
         }
-        payload.update({k: v for k, v in task.items() if k not in {'data', 'fs', 'frame_ts'}})
+        payload.update(
+            {k: v for k, v in task.items() if k not in {'data', 'fs', 'frame_ts', 'active_plot_tab'}}
+        )
 
         try:
             q.put_nowait(payload)
@@ -7036,8 +7039,14 @@ class TransceiverUI(ctk.CTk):
         self._cont_last_end_to_end_ms = (time.monotonic() - frame_ts) * 1000.0
 
         active_plot_tab = payload.get('active_plot_tab')
-        if active_plot_tab is not None and self._cont_runtime_config:
-            self._cont_runtime_config['active_plot_tab'] = str(active_plot_tab)
+        pg_state = getattr(self, '_rx_cont_pg_state', None)
+        tabview = pg_state.get('tabview') if isinstance(pg_state, dict) else None
+        if self._cont_runtime_config:
+            if tabview is not None:
+                with contextlib.suppress(Exception):
+                    self._cont_runtime_config['active_plot_tab'] = str(tabview.get())
+            elif active_plot_tab is not None:
+                self._cont_runtime_config['active_plot_tab'] = str(active_plot_tab)
 
         normalize_enabled = payload.get('normalize_enabled')
         if normalize_enabled is None:
