@@ -73,6 +73,7 @@ def _correlate_and_estimate_echo_aoa(
     rel_thresh: float = 0.2,
     min_dist: int = 200,
     peak_win: int = 50,
+    return_debug_arrays: bool = False,
 ) -> dict:
     rx = np.asarray(rx_data)
     if rx.ndim != 2 or rx.shape[0] < 2:
@@ -109,14 +110,21 @@ def _correlate_and_estimate_echo_aoa(
             }
         )
 
-    return {
-        "lags": lags,
-        "cc1": cc1,
-        "cc2": cc2,
-        "mag": mag,
+    out = {
         "peaks": peaks,
+        "max_strength": float(np.max(mag)) if mag.size else 0.0,
         "results": results,
     }
+    if return_debug_arrays:
+        out.update(
+            {
+                "lags": lags,
+                "cc1": cc1,
+                "cc2": cc2,
+                "mag": mag,
+            }
+        )
+    return out
 
 
 def _decimate_for_display(data: np.ndarray, max_points: int = 4096) -> np.ndarray:
@@ -197,6 +205,7 @@ def continuous_processing_worker(
                             cached_tx_data,
                             antenna_spacing=float(antenna_spacing),
                             wavelength=float(wavelength),
+                            return_debug_arrays=False,
                         )
                         results = echo_out.get("results", [])
                         if results:
