@@ -11,8 +11,9 @@ from .echo_aoa import (
     _find_peaks_simple,
     _xcorr_fft_two_channel_batched,
 )
-from .path_cancellation import apply_path_cancellation
+
 from .interpolation import _apply_rx_interpolation
+from .path_cancellation import apply_path_cancellation
 
 
 def _decimate_for_display(data: np.ndarray, max_points: int = 4096) -> np.ndarray:
@@ -34,6 +35,54 @@ def _put_latest_result(result_queue: multiprocessing.Queue, payload: dict[str, o
         result_queue.put_nowait(payload)
     except Exception:
         pass
+
+
+def _load_tx_samples(path: object) -> np.ndarray:
+    if not path:
+        return np.array([], dtype=np.complex64)
+    try:
+        raw = np.fromfile(str(path), dtype=np.int16)
+    except Exception:
+        return np.array([], dtype=np.complex64)
+    if raw.size % 2:
+        raw = raw[:-1]
+    if raw.size == 0:
+        return np.array([], dtype=np.complex64)
+    raw = raw.reshape(-1, 2).astype(np.float32)
+    return raw[:, 0] + 1j * raw[:, 1]
+
+
+def _select_channel_and_trim(
+    data: np.ndarray,
+    *,
+    rx_channel_view: str,
+    trim_enabled: bool,
+    trim_start: float,
+    trim_end: float,
+) -> np.ndarray:
+    plot_data = np.asarray(data)
+    if plot_data.ndim == 2 and plot_data.shape[0] >= 2:
+        if rx_channel_view == "Kanal 2":
+            plot_data = plot_data[1]
+        elif rx_channel_view == "Differenz":
+            plot_data = plot_data[0] - plot_data[1]
+        else:
+            plot_data = plot_data[0]
+
+    if trim_enabled and plot_data.size:
+        s = int(round(plot_data.size * trim_start / 100.0))
+        e = int(round(plot_data.size * trim_end / 100.0))
+        e = max(s + 1, min(plot_data.size, e))
+        plot_data = plot_data[s:e]
+    return np.asarray(plot_data)
+
+
+def _normalize_active_tab(tab: str) -> str:
+    if tab == "X-Corr":
+        return "X-Corr"
+    if tab == "Spectrum":
+        return "Spectrum"
+    return "Signal"
 
 
 def continuous_processing_worker(
@@ -60,7 +109,6 @@ def continuous_processing_worker(
             shape = tuple(int(v) for v in task.get("shape", (0,)))
             dtype = np.dtype(task.get("dtype", np.dtype(np.complex64).str))
             fs = float(task.get("fs", 1.0))
-            tx_path = task.get("tx_path")
             trim_enabled = bool(task.get("trim_enabled", False))
             trim_start = float(task.get("trim_start", 0.0))
             trim_end = float(task.get("trim_end", 100.0))
@@ -70,9 +118,13 @@ def continuous_processing_worker(
             interpolation_enabled = bool(task.get("interpolation_enabled", False))
             interpolation_method = str(task.get("interpolation_method", "interp1d"))
             interpolation_factor = str(task.get("interpolation_factor", "2"))
-            active_plot_tab = str(task.get("active_plot_tab", "Signal"))
-            needs_crosscorr = active_plot_tab == "X-Corr"
-            should_apply_path_cancel = needs_crosscorr and path_cancel_enabled
+            active_plot_tab = _normalize_active_tab(str(task.get("active_plot_tab", "Signal")))
+            normalize_enabled = bool(
+                task.get(
+                    "normalize_enabled",
+                    task.get("xcorr_normalized_enabled", False),
+                )
+            )
 
             if use_shared_input:
                 if slot_id < 0 or slot_id >= len(input_slots) or nbytes <= 0 or nbytes > input_slot_size:
@@ -83,6 +135,14 @@ def continuous_processing_worker(
                             "frame_ts": float(task.get("frame_ts", started)),
                             "fs": fs,
                             "plot_data": np.array([], dtype=np.complex64),
+                            "plot_ref_data": np.array([], dtype=np.complex64),
+                            "plot_ref_label": "TX",
+                            "crosscorr_compare": None,
+                            "path_cancel_info": None,
+                            "active_plot_tab": active_plot_tab,
+                            "normalize_enabled": normalize_enabled,
+                            "xcorr_normalized_enabled": normalize_enabled,
+                            "interpolation_enabled": False,
                             "aoa_text": "AoA (ESPRIT): deaktiviert",
                             "echo_aoa_text": "Echo AoA: deaktiviert",
                             "aoa_series": None,
@@ -101,53 +161,74 @@ def continuous_processing_worker(
                 data = np.asarray(task.get("data", np.array([], dtype=np.complex64)))
 
             try:
-
-                if should_apply_path_cancel and tx_path != cached_tx_path:
-                    cached_tx_path = tx_path
-                    cached_tx_data = np.array([], dtype=np.complex64)
-                    if tx_path:
-                        try:
-                            raw = np.fromfile(tx_path, dtype=np.int16)
-                            if raw.size % 2:
-                                raw = raw[:-1]
-                            raw = raw.reshape(-1, 2).astype(np.float32)
-                            cached_tx_data = raw[:, 0] + 1j * raw[:, 1]
-                        except Exception:
-                            cached_tx_data = np.array([], dtype=np.complex64)
-
                 aoa_text = "AoA (ESPRIT): deaktiviert"
                 echo_aoa_text = "Echo AoA: deaktiviert"
 
-                plot_data = data
-                if plot_data.ndim == 2 and plot_data.shape[0] >= 2:
-                    if rx_channel_view == "Kanal 2":
-                        plot_data = plot_data[1]
-                    elif rx_channel_view == "Differenz":
-                        plot_data = plot_data[0] - plot_data[1]
-                    else:
-                        plot_data = plot_data[0]
-                if trim_enabled and plot_data.size:
-                    s = int(round(plot_data.size * trim_start / 100.0))
-                    e = int(round(plot_data.size * trim_end / 100.0))
-                    e = max(s + 1, min(plot_data.size, e))
-                    plot_data = plot_data[s:e]
-                plot_data, fs = _apply_rx_interpolation(
-                    plot_data,
-                    fs=fs,
-                    enabled=interpolation_enabled,
-                    method=interpolation_method,
-                    factor_expr=interpolation_factor,
+                plot_data = _select_channel_and_trim(
+                    data,
+                    rx_channel_view=rx_channel_view,
+                    trim_enabled=trim_enabled,
+                    trim_start=trim_start,
+                    trim_end=trim_end,
                 )
-                if magnitude_enabled:
-                    plot_data = np.abs(plot_data)
+                ref_data = np.array([], dtype=np.complex64)
+                ref_label = "TX"
+                crosscorr_compare: np.ndarray | None = None
+                path_cancel_info: dict[str, object] | None = None
+                interpolation_applied = False
 
-                if should_apply_path_cancel and cached_tx_data.size and plot_data.size:
-                    try:
-                        plot_data, _ = apply_path_cancellation(plot_data, cached_tx_data)
-                    except Exception:
-                        pass
+                # Signal + Spectrum: ausschließlich tab-spezifische Grundaufbereitung.
+                # X-Corr: TX-Referenz, Path-Cancellation und Interpolation zentral hier.
+                if active_plot_tab == "X-Corr":
+                    tx_path = task.get("tx_path")
+                    if tx_path != cached_tx_path:
+                        cached_tx_path = str(tx_path) if tx_path else None
+                        cached_tx_data = _load_tx_samples(tx_path)
+                    ref_data = np.asarray(cached_tx_data)
+
+                    if magnitude_enabled:
+                        plot_data = np.abs(plot_data)
+                        if ref_data.size:
+                            ref_data = np.abs(ref_data)
+
+                    if path_cancel_enabled and ref_data.size and plot_data.size:
+                        crosscorr_compare = np.asarray(plot_data)
+                        try:
+                            plot_data, path_cancel_info = apply_path_cancellation(plot_data, ref_data)
+                        except Exception:
+                            path_cancel_info = None
+                    if interpolation_enabled:
+                        plot_data, fs = _apply_rx_interpolation(
+                            plot_data,
+                            fs=fs,
+                            enabled=True,
+                            method=interpolation_method,
+                            factor_expr=interpolation_factor,
+                        )
+                        if ref_data.size:
+                            ref_data, _ = _apply_rx_interpolation(
+                                ref_data,
+                                fs=fs,
+                                enabled=True,
+                                method=interpolation_method,
+                                factor_expr=interpolation_factor,
+                            )
+                        if crosscorr_compare is not None and crosscorr_compare.size:
+                            crosscorr_compare, _ = _apply_rx_interpolation(
+                                crosscorr_compare,
+                                fs=fs,
+                                enabled=True,
+                                method=interpolation_method,
+                                factor_expr=interpolation_factor,
+                            )
+                        interpolation_applied = True
 
                 plot_data = _decimate_for_display(np.asarray(plot_data))
+                if ref_data.size:
+                    ref_data = _decimate_for_display(np.asarray(ref_data))
+                if crosscorr_compare is not None and crosscorr_compare.size:
+                    crosscorr_compare = _decimate_for_display(np.asarray(crosscorr_compare))
+
                 _put_latest_result(
                     result_queue,
                     {
@@ -155,6 +236,16 @@ def continuous_processing_worker(
                         "frame_ts": float(task.get("frame_ts", started)),
                         "fs": fs,
                         "plot_data": plot_data,
+                        "plot_ref_data": ref_data,
+                        "plot_ref_label": ref_label,
+                        "crosscorr_compare": crosscorr_compare,
+                        "path_cancel_info": path_cancel_info,
+                        "active_plot_tab": active_plot_tab,
+                        "normalize_enabled": normalize_enabled,
+                        "xcorr_normalized_enabled": normalize_enabled,
+                        "interpolation_enabled": interpolation_applied,
+                        "interpolation_method": interpolation_method,
+                        "interpolation_factor": interpolation_factor,
                         "aoa_text": aoa_text,
                         "echo_aoa_text": echo_aoa_text,
                         "aoa_series": None,
