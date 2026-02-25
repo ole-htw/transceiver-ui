@@ -3985,8 +3985,22 @@ class TransceiverUI(ctk.CTk):
         self.rx_cont_output_prefix.insert(0, "signals/rx/snippet")
         self.rx_cont_output_prefix.grid(row=0, column=1, columnspan=2, sticky="ew")
 
+        (
+            self.rx_cont_xcorr_normalized_frame,
+            self.rx_cont_xcorr_normalized_body,
+            self.rx_cont_xcorr_normalized_check,
+        ) = _make_side_bordered_group(
+            rx_continuous_tab,
+            "Kreuzkorrelation normiert",
+            toggle_var=self.rx_xcorr_normalized_enable,
+            toggle_command=self._on_rx_xcorr_normalized_toggle,
+        )
+        self.rx_cont_xcorr_normalized_frame.grid(
+            row=3, column=0, columnspan=2, sticky="ew", pady=(0, 6)
+        )
+
         rx_cont_btn_frame = ctk.CTkFrame(rx_continuous_tab)
-        rx_cont_btn_frame.grid(row=3, column=0, columnspan=2, pady=(0, 5))
+        rx_cont_btn_frame.grid(row=4, column=0, columnspan=2, pady=(0, 5))
         rx_cont_btn_frame.columnconfigure((0, 1), weight=1)
         self.rx_cont_start = ctk.CTkButton(
             rx_cont_btn_frame,
@@ -4006,7 +4020,7 @@ class TransceiverUI(ctk.CTk):
             fg_color=terminal_container_fg,
             corner_radius=terminal_container_corner,
         )
-        rx_cont_scroll_container.grid(row=4, column=0, columnspan=2, sticky="nsew")
+        rx_cont_scroll_container.grid(row=5, column=0, columnspan=2, sticky="nsew")
         rx_cont_scroll_container.columnconfigure(0, weight=1)
         rx_cont_scroll_container.rowconfigure(0, weight=1)
 
