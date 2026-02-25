@@ -2670,6 +2670,35 @@ def _crosscorr_dynamic_y_range(
     return (0.0, max(target_top, 1e-9))
 
 
+def _signal_dynamic_view_ranges(
+    data: np.ndarray,
+    *,
+    y_padding_ratio: float = 0.05,
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """Return dynamic X/Y view ranges for continuous signal previews."""
+    if data.size == 0:
+        return None
+
+    sample_count = int(len(data))
+    x_max = float(max(1, sample_count - 1))
+
+    real_part = np.real(data)
+    imag_part = np.imag(data)
+    y_min = float(min(np.min(real_part), np.min(imag_part)))
+    y_max = float(max(np.max(real_part), np.max(imag_part)))
+
+    if not np.isfinite(y_min) or not np.isfinite(y_max):
+        return None
+
+    if y_max <= y_min:
+        base = max(1e-6, abs(y_max))
+        y_pad = base * max(y_padding_ratio, 0.1)
+    else:
+        y_pad = (y_max - y_min) * max(y_padding_ratio, 0.0)
+
+    return (0.0, x_max), (y_min - y_pad, y_max + y_pad)
+
+
 def _clear_pg_plot(plot_item: pg.PlotItem) -> None:
     if plot_item.legend is not None:
         legend = plot_item.legend
@@ -4818,7 +4847,19 @@ class TransceiverUI(ctk.CTk):
                 manual_lags=self.manual_xcorr_lags if mode == "Crosscorr" else None,
                 crosscorr_ctx=crosscorr_ctx,
             )
-            if not plot_info["initialized"]:
+            if mode == "Signal":
+                signal_ranges = _signal_dynamic_view_ranges(plot_data)
+                if signal_ranges is not None:
+                    (x_min, x_max), (y_min, y_max) = signal_ranges
+                    plot_item.setXRange(x_min, x_max, padding=0.0)
+                    plot_item.setYRange(y_min, y_max, padding=0.0)
+                    plot_info["initialized"] = True
+                elif not plot_info["initialized"]:
+                    plot_item.enableAutoRange(axis="xy", enable=True)
+                    plot_item.autoRange()
+                    plot_item.enableAutoRange(axis="xy", enable=False)
+                    plot_info["initialized"] = True
+            elif not plot_info["initialized"]:
                 plot_item.enableAutoRange(axis="xy", enable=True)
                 plot_item.autoRange()
                 plot_item.enableAutoRange(axis="xy", enable=False)
