@@ -1528,6 +1528,7 @@ def _build_crosscorr_ctx(
     crosscorr_compare: np.ndarray | None = None,
     manual_lags: dict[str, int | None] | None = None,
     lag_step: int = 1,
+    normalize: bool = False,
 ) -> dict[str, object]:
     """Return cross-correlation context for one frame.
 
@@ -1539,6 +1540,10 @@ def _build_crosscorr_ctx(
     cc = _xcorr_fft(data, ref_data)
     lags = np.arange(-(len(ref_data) - 1), len(data)) * step
     mag = np.abs(cc)
+    if normalize:
+        peak_mag = float(np.max(mag)) if mag.size else 0.0
+        if peak_mag > 0.0:
+            mag = mag / peak_mag
     crosscorr_ctx: dict[str, object] = {
         "cc": cc,
         "lags": lags,
@@ -1557,6 +1562,10 @@ def _build_crosscorr_ctx(
         cc2 = _xcorr_fft(crosscorr_compare, ref_data)
         lags2 = np.arange(-(len(ref_data) - 1), len(crosscorr_compare)) * step
         mag2 = np.abs(cc2)
+        if normalize:
+            peak_mag2 = float(np.max(mag2)) if mag2.size else 0.0
+            if peak_mag2 > 0.0:
+                mag2 = mag2 / peak_mag2
         crosscorr_ctx.update({"cc2": cc2, "lags2": lags2, "mag2": mag2})
         highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(
             mag2,
@@ -2177,6 +2186,7 @@ def _spawn_plot_worker(
     ref_data: np.ndarray | None = None,
     manual_lags: dict[str, int | None] | None = None,
     crosscorr_compare: np.ndarray | None = None,
+    normalize_crosscorr: bool = False,
     fullscreen: bool = False,
 ) -> str | None:
     """Launch the PyQtGraph plot worker in a separate process."""
@@ -2226,6 +2236,7 @@ def _spawn_plot_worker(
         "title": title,
         "fs": fs,
         "fullscreen": fullscreen,
+        "normalize_crosscorr": bool(normalize_crosscorr),
         "reduction_step": reduction_step,
     }
     if shm_name:
@@ -2324,6 +2335,7 @@ def _plot_on_pg(
     *,
     reduce_data: bool = True,
     reduction_step: int = 1,
+    normalize_crosscorr: bool = False,
 ) -> None:
     """Helper to draw the selected visualization on a PyQtGraph PlotItem."""
     colors = PLOT_COLORS
@@ -2390,6 +2402,7 @@ def _plot_on_pg(
                 crosscorr_compare=crosscorr_compare,
                 manual_lags=manual_lags,
                 lag_step=step_r,
+                normalize=normalize_crosscorr,
             )
         lags = crosscorr_ctx["lags"]
         mag = crosscorr_ctx["mag"]
@@ -2642,7 +2655,7 @@ def _plot_on_pg(
             scene.sigMouseClicked.connect(_handle_click)
         plot.setTitle(f"Crosscorr. with TX: {title}")
         plot.setLabel("bottom", "Lag")
-        plot.setLabel("left", "Magnitude")
+        plot.setLabel("left", "Magnitude (norm.)" if normalize_crosscorr else "Magnitude")
         plot._crosscorr_peak = max_peak
         plot._crosscorr_peak_traces = visible_peak_traces
     plot.showGrid(x=True, y=True)
@@ -2788,6 +2801,7 @@ def _plot_on_mpl(
     ref_data: np.ndarray | None = None,
     crosscorr_compare: np.ndarray | None = None,
     manual_lags: dict[str, int | None] | None = None,
+    normalize_crosscorr: bool = False,
 ) -> None:
     """Helper to draw a small matplotlib preview plot."""
     mpl_colors = PLOT_COLORS
@@ -2837,6 +2851,10 @@ def _plot_on_mpl(
         cc = _xcorr_fft(data, ref_data)
         lags = np.arange(-(len(ref_data) - 1), len(data)) * step_r
         mag = np.abs(cc)
+        if normalize_crosscorr:
+            peak_mag = float(np.max(mag)) if mag.size else 0.0
+            if peak_mag > 0.0:
+                mag = mag / peak_mag
         ax.plot(lags, mag, color=mpl_colors["crosscorr"])
         compare_handles: list[Line2D] = []
         if crosscorr_compare is not None and crosscorr_compare.size:
@@ -2845,6 +2863,10 @@ def _plot_on_mpl(
                 -(len(ref_data) - 1), len(crosscorr_compare)
             ) * step_r
             mag2 = np.abs(cc2)
+            if normalize_crosscorr:
+                peak_mag2 = float(np.max(mag2)) if mag2.size else 0.0
+                if peak_mag2 > 0.0:
+                    mag2 = mag2 / peak_mag2
             ax.plot(
                 lags2,
                 mag2,
@@ -2965,7 +2987,7 @@ def _plot_on_mpl(
                 color=mpl_colors["echo"],
             )
         ax.set_xlabel("Lag")
-        ax.set_ylabel("Magnitude")
+        ax.set_ylabel("Magnitude (norm.)" if normalize_crosscorr else "Magnitude")
     ax.set_title(title)
     ax.grid(True)
     _apply_mpl_gray_style(ax)
@@ -3761,8 +3783,23 @@ class TransceiverUI(ctk.CTk):
             row=5, column=0, columnspan=2, sticky="ew", pady=(0, 6)
         )
 
+        self.rx_crosscorr_normalized_enable = tk.BooleanVar(value=False)
+        (
+            self.rx_crosscorr_normalized_frame,
+            self.rx_crosscorr_normalized_body,
+            self.rx_crosscorr_normalized_check,
+        ) = _make_side_bordered_group(
+            rx_single_tab,
+            "Kreuzkorrelation",
+            toggle_var=self.rx_crosscorr_normalized_enable,
+            toggle_command=self._on_rx_crosscorr_normalized_toggle,
+        )
+        self.rx_crosscorr_normalized_frame.grid(
+            row=6, column=0, columnspan=2, sticky="ew", pady=(0, 6)
+        )
+
         rx_btn_frame = ctk.CTkFrame(rx_single_tab)
-        rx_btn_frame.grid(row=6, column=0, columnspan=2, pady=(0, 5))
+        rx_btn_frame.grid(row=7, column=0, columnspan=2, pady=(0, 5))
         rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
         self.rx_button = ctk.CTkButton(rx_btn_frame, text="Receive", command=self.receive)
@@ -3784,7 +3821,7 @@ class TransceiverUI(ctk.CTk):
             fg_color=terminal_container_fg,
             corner_radius=terminal_container_corner,
         )
-        rx_scroll_container.grid(row=7, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.grid(row=8, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
@@ -3831,7 +3868,7 @@ class TransceiverUI(ctk.CTk):
                 self._update_rx_scrollbar(tab_name),
             ),
         )
-        rx_single_tab.rowconfigure(7, weight=1)
+        rx_single_tab.rowconfigure(8, weight=1)
 
         rx_continuous_tab = rx_tabs.add("Continuous")
         rx_continuous_tab.columnconfigure((0, 1), weight=1)
@@ -4207,6 +4244,9 @@ class TransceiverUI(ctk.CTk):
         self._reset_manual_xcorr_lags("Pfad-Cancellation geändert")
         self.update_trim()
 
+    def _on_rx_crosscorr_normalized_toggle(self) -> None:
+        self.update_trim()
+
     def _apply_path_cancellation(
         self, data: np.ndarray, ref_data: np.ndarray
     ) -> tuple[np.ndarray, dict[str, object]]:
@@ -4578,6 +4618,7 @@ class TransceiverUI(ctk.CTk):
 
         modes = ["Signal", "Freq", "Crosscorr"]
         title_suffix = f" ({channel_label})" if channel_label else ""
+        normalize_crosscorr = bool(self.rx_crosscorr_normalized_enable.get())
 
         def _render_rx_preview(
             target_frame: ctk.CTkFrame,
@@ -4611,6 +4652,7 @@ class TransceiverUI(ctk.CTk):
                     ref,
                     crosscorr_compare if mode == "Crosscorr" else None,
                     manual_lags=self.manual_xcorr_lags,
+                    normalize_crosscorr=normalize_crosscorr,
                 )
                 canvas = FigureCanvasTkAgg(fig, master=target_frame)
                 canvas.draw()
@@ -4828,6 +4870,7 @@ class TransceiverUI(ctk.CTk):
                     crosscorr_compare=compare_reduced,
                     manual_lags=self.manual_xcorr_lags,
                     lag_step=step_r,
+                    normalize=normalize_crosscorr,
                 )
             crosscorr_title = (
                 f"RX {mode}{title_suffix} ({plot_ref_label})"
@@ -4844,6 +4887,7 @@ class TransceiverUI(ctk.CTk):
                 crosscorr_compare=crosscorr_compare if mode == "Crosscorr" else None,
                 manual_lags=self.manual_xcorr_lags if mode == "Crosscorr" else None,
                 crosscorr_ctx=crosscorr_ctx,
+                normalize_crosscorr=normalize_crosscorr,
             )
             if mode == "Signal":
                 signal_ranges = _signal_dynamic_view_ranges(plot_data)
@@ -5503,6 +5547,7 @@ class TransceiverUI(ctk.CTk):
             ref_data=ref_data if ref_data is not None else getattr(self, "tx_data", None),
             manual_lags=self.manual_xcorr_lags,
             crosscorr_compare=crosscorr_compare,
+            normalize_crosscorr=bool(self.rx_crosscorr_normalized_enable.get()),
             fullscreen=True,
         )
         if mode == "Crosscorr":
@@ -5536,6 +5581,10 @@ class TransceiverUI(ctk.CTk):
         cc = _xcorr_fft(data[:n], ref[:n])
         self.full_xcorr_lags = np.arange(-n + 1, n)
         self.full_xcorr_mag = np.abs(cc)
+        if self.rx_crosscorr_normalized_enable.get() and self.full_xcorr_mag.size:
+            peak_mag = float(np.max(self.full_xcorr_mag))
+            if peak_mag > 0.0:
+                self.full_xcorr_mag = self.full_xcorr_mag / peak_mag
         self.echo_aoa_results = []
         self._show_toast("Cross-correlation calculated")
 
@@ -5574,6 +5623,7 @@ class TransceiverUI(ctk.CTk):
             "rx_gain": self.rx_gain.get(),
             "rx_magnitude_enabled": self.rx_magnitude_enable.get(),
             "rx_path_cancellation_enabled": self.rx_path_cancel_enable.get(),
+            "rx_crosscorr_normalized": self.rx_crosscorr_normalized_enable.get(),
             "rx_channel_2": self.rx_channel_2.get(),
             "rx_channel_view": self.rx_channel_view.get(),
             "rx_file": self.rx_file.get(),
@@ -5710,6 +5760,9 @@ class TransceiverUI(ctk.CTk):
         self.rx_magnitude_enable.set(params.get("rx_magnitude_enabled", False))
         self.rx_path_cancel_enable.set(
             params.get("rx_path_cancellation_enabled", False)
+        )
+        self.rx_crosscorr_normalized_enable.set(
+            params.get("rx_crosscorr_normalized", False)
         )
         self._update_path_cancellation_status()
         self.rx_channel_2.set(params.get("rx_channel_2", False))
@@ -6220,6 +6273,7 @@ class TransceiverUI(ctk.CTk):
             'rx_channel_view': self.rx_channel_view.get(),
             'magnitude_enabled': bool(self.rx_magnitude_enable.get()),
             'path_cancel_enabled': bool(self.rx_path_cancel_enable.get()),
+            'crosscorr_normalized': bool(self.rx_crosscorr_normalized_enable.get()),
             'tx_path': tx_reference_path,
         }
 
