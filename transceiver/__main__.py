@@ -141,12 +141,6 @@ CONTINUOUS_INPUT_SLOT_COUNT = 4
 CONTINUOUS_INPUT_SLOT_MIN_BYTES = 4 * 1024 * 1024
 CONTINUOUS_INPUT_SLOT_MAX_BYTES = 64 * 1024 * 1024
 CONTINUOUS_INPUT_SLOT_HEADROOM = 1.35
-CONTINUOUS_WORKER_POOL_MAX = 8
-CONTINUOUS_HEAVY_EVERY_MAX = 16
-CONTINUOUS_ADAPT_UP_PROCESSING_MS = 120.0
-CONTINUOUS_ADAPT_UP_END_TO_END_MS = 300.0
-CONTINUOUS_ADAPT_DOWN_PROCESSING_MS = 55.0
-CONTINUOUS_ADAPT_DOWN_END_TO_END_MS = 140.0
 
 
 def _oversampling_ratio(oversampling: float) -> Fraction:
@@ -2869,19 +2863,11 @@ class TransceiverUI(ctk.CTk):
         self._cont_task_queue: multiprocessing.Queue | None = None
         self._cont_result_queue: multiprocessing.Queue | None = None
         self._cont_worker_process: Process | None = None
-        self._cont_worker_processes: list[Process] = []
-        self._cont_worker_count = 1
         self._cont_task_queue_drops = 0
         self._cont_rendered_frames = 0
         self._cont_last_processing_ms = 0.0
         self._cont_last_end_to_end_ms = 0.0
-        self._cont_last_worker_latency_ms = 0.0
         self._cont_worker_result_drops = 0
-        self._cont_result_queue_drops = 0
-        self._cont_frame_seq = 0
-        self._cont_latest_rendered_seq = -1
-        self._cont_heavy_every = 1
-        self._cont_heavy_applied = False
         self._cont_runtime_config: dict[str, object] = {}
         self._cont_input_slots: list[shared_memory.SharedMemory] = []
         self._cont_input_slot_size = 0
@@ -3805,19 +3791,6 @@ class TransceiverUI(ctk.CTk):
         self.rx_cont_snippet_interval.grid(
             row=0, column=3, sticky="ew", padx=(0, 8)
         )
-        ctk.CTkLabel(rx_cont_snippet_body, text="Worker", anchor="e").grid(
-            row=1, column=0, sticky="e", padx=label_padx, pady=(6, 0)
-        )
-        self.rx_cont_workers = SuggestEntry(rx_cont_snippet_body, "rx_cont_workers")
-        self.rx_cont_workers.insert(0, "1")
-        self.rx_cont_workers.grid(row=1, column=1, sticky="ew", padx=(0, 8), pady=(6, 0))
-
-        ctk.CTkLabel(rx_cont_snippet_body, text="Heavy jedes k", anchor="e").grid(
-            row=1, column=2, sticky="e", padx=label_padx, pady=(6, 0)
-        )
-        self.rx_cont_heavy_every = SuggestEntry(rx_cont_snippet_body, "rx_cont_heavy_every")
-        self.rx_cont_heavy_every.insert(0, "1")
-        self.rx_cont_heavy_every.grid(row=1, column=3, sticky="ew", padx=(0, 8), pady=(6, 0))
 
         rx_cont_output_frame, rx_cont_output_body, _ = _make_side_bordered_group(
             rx_continuous_tab,
@@ -3848,18 +3821,12 @@ class TransceiverUI(ctk.CTk):
             state="disabled",
         )
         self.rx_cont_stop.grid(row=0, column=1, padx=2)
-        self.rx_cont_metrics_label = ctk.CTkLabel(
-            rx_continuous_tab,
-            text="Frames: 0 | Queue drops: 0 | Worker drops: 0 | Result drops: 0 | Proc: 0.0 ms | E2E: 0.0 ms | Worker: 0.0 ms | heavy k=1",
-            anchor="w",
-        )
-        self.rx_cont_metrics_label.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         rx_cont_scroll_container = ctk.CTkFrame(
             rx_continuous_tab,
             fg_color=terminal_container_fg,
             corner_radius=terminal_container_corner,
         )
-        rx_cont_scroll_container.grid(row=5, column=0, columnspan=2, sticky="nsew")
+        rx_cont_scroll_container.grid(row=4, column=0, columnspan=2, sticky="nsew")
         rx_cont_scroll_container.columnconfigure(0, weight=1)
         rx_cont_scroll_container.rowconfigure(0, weight=1)
 
@@ -3912,7 +3879,7 @@ class TransceiverUI(ctk.CTk):
                 self._update_rx_scrollbar(tab_name),
             ),
         )
-        rx_continuous_tab.rowconfigure(5, weight=1)
+        rx_continuous_tab.rowconfigure(4, weight=1)
 
         self._rx_scroll_active: dict[str, bool] = {
             "Single": False,
@@ -5494,8 +5461,6 @@ class TransceiverUI(ctk.CTk):
             "rx_cont_args": self.rx_cont_args.get(),
             "rx_cont_snippet_seconds": self.rx_cont_snippet_seconds.get(),
             "rx_cont_snippet_interval": self.rx_cont_snippet_interval.get(),
-            "rx_cont_workers": self.rx_cont_workers.get(),
-            "rx_cont_heavy_every": self.rx_cont_heavy_every.get(),
             "rx_cont_output_prefix": self.rx_cont_output_prefix.get(),
             "rx_active_tab": self._get_rx_active_tab(),
         }
@@ -5623,10 +5588,6 @@ class TransceiverUI(ctk.CTk):
         self.rx_cont_snippet_interval.insert(
             0, params.get("rx_cont_snippet_interval", "1.0")
         )
-        self.rx_cont_workers.delete(0, tk.END)
-        self.rx_cont_workers.insert(0, params.get("rx_cont_workers", "1"))
-        self.rx_cont_heavy_every.delete(0, tk.END)
-        self.rx_cont_heavy_every.insert(0, params.get("rx_cont_heavy_every", "1"))
         self.rx_cont_output_prefix.delete(0, tk.END)
         self.rx_cont_output_prefix.insert(
             0, params.get("rx_cont_output_prefix", "signals/rx/snippet")
@@ -6237,20 +6198,12 @@ class TransceiverUI(ctk.CTk):
             snippet_interval = _parse_number_expr_or_error(
                 self.rx_cont_snippet_interval.get()
             )
-            worker_count = int(round(_parse_number_expr_or_error(self.rx_cont_workers.get())))
-            heavy_every = int(round(_parse_number_expr_or_error(self.rx_cont_heavy_every.get())))
             restart_margin = _parse_number_expr_or_error(
                 self.rx_cont_restart_margin.get()
             )
         except ValueError as exc:
             messagebox.showerror("Continuous", str(exc))
             return
-        worker_count = max(1, min(CONTINUOUS_WORKER_POOL_MAX, worker_count))
-        heavy_every = max(1, min(CONTINUOUS_HEAVY_EVERY_MAX, heavy_every))
-        self._cont_worker_count = worker_count
-        self._cont_heavy_every = heavy_every
-        self._cont_frame_seq = 0
-        self._cont_latest_rendered_seq = -1
         tx_reference_path = _strip_zeros_tx_filename(self.tx_file.get())
         self._cont_runtime_config = {
             'trim_enabled': bool(self.trim_var.get()),
@@ -6300,12 +6253,7 @@ class TransceiverUI(ctk.CTk):
             self.rx_cont_start.configure(state="disabled")
         if hasattr(self, "rx_cont_stop"):
             self.rx_cont_stop.configure(state="normal")
-        self._start_continuous_pipeline(
-            rate=rate,
-            snippet_seconds=snippet_seconds,
-            worker_count=worker_count,
-            heavy_every=heavy_every,
-        )
+        self._start_continuous_pipeline(rate=rate, snippet_seconds=snippet_seconds)
         self._cont_thread = threading.Thread(
             target=self._run_continuous_thread,
             args=(cmd, rate, self._cont_stop_event),
@@ -6314,56 +6262,37 @@ class TransceiverUI(ctk.CTk):
         self._cont_thread.start()
         self._process_queue()
 
-    def _start_continuous_pipeline(
-        self,
-        *,
-        rate: float,
-        snippet_seconds: float,
-        worker_count: int = 1,
-        heavy_every: int = 1,
-    ) -> None:
-        queue_size = max(2, worker_count * 2)
-        self._cont_task_queue = multiprocessing.Queue(maxsize=queue_size)
-        self._cont_result_queue = multiprocessing.Queue(maxsize=queue_size)
+    def _start_continuous_pipeline(self, *, rate: float, snippet_seconds: float) -> None:
+        self._cont_task_queue = multiprocessing.Queue(maxsize=2)
+        self._cont_result_queue = multiprocessing.Queue(maxsize=2)
         self._prepare_continuous_input_slots(rate=rate, snippet_seconds=snippet_seconds)
         self._cont_task_queue_drops = 0
         self._cont_rendered_frames = 0
         self._cont_last_processing_ms = 0.0
         self._cont_last_end_to_end_ms = 0.0
-        self._cont_last_worker_latency_ms = 0.0
         self._cont_worker_result_drops = 0
-        self._cont_result_queue_drops = 0
-        self._cont_heavy_every = max(1, heavy_every)
-        self._cont_heavy_applied = False
-        self._cont_worker_processes = []
-        for _ in range(max(1, worker_count)):
-            worker = Process(
-                target=continuous_processing_worker,
-                args=(
-                    self._cont_task_queue,
-                    self._cont_result_queue,
-                    [slot.name for slot in self._cont_input_slots],
-                    self._cont_input_slot_size,
-                ),
-                daemon=True,
-            )
-            worker.start()
-            self._cont_worker_processes.append(worker)
-        self._cont_worker_process = self._cont_worker_processes[0] if self._cont_worker_processes else None
-        self._update_continuous_metrics_label()
+        self._cont_worker_process = Process(
+            target=continuous_processing_worker,
+            args=(
+                self._cont_task_queue,
+                self._cont_result_queue,
+                [slot.name for slot in self._cont_input_slots],
+                self._cont_input_slot_size,
+            ),
+            daemon=True,
+        )
+        self._cont_worker_process.start()
         self.after(25, self._poll_continuous_results)
 
     def _stop_continuous_pipeline(self) -> None:
         if self._cont_task_queue is not None:
-            for _ in range(max(1, len(self._cont_worker_processes) or self._cont_worker_count)):
-                with contextlib.suppress(Exception):
-                    self._cont_task_queue.put_nowait(None)
-        for worker in list(self._cont_worker_processes):
-            if worker.is_alive():
-                worker.join(timeout=2)
-                if worker.is_alive():
-                    worker.terminate()
-                    worker.join(timeout=1)
+            with contextlib.suppress(Exception):
+                self._cont_task_queue.put_nowait(None)
+        if self._cont_worker_process is not None and self._cont_worker_process.is_alive():
+            self._cont_worker_process.join(timeout=2)
+            if self._cont_worker_process.is_alive():
+                self._cont_worker_process.terminate()
+                self._cont_worker_process.join(timeout=1)
         for q in (self._cont_task_queue, self._cont_result_queue):
             if q is None:
                 continue
@@ -6374,9 +6303,7 @@ class TransceiverUI(ctk.CTk):
         self._cont_task_queue = None
         self._cont_result_queue = None
         self._cont_worker_process = None
-        self._cont_worker_processes = []
         self._cleanup_continuous_input_slots()
-        self._update_continuous_metrics_label()
 
     def _prepare_continuous_input_slots(self, *, rate: float, snippet_seconds: float) -> None:
         self._cleanup_continuous_input_slots()
@@ -6412,34 +6339,6 @@ class TransceiverUI(ctk.CTk):
             return
         self._cont_input_free_slots.append(slot_id)
 
-    def _adapt_continuous_load(self) -> None:
-        heavy_every = max(1, int(getattr(self, "_cont_heavy_every", 1)))
-        processing_ms = float(getattr(self, "_cont_last_processing_ms", 0.0))
-        end_to_end_ms = float(getattr(self, "_cont_last_end_to_end_ms", 0.0))
-        if (
-            processing_ms > CONTINUOUS_ADAPT_UP_PROCESSING_MS
-            or end_to_end_ms > CONTINUOUS_ADAPT_UP_END_TO_END_MS
-        ) and heavy_every < CONTINUOUS_HEAVY_EVERY_MAX:
-            self._cont_heavy_every = heavy_every + 1
-        elif (
-            processing_ms < CONTINUOUS_ADAPT_DOWN_PROCESSING_MS
-            and end_to_end_ms < CONTINUOUS_ADAPT_DOWN_END_TO_END_MS
-        ) and heavy_every > 1:
-            self._cont_heavy_every = heavy_every - 1
-
-    def _update_continuous_metrics_label(self) -> None:
-        if not hasattr(self, "rx_cont_metrics_label"):
-            return
-        heavy_suffix = " (heavy)" if self._cont_heavy_applied else ""
-        self.rx_cont_metrics_label.configure(
-            text=(
-                f"Frames: {self._cont_rendered_frames} | Queue drops: {self._cont_task_queue_drops}"
-                f" | Worker drops: {self._cont_worker_result_drops} | Result drops: {self._cont_result_queue_drops}"
-                f" | Proc: {self._cont_last_processing_ms:.1f} ms | E2E: {self._cont_last_end_to_end_ms:.1f} ms"
-                f" | Worker: {self._cont_last_worker_latency_ms:.1f} ms | heavy k={self._cont_heavy_every}{heavy_suffix}"
-            )
-        )
-
     def _enqueue_continuous_task(self, task: dict[str, object]) -> None:
         q = self._cont_task_queue
         if q is None:
@@ -6474,20 +6373,16 @@ class TransceiverUI(ctk.CTk):
 
         payload = {
             'slot_id': slot_id,
-            'frame_seq': self._cont_frame_seq,
             'nbytes': raw.nbytes,
             'shape': raw.shape,
             'dtype': raw.dtype.str,
             'fs': task.get('fs'),
             'frame_ts': task.get('frame_ts'),
-            'heavy_every': self._cont_heavy_every,
         }
         payload.update({k: v for k, v in task.items() if k not in {'data', 'fs', 'frame_ts'}})
-        self._cont_frame_seq += 1
 
         try:
             q.put_nowait(payload)
-            self._update_continuous_metrics_label()
             return
         except Exception:
             self._cont_task_queue_drops += 1
@@ -6505,14 +6400,12 @@ class TransceiverUI(ctk.CTk):
             q.put_nowait(payload)
         except Exception:
             self._release_continuous_input_slot(slot_id)
-        self._update_continuous_metrics_label()
 
     def _poll_continuous_results(self) -> None:
         q = self._cont_result_queue
         if q is not None:
             latest = None
             worker_drops = 0
-            latest_seq = -1
             while True:
                 try:
                     item = q.get_nowait()
@@ -6521,22 +6414,12 @@ class TransceiverUI(ctk.CTk):
                 except Exception:
                     break
                 self._release_continuous_input_slot(item.get('input_slot_id') if isinstance(item, dict) else None)
-                if isinstance(item, dict):
-                    self._cont_result_queue_drops += int(item.get('result_queue_drops', 0) or 0)
-                frame_seq = int(item.get('frame_seq', -1)) if isinstance(item, dict) else -1
-                if frame_seq <= self._cont_latest_rendered_seq:
-                    worker_drops += 1
-                    continue
                 if latest is not None:
                     worker_drops += 1
-                latest_seq = frame_seq
                 latest = item
             self._cont_worker_result_drops += worker_drops
             if latest is not None:
-                self._cont_latest_rendered_seq = latest_seq
                 self._render_continuous_payload(latest)
-                self._adapt_continuous_load()
-            self._update_continuous_metrics_label()
         if getattr(self, '_cont_thread', None) is not None or q is not None:
             self.after(25, self._poll_continuous_results)
 
@@ -6550,8 +6433,6 @@ class TransceiverUI(ctk.CTk):
         self.latest_fs_raw = fs
         self._cont_rendered_frames += 1
         self._cont_last_processing_ms = float(payload.get('processing_ms', 0.0))
-        self._cont_last_worker_latency_ms = float(payload.get('worker_latency_ms', self._cont_last_processing_ms))
-        self._cont_heavy_applied = bool(payload.get('heavy_applied', False))
         frame_ts = float(payload.get('frame_ts', time.monotonic()))
         self._cont_last_end_to_end_ms = (time.monotonic() - frame_ts) * 1000.0
 

@@ -19,23 +19,20 @@ def _decimate_for_display(data: np.ndarray, max_points: int = 4096) -> np.ndarra
     return np.asarray(data)
 
 
-def _put_latest_result(result_queue: multiprocessing.Queue, payload: dict[str, object]) -> int:
-    dropped = 0
+def _put_latest_result(result_queue: multiprocessing.Queue, payload: dict[str, object]) -> None:
     try:
         result_queue.put_nowait(payload)
-        return dropped
+        return
     except Exception:
         pass
     try:
         result_queue.get_nowait()
-        dropped = 1
     except Exception:
         pass
     try:
         result_queue.put_nowait(payload)
     except Exception:
         pass
-    return dropped
 
 
 def continuous_processing_worker(
@@ -47,7 +44,6 @@ def continuous_processing_worker(
     """Process continuous RX frames and emit preprocessed UI payloads."""
     cached_tx_path: str | None = None
     cached_tx_data = np.array([], dtype=np.complex64)
-    frame_seq = 0
 
     input_slots = [shared_memory.SharedMemory(name=name) for name in (input_slot_names or [])]
     use_shared_input = bool(input_slots) and input_slot_size > 0
@@ -64,34 +60,29 @@ def continuous_processing_worker(
             dtype = np.dtype(task.get("dtype", np.dtype(np.complex64).str))
             fs = float(task.get("fs", 1.0))
             tx_path = task.get("tx_path")
-            frame_seq = int(task.get("frame_seq", frame_seq + 1))
             trim_enabled = bool(task.get("trim_enabled", False))
             trim_start = float(task.get("trim_start", 0.0))
             trim_end = float(task.get("trim_end", 100.0))
             magnitude_enabled = bool(task.get("magnitude_enabled", False))
             rx_channel_view = str(task.get("rx_channel_view", "Kanal 1"))
             path_cancel_enabled = bool(task.get("path_cancel_enabled", False))
-            heavy_every = max(1, int(task.get("heavy_every", 1)))
-            heavy_enabled = frame_seq % heavy_every == 0
 
             if use_shared_input:
                 if slot_id < 0 or slot_id >= len(input_slots) or nbytes <= 0 or nbytes > input_slot_size:
-                    processing_ms = (time.monotonic() - started) * 1000.0
-                    payload = {
-                        "input_slot_id": slot_id,
-                        "frame_seq": frame_seq,
-                        "frame_ts": float(task.get("frame_ts", started)),
-                        "fs": fs,
-                        "plot_data": np.array([], dtype=np.complex64),
-                        "aoa_text": "AoA (ESPRIT): deaktiviert",
-                        "echo_aoa_text": "Echo AoA: deaktiviert",
-                        "aoa_series": None,
-                        "aoa_time": None,
-                        "processing_ms": processing_ms,
-                        "worker_latency_ms": processing_ms,
-                        "result_queue_drops": 0,
-                    }
-                    payload["result_queue_drops"] = _put_latest_result(result_queue, payload)
+                    _put_latest_result(
+                        result_queue,
+                        {
+                            "input_slot_id": slot_id,
+                            "frame_ts": float(task.get("frame_ts", started)),
+                            "fs": fs,
+                            "plot_data": np.array([], dtype=np.complex64),
+                            "aoa_text": "AoA (ESPRIT): deaktiviert",
+                            "echo_aoa_text": "Echo AoA: deaktiviert",
+                            "aoa_series": None,
+                            "aoa_time": None,
+                            "processing_ms": (time.monotonic() - started) * 1000.0,
+                        },
+                    )
                     continue
 
                 slot_view = memoryview(input_slots[slot_id].buf)[:nbytes]
@@ -136,31 +127,27 @@ def continuous_processing_worker(
                 if magnitude_enabled:
                     plot_data = np.abs(plot_data)
 
-                if path_cancel_enabled and heavy_enabled and cached_tx_data.size and plot_data.size:
+                if path_cancel_enabled and cached_tx_data.size and plot_data.size:
                     try:
                         plot_data, _ = apply_path_cancellation(plot_data, cached_tx_data)
                     except Exception:
                         pass
 
                 plot_data = _decimate_for_display(np.asarray(plot_data))
-                processing_ms = (time.monotonic() - started) * 1000.0
-                payload = {
-                    "input_slot_id": slot_id,
-                    "frame_seq": frame_seq,
-                    "frame_ts": float(task.get("frame_ts", started)),
-                    "fs": fs,
-                    "plot_data": plot_data,
-                    "aoa_text": aoa_text,
-                    "echo_aoa_text": echo_aoa_text,
-                    "aoa_series": None,
-                    "aoa_time": None,
-                    "processing_ms": processing_ms,
-                    "worker_latency_ms": processing_ms,
-                    "result_queue_drops": 0,
-                    "heavy_every": heavy_every,
-                    "heavy_applied": heavy_enabled,
-                }
-                payload["result_queue_drops"] = _put_latest_result(result_queue, payload)
+                _put_latest_result(
+                    result_queue,
+                    {
+                        "input_slot_id": slot_id,
+                        "frame_ts": float(task.get("frame_ts", started)),
+                        "fs": fs,
+                        "plot_data": plot_data,
+                        "aoa_text": aoa_text,
+                        "echo_aoa_text": echo_aoa_text,
+                        "aoa_series": None,
+                        "aoa_time": None,
+                        "processing_ms": (time.monotonic() - started) * 1000.0,
+                    },
+                )
             finally:
                 if slot_view is not None:
                     slot_view.release()
