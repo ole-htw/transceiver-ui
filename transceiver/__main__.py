@@ -4456,6 +4456,21 @@ class TransceiverUI(ctk.CTk):
                 return widget.get().strip()
         return "2"
 
+    def _set_rx_interpolation_factor_text(self, text: object) -> None:
+        value = str(text).strip()
+        if not value:
+            return
+        for widget in (
+            getattr(self, "rx_interpolation_factor_single", None),
+            getattr(self, "rx_interpolation_factor_cont", None),
+        ):
+            if widget is None:
+                continue
+            if widget.get().strip() == value:
+                continue
+            widget.delete(0, tk.END)
+            widget.insert(0, value)
+
     def _on_rx_xcorr_normalized_toggle(self) -> None:
         normalized_enabled = bool(self.rx_xcorr_normalized_enable.get())
         if self._cont_runtime_config:
@@ -6819,6 +6834,34 @@ class TransceiverUI(ctk.CTk):
                 self._cont_runtime_config['normalize_enabled'] = normalize_bool
                 self._cont_runtime_config['xcorr_normalized_enabled'] = normalize_bool
 
+        interpolation_enabled = payload.get('interpolation_enabled')
+        if interpolation_enabled is None and self._cont_runtime_config:
+            interpolation_enabled = self._cont_runtime_config.get('interpolation_enabled')
+        if interpolation_enabled is not None:
+            interpolation_enabled_bool = bool(interpolation_enabled)
+            self.rx_interpolation_enable.set(interpolation_enabled_bool)
+            if self._cont_runtime_config:
+                self._cont_runtime_config['interpolation_enabled'] = interpolation_enabled_bool
+
+        interpolation_method = payload.get('interpolation_method')
+        if interpolation_method is None and self._cont_runtime_config:
+            interpolation_method = self._cont_runtime_config.get('interpolation_method')
+        if interpolation_method:
+            interpolation_method_str = str(interpolation_method)
+            self.rx_interpolation_method.set(interpolation_method_str)
+            if self._cont_runtime_config:
+                self._cont_runtime_config['interpolation_method'] = interpolation_method_str
+
+        interpolation_factor = payload.get('interpolation_factor')
+        if interpolation_factor is None and self._cont_runtime_config:
+            interpolation_factor = self._cont_runtime_config.get('interpolation_factor')
+        if interpolation_factor is not None:
+            self._set_rx_interpolation_factor_text(interpolation_factor)
+            if self._cont_runtime_config:
+                self._cont_runtime_config['interpolation_factor'] = self._rx_interpolation_factor_text()
+
+        self._on_rx_interpolation_toggle()
+
         self._display_rx_plots(plot_data, fs, reset_manual=False, target_tab='Continuous')
 
         if hasattr(self, 'rx_aoa_label'):
@@ -6899,7 +6942,7 @@ class TransceiverUI(ctk.CTk):
                     'fs': rate,
                     'frame_ts': time.monotonic(),
                 }
-                payload.update(self._cont_runtime_config)
+                payload.update(dict(self._cont_runtime_config))
                 self._enqueue_continuous_task(payload)
 
             rx_continous.main(callback=_callback, args=args, stop_event=stop_event)
