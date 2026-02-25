@@ -199,30 +199,46 @@ def continuous_processing_worker(
                         except Exception:
                             path_cancel_info = None
                     if interpolation_enabled:
-                        plot_data, fs = _apply_rx_interpolation(
-                            plot_data,
-                            fs=fs,
-                            enabled=True,
-                            method=interpolation_method,
-                            factor_expr=interpolation_factor,
+                        orig_plot_data = np.asarray(plot_data)
+                        orig_ref_data = np.asarray(ref_data)
+                        orig_crosscorr_compare = (
+                            np.asarray(crosscorr_compare)
+                            if crosscorr_compare is not None
+                            else None
                         )
-                        if ref_data.size:
-                            ref_data, _ = _apply_rx_interpolation(
-                                ref_data,
+                        orig_fs = fs
+                        try:
+                            plot_data, fs = _apply_rx_interpolation(
+                                plot_data,
                                 fs=fs,
                                 enabled=True,
                                 method=interpolation_method,
                                 factor_expr=interpolation_factor,
                             )
-                        if crosscorr_compare is not None and crosscorr_compare.size:
-                            crosscorr_compare, _ = _apply_rx_interpolation(
-                                crosscorr_compare,
-                                fs=fs,
-                                enabled=True,
-                                method=interpolation_method,
-                                factor_expr=interpolation_factor,
-                            )
-                        interpolation_applied = True
+                            if ref_data.size:
+                                ref_data, _ = _apply_rx_interpolation(
+                                    ref_data,
+                                    fs=fs,
+                                    enabled=True,
+                                    method=interpolation_method,
+                                    factor_expr=interpolation_factor,
+                                )
+                            if crosscorr_compare is not None and crosscorr_compare.size:
+                                crosscorr_compare, _ = _apply_rx_interpolation(
+                                    crosscorr_compare,
+                                    fs=fs,
+                                    enabled=True,
+                                    method=interpolation_method,
+                                    factor_expr=interpolation_factor,
+                                )
+                        except Exception:
+                            plot_data = orig_plot_data
+                            ref_data = orig_ref_data
+                            crosscorr_compare = orig_crosscorr_compare
+                            fs = orig_fs
+                            interpolation_applied = False
+                        else:
+                            interpolation_applied = True
 
                 plot_data = _decimate_for_display(np.asarray(plot_data))
                 if ref_data.size:

@@ -4933,6 +4933,7 @@ class TransceiverUI(ctk.CTk):
         aoa_time = None
         aoa_series = None
         cancel_info: dict[str, object] | None = None
+        interpolation_applied = False
 
         if is_continuous_preprocessed:
             if data.ndim == 2 and data.shape[0] >= 2:
@@ -4955,6 +4956,7 @@ class TransceiverUI(ctk.CTk):
             else:
                 self._last_path_cancel_info = None
             interpolation_enabled = bool(payload.get("interpolation_enabled", False))
+            interpolation_applied = bool(payload.get("interpolation_applied", False))
             data = np.asarray(payload.get("plot_data", data))
             fs = float(payload.get("fs", fs))
         else:
@@ -5046,6 +5048,7 @@ class TransceiverUI(ctk.CTk):
                             method=interpolation_method,
                             factor_expr=interpolation_factor_text,
                         )
+                    interpolation_applied = True
                 except Exception as exc:
                     messagebox.showerror(
                         "RX-Interpolation",
@@ -5055,6 +5058,7 @@ class TransceiverUI(ctk.CTk):
                     fs_for_plot = fs
                     ref_data_for_plot = ref_data
                     compare_for_plot = data_uncanceled if self.rx_path_cancel_enable.get() else None
+                    interpolation_applied = False
 
             data = data_for_plot
             fs = fs_for_plot
@@ -5062,7 +5066,7 @@ class TransceiverUI(ctk.CTk):
 
         self.latest_fs = fs
         self.latest_data = data
-        self._latest_rx_data_interpolated = bool(interpolation_enabled)
+        self._latest_rx_data_interpolated = bool(interpolation_applied)
 
         target_container = self._get_rx_plot_target(target_tab)
         target_name = target_container["name"]
@@ -5165,7 +5169,7 @@ class TransceiverUI(ctk.CTk):
             )
             stats_rows = _format_rx_stats_rows(
                 stats,
-                interpolation_enabled=interpolation_enabled,
+                interpolation_enabled=bool(self._latest_rx_data_interpolated),
                 interpolation_factor=self._rx_effective_interpolation_factor(),
             )
             stats_frame = ctk.CTkFrame(target_frame, fg_color="transparent")
@@ -5475,7 +5479,7 @@ class TransceiverUI(ctk.CTk):
                 if stats.get("echo_delay") is not None:
                     echo_value = _format_echo_delay_display(
                         stats["echo_delay"],
-                        interpolation_enabled=interpolation_enabled,
+                        interpolation_enabled=bool(self._latest_rx_data_interpolated),
                         interpolation_factor=self._rx_effective_interpolation_factor(),
                     )
                 value = echo_value
@@ -5554,7 +5558,11 @@ class TransceiverUI(ctk.CTk):
         interpolation_applied = None
         if isinstance(getattr(self, "_last_continuous_payload", None), dict):
             interpolation_applied = self._last_continuous_payload.get("interpolation_applied")
-        self._update_rx_interpolation_status(interpolation_applied=bool(interpolation_applied) if interpolation_applied is not None else None)
+            if interpolation_applied is not None:
+                self._latest_rx_data_interpolated = bool(interpolation_applied)
+        self._update_rx_interpolation_status(
+            interpolation_applied=bool(self._latest_rx_data_interpolated)
+        )
         has_rx_data = hasattr(self, "raw_rx_data") and self.raw_rx_data is not None
         if not has_rx_data:
             return
@@ -5983,7 +5991,7 @@ class TransceiverUI(ctk.CTk):
         )
         stats_rows = _format_rx_stats_rows(
             stats,
-            interpolation_enabled=bool(self.rx_interpolation_enable.get()),
+            interpolation_enabled=bool(getattr(self, "_latest_rx_data_interpolated", False)),
             interpolation_factor=self._rx_effective_interpolation_factor(),
         )
         text = "\n".join(f"{label}: {value}" for label, value in stats_rows)
@@ -7142,6 +7150,7 @@ class TransceiverUI(ctk.CTk):
         interpolation_applied = payload.get('interpolation_applied')
         if interpolation_applied is not None:
             interpolation_applied = bool(interpolation_applied)
+        self._latest_rx_data_interpolated = bool(interpolation_applied)
 
         interpolation_method = payload.get('interpolation_method')
         if interpolation_method is None and self._cont_runtime_config:
@@ -7161,7 +7170,9 @@ class TransceiverUI(ctk.CTk):
                 self._cont_runtime_config['interpolation_factor'] = self._rx_interpolation_factor_text()
 
         self._on_rx_interpolation_toggle(recompute=False)
-        self._update_rx_interpolation_status(interpolation_applied=interpolation_applied)
+        self._update_rx_interpolation_status(
+            interpolation_applied=bool(self._latest_rx_data_interpolated)
+        )
 
         self._last_continuous_payload = dict(payload)
         self._display_rx_plots(

@@ -149,3 +149,23 @@ def test_format_rx_stats_rows_scales_echo_distance_when_interpolated() -> None:
 
     as_dict = dict(rows)
     assert as_dict["LOS-Echo"] == "12 samp (9.0 m) (interp. Raster)"
+
+
+def test_format_rx_stats_rows_does_not_scale_echo_when_interpolation_not_applied() -> None:
+    """Interpolation toggle may be active, but rows must follow runtime data path."""
+    stats = {
+        "f_low": 100.0,
+        "f_high": 200.0,
+        "amp": 1.0,
+        "bw": 50.0,
+        "echo_delay": 12,
+    }
+
+    rows = _format_rx_stats_rows(
+        stats,
+        interpolation_enabled=False,
+        interpolation_factor=2.0,
+    )
+
+    as_dict = dict(rows)
+    assert as_dict["LOS-Echo"] == "12 samp (18.0 m)"
