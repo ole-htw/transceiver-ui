@@ -150,7 +150,6 @@ def worker_loop(conn, initial_payload: dict[str, object] | None = None) -> None:
         )
         manual_lags = payload.get("manual_lags") or None
         fullscreen = bool(payload.get("fullscreen", False))
-        normalize_crosscorr = bool(payload.get("normalize_crosscorr", False))
         output_path = payload.get("output_path")
         signature = (
             mode,
@@ -194,7 +193,6 @@ def worker_loop(conn, initial_payload: dict[str, object] | None = None) -> None:
             on_echo_drag=lambda _idx, lag: _update_manual("echo", lag),
             reduce_data=False,
             reduction_step=reduction_step,
-            normalize_crosscorr=normalize_crosscorr,
         )
         if signature != last_signature:
             plot_item.enableAutoRange(axis="xy", enable=True)
