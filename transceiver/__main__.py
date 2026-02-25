@@ -46,7 +46,7 @@ from .helpers.correlation_utils import (
 from .helpers.path_cancellation import apply_path_cancellation
 from .helpers.continuous_processing import continuous_processing_worker
 from .helpers.echo_aoa import _find_peaks_simple
-from .helpers.interpolation import apply_rx_interpolation
+from .helpers.interpolation import _apply_rx_interpolation
 from .helpers.number_parser import parse_number_expr
 from .helpers.plot_colors import PLOT_COLORS
 from .tx_controller import TxController
@@ -4771,14 +4771,13 @@ class TransceiverUI(ctk.CTk):
         if self.trim_var.get():
             data = self._trim_data(data)
         interpolation_factor_text = self._rx_interpolation_factor_text()
-        data, interpolation_factor = apply_rx_interpolation(
+        data, fs = _apply_rx_interpolation(
             data,
+            fs=fs,
             enabled=bool(self.rx_interpolation_enable.get()),
             method=self.rx_interpolation_method.get(),
-            factor_text=interpolation_factor_text,
+            factor_expr=interpolation_factor_text,
         )
-        if interpolation_factor > 1:
-            fs *= interpolation_factor
 
         def _load_tx_samples(path: str) -> np.ndarray:
             raw = np.fromfile(path, dtype=np.int16)

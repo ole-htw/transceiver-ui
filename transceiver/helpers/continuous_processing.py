@@ -12,7 +12,7 @@ from .echo_aoa import (
     _xcorr_fft_two_channel_batched,
 )
 from .path_cancellation import apply_path_cancellation
-from .interpolation import apply_rx_interpolation
+from .interpolation import _apply_rx_interpolation
 
 
 def _decimate_for_display(data: np.ndarray, max_points: int = 4096) -> np.ndarray:
@@ -128,14 +128,13 @@ def continuous_processing_worker(
                     e = int(round(plot_data.size * trim_end / 100.0))
                     e = max(s + 1, min(plot_data.size, e))
                     plot_data = plot_data[s:e]
-                plot_data, interpolation_scale = apply_rx_interpolation(
+                plot_data, fs = _apply_rx_interpolation(
                     plot_data,
+                    fs=fs,
                     enabled=interpolation_enabled,
                     method=interpolation_method,
-                    factor_text=interpolation_factor,
+                    factor_expr=interpolation_factor,
                 )
-                if interpolation_scale > 1:
-                    fs *= interpolation_scale
                 if magnitude_enabled:
                     plot_data = np.abs(plot_data)
 
