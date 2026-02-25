@@ -5448,6 +5448,8 @@ class TransceiverUI(ctk.CTk):
         has_rx_data = hasattr(self, "raw_rx_data") and self.raw_rx_data is not None
         if not has_rx_data:
             return
+        if self._cont_runtime_config:
+            self._cont_runtime_config["active_plot_tab"] = self._get_rx_cont_active_plot_tab()
         runtime_normalize = self._cont_runtime_config.get("normalize_enabled")
         if runtime_normalize is None:
             runtime_normalize = self._cont_runtime_config.get("xcorr_normalized_enabled")
@@ -5460,6 +5462,14 @@ class TransceiverUI(ctk.CTk):
             reset_manual=False,
             target_tab="Continuous",
         )
+
+    def _get_rx_cont_active_plot_tab(self) -> str:
+        pg_state = getattr(self, "_rx_cont_pg_state", None)
+        tabview = pg_state.get("tabview") if isinstance(pg_state, dict) else None
+        if tabview is not None:
+            with contextlib.suppress(Exception):
+                return str(tabview.get())
+        return "Signal"
 
     def _trim_data(self, data: np.ndarray) -> np.ndarray:
         """Return trimmed view of *data* based on slider settings."""
@@ -6758,6 +6768,7 @@ class TransceiverUI(ctk.CTk):
             'trim_start': float(self.trim_start.get()),
             'trim_end': float(self.trim_end.get()),
             'rx_channel_view': self.rx_channel_view.get(),
+            'active_plot_tab': self._get_rx_cont_active_plot_tab(),
             'magnitude_enabled': bool(self.rx_magnitude_enable.get()),
             'xcorr_normalized_enabled': bool(self.rx_xcorr_normalized_enable.get()),
             'normalize_enabled': bool(self.rx_xcorr_normalized_enable.get()),
