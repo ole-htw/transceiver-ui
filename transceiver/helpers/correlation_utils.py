@@ -41,9 +41,21 @@ def find_los_echo(
     *,
     repetition_period_samples: int | None = None,
 ) -> tuple[int | None, int | None]:
+    """Return LOS + first echo indices using a single magnitude conversion."""
+    return find_los_echo_from_mag(
+        np.abs(cc),
+        repetition_period_samples=repetition_period_samples,
+    )
+
+
+def find_los_echo_from_mag(
+    mag: np.ndarray,
+    *,
+    repetition_period_samples: int | None = None,
+) -> tuple[int | None, int | None]:
     """Return LOS + first echo indices using the shared peak grouping logic."""
-    _highest_idx, los_idx, echo_indices, _group_indices = classify_peak_group(
-        cc,
+    _highest_idx, los_idx, echo_indices, _group_indices = classify_peak_group_from_mag(
+        mag,
         peaks_before=0,
         peaks_after=1,
         min_rel_height=0.1,
@@ -62,13 +74,30 @@ def classify_peak_group(
     repetition_period_samples: int | None = None,
 ) -> tuple[int | None, int | None, list[int], list[int]]:
     """Return (highest_idx, los_idx, echo_indices, group_indices)."""
-    mag = np.abs(cc)
+    return classify_peak_group_from_mag(
+        np.abs(cc),
+        peaks_before=peaks_before,
+        peaks_after=peaks_after,
+        min_rel_height=min_rel_height,
+        repetition_period_samples=repetition_period_samples,
+    )
+
+
+def classify_peak_group_from_mag(
+    mag: np.ndarray,
+    *,
+    peaks_before: int = 3,
+    peaks_after: int = 3,
+    min_rel_height: float = 0.1,
+    repetition_period_samples: int | None = None,
+) -> tuple[int | None, int | None, list[int], list[int]]:
+    """Return (highest_idx, los_idx, echo_indices, group_indices)."""
     if mag.size == 0:
         return None, None, [], []
 
     highest_idx = int(np.argmax(mag))
-    peak_indices = find_local_maxima_around_peak(
-        cc,
+    peak_indices = find_local_maxima_around_peak_from_mag(
+        mag,
         center_idx=highest_idx,
         peaks_before=peaks_before,
         peaks_after=peaks_after,
@@ -98,7 +127,26 @@ def find_local_maxima_around_peak(
     repetition_period_samples: int | None = None,
 ) -> list[int]:
     """Return local maxima indices around a center peak (before + after)."""
-    mag = np.abs(cc)
+    return find_local_maxima_around_peak_from_mag(
+        np.abs(cc),
+        center_idx=center_idx,
+        peaks_before=peaks_before,
+        peaks_after=peaks_after,
+        min_rel_height=min_rel_height,
+        repetition_period_samples=repetition_period_samples,
+    )
+
+
+def find_local_maxima_around_peak_from_mag(
+    mag: np.ndarray,
+    center_idx: int | None = None,
+    *,
+    peaks_before: int = 3,
+    peaks_after: int = 3,
+    min_rel_height: float = 0.1,
+    repetition_period_samples: int | None = None,
+) -> list[int]:
+    """Return local maxima indices around a center peak (before + after)."""
     if mag.size < 3:
         return []
     if center_idx is None:

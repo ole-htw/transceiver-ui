@@ -37,8 +37,8 @@ from .helpers import rx_convert
 from .helpers.correlation_utils import (
     apply_manual_lags as _apply_manual_lags,
     autocorr_fft as _autocorr_fft,
-    classify_peak_group as _classify_peak_group,
-    find_los_echo as _find_los_echo,
+    classify_peak_group_from_mag as _classify_peak_group_from_mag,
+    find_los_echo_from_mag as _find_los_echo_from_mag,
     filter_peak_indices_to_period_group as _filter_peak_indices_to_period_group,
     lag_overlap as _lag_overlap,
     resolve_manual_los_idx as _resolve_manual_los_idx,
@@ -162,7 +162,7 @@ def _repetition_period_samples_from_tx(tx_length_samples: int, lag_step: int = 1
 
 
 def _classify_visible_xcorr_peaks(
-    cc: np.ndarray,
+    mag: np.ndarray,
     *,
     repetition_period_samples: int,
     peaks_before: int = XCORR_EXTRA_PEAKS_BEFORE,
@@ -170,8 +170,8 @@ def _classify_visible_xcorr_peaks(
     min_rel_height: float = XCORR_EXTRA_PEAK_MIN_REL_HEIGHT,
 ) -> tuple[int | None, int | None, list[int]]:
     """Return (highest_idx, los_idx, echo_indices) from visible local maxima."""
-    highest_idx, los_idx, echo_indices, _group_indices = _classify_peak_group(
-        cc,
+    highest_idx, los_idx, echo_indices, _group_indices = _classify_peak_group_from_mag(
+        mag,
         peaks_before=peaks_before,
         peaks_after=peaks_after,
         min_rel_height=min_rel_height,
@@ -1562,7 +1562,7 @@ def _build_crosscorr_ctx(
 
     period_samples = _repetition_period_samples_from_tx(len(ref_data), step)
     highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(
-        cc,
+        mag,
         repetition_period_samples=period_samples,
     )
     los_lags = lags
@@ -1574,7 +1574,7 @@ def _build_crosscorr_ctx(
         mag2 = np.abs(cc2)
         crosscorr_ctx.update({"cc2": cc2, "lags2": lags2, "mag2": mag2})
         highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(
-            cc2,
+            mag2,
             repetition_period_samples=period_samples,
         )
         los_lags = lags2
@@ -1652,7 +1652,11 @@ def _estimate_los_lag(
     cc = _xcorr_fft(data_red[:n], ref_red[:n])
     lags = np.arange(-n + 1, n) * step
     period_samples = _repetition_period_samples_from_tx(len(ref_red[:n]), step)
-    los_idx, _echo_idx = _find_los_echo(cc, repetition_period_samples=period_samples)
+    mag = np.abs(cc)
+    los_idx, _echo_idx = _find_los_echo_from_mag(
+        mag,
+        repetition_period_samples=period_samples,
+    )
     current_peak_group = _current_peak_group_indices(
         lags,
         los_idx,
@@ -2799,14 +2803,14 @@ def _plot_on_mpl(
             ]
         period_samples = _repetition_period_samples_from_tx(len(ref_data), step_r)
         highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(
-            cc,
+            mag,
             repetition_period_samples=period_samples,
         )
         los_lags = lags
         los_mag = mag
         if crosscorr_compare is not None and crosscorr_compare.size:
             highest_idx2, base_los_idx2, base_echo_indices2 = _classify_visible_xcorr_peaks(
-                cc2,
+                mag2,
                 repetition_period_samples=period_samples,
             )
             highest_idx = highest_idx2
