@@ -3053,6 +3053,7 @@ class TransceiverUI(ctk.CTk):
         self.sync_var = tk.BooleanVar(value=True)
         self.rate_var = tk.StringVar(value="200e6")
         self.rx_interpolation_enable = tk.BooleanVar(value=False)
+        self.rx_interpolation_status_text = tk.StringVar(value="")
         self.rx_interpolation_method = tk.StringVar(value="interp1d")
         self.rx_interpolation_method_display = tk.StringVar(
             value="scipy.interpolate.interp1d"
@@ -3877,6 +3878,12 @@ class TransceiverUI(ctk.CTk):
             "<FocusOut>",
             lambda _e: self._on_rx_interpolation_factor_changed("single"),
         )
+        ctk.CTkLabel(
+            self.rx_interpolation_body,
+            textvariable=self.rx_interpolation_status_text,
+            anchor="w",
+            text_color=("#b45309", "#fbbf24"),
+        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(4, 0))
 
         self.rx_path_cancel_enable = tk.BooleanVar(value=False)
         (
@@ -4133,6 +4140,12 @@ class TransceiverUI(ctk.CTk):
             "<FocusOut>",
             lambda _e: self._on_rx_interpolation_factor_changed("continuous"),
         )
+        ctk.CTkLabel(
+            self.rx_cont_interpolation_body,
+            textvariable=self.rx_interpolation_status_text,
+            anchor="w",
+            text_color=("#b45309", "#fbbf24"),
+        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(4, 0))
 
         rx_cont_btn_frame = ctk.CTkFrame(rx_continuous_tab, fg_color="transparent")
         rx_cont_btn_frame.grid(
@@ -4467,8 +4480,18 @@ class TransceiverUI(ctk.CTk):
                 self.rx_interpolation_enable.get()
             )
 
+    def _update_rx_interpolation_status(self, *, interpolation_applied: bool | None = None) -> None:
+        status_text = ""
+        if self.rx_interpolation_enable.get():
+            continuous_active = getattr(self, "_cont_thread", None) is not None
+            active_tab = self._get_rx_cont_active_plot_tab() if continuous_active else "X-Corr"
+            if interpolation_applied is False or active_tab != "X-Corr":
+                status_text = "Hinweis: Interpolation ist aktuell nur im Tab 'X-Corr' wirksam."
+        self.rx_interpolation_status_text.set(status_text)
+
     def _on_rx_interpolation_toggle(self, recompute: bool = True) -> None:
         self._sync_rx_interpolation_controls_only()
+        self._update_rx_interpolation_status()
         if not recompute:
             return
         self._reset_manual_xcorr_lags("Interpolation geändert")
@@ -5483,6 +5506,10 @@ class TransceiverUI(ctk.CTk):
         active_tab = self._get_rx_cont_active_plot_tab()
         if self._cont_runtime_config:
             self._cont_runtime_config["active_plot_tab"] = active_tab
+        interpolation_applied = None
+        if isinstance(getattr(self, "_last_continuous_payload", None), dict):
+            interpolation_applied = self._last_continuous_payload.get("interpolation_applied")
+        self._update_rx_interpolation_status(interpolation_applied=bool(interpolation_applied) if interpolation_applied is not None else None)
         has_rx_data = hasattr(self, "raw_rx_data") and self.raw_rx_data is not None
         if not has_rx_data:
             return
@@ -6843,13 +6870,6 @@ class TransceiverUI(ctk.CTk):
             "fc32",
         ]
         self._cont_stop_event = threading.Event()
-        pg_state = getattr(self, "_rx_cont_pg_state", None)
-        tabview = pg_state.get("tabview") if isinstance(pg_state, dict) else None
-        if tabview is not None:
-            try:
-                tabview.set("Signal")
-            except Exception:
-                pass
         if self._cont_runtime_config:
             self._cont_runtime_config['active_plot_tab'] = self._get_rx_cont_active_plot_tab()
         self._cmd_running = True
@@ -6864,6 +6884,7 @@ class TransceiverUI(ctk.CTk):
             daemon=True,
         )
         self._cont_thread.start()
+        self._update_rx_interpolation_status()
         self._process_queue()
 
     def _start_continuous_pipeline(self, *, rate: float, snippet_seconds: float) -> None:
@@ -7072,6 +7093,10 @@ class TransceiverUI(ctk.CTk):
             if self._cont_runtime_config:
                 self._cont_runtime_config['interpolation_enabled'] = interpolation_enabled_bool
 
+        interpolation_applied = payload.get('interpolation_applied')
+        if interpolation_applied is not None:
+            interpolation_applied = bool(interpolation_applied)
+
         interpolation_method = payload.get('interpolation_method')
         if interpolation_method is None and self._cont_runtime_config:
             interpolation_method = self._cont_runtime_config.get('interpolation_method')
@@ -7090,6 +7115,7 @@ class TransceiverUI(ctk.CTk):
                 self._cont_runtime_config['interpolation_factor'] = self._rx_interpolation_factor_text()
 
         self._on_rx_interpolation_toggle(recompute=False)
+        self._update_rx_interpolation_status(interpolation_applied=interpolation_applied)
 
         self._last_continuous_payload = dict(payload)
         self._display_rx_plots(
@@ -7159,6 +7185,7 @@ class TransceiverUI(ctk.CTk):
             self.rx_cont_stop.configure(state="disabled")
         if hasattr(self, "rx_cont_start"):
             self.rx_cont_start.configure(state="normal")
+        self._update_rx_interpolation_status()
 
     def _run_continuous_thread(
         self,
@@ -7198,6 +7225,7 @@ class TransceiverUI(ctk.CTk):
             self.rx_cont_stop.configure(state="disabled")
         if hasattr(self, "rx_cont_start"):
             self.rx_cont_start.configure(state="normal")
+        self._update_rx_interpolation_status()
 
     def on_close(self) -> None:
         self._closing = True
