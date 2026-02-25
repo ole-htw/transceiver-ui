@@ -75,6 +75,35 @@ def test_local_maxima_do_not_include_adjacent_lower_group_when_period_known() ->
     assert all(abs(idx - group_a_center) > period / 2 for idx in maxima)
 
 
+def test_local_maxima_with_repetition_period_only_scans_center_window() -> None:
+    center = 150
+    period = 80
+    half = period // 2
+
+    # Strictly monotonic baseline so only explicit spikes become local maxima.
+    mag = np.linspace(0.0, 0.01, 300, dtype=float)
+
+    # Peaks inside the permitted [center ± period/2] window.
+    mag[center - 30] += 0.8
+    mag[center] += 1.0
+    mag[center + 25] += 0.75
+
+    # Strong peaks outside the window that must never be returned.
+    mag[center - half - 1] += 0.95
+    mag[center + half + 1] += 0.9
+
+    cc = mag.astype(np.complex128)
+    maxima = find_local_maxima_around_peak(
+        cc,
+        center_idx=center,
+        peaks_before=10,
+        peaks_after=10,
+        min_rel_height=0.0,
+        repetition_period_samples=period,
+    )
+
+    assert maxima == [center - 30, center, center + 25]
+
 def test_filter_peak_indices_to_period_group_removes_adjacent_repetition() -> None:
     lags = np.array([84000, 84500, 85000, 89500, 90000, 90500])
     peaks = [1, 2, 3, 4, 5]
