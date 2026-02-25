@@ -1529,6 +1529,7 @@ def _build_crosscorr_ctx(
     manual_lags: dict[str, int | None] | None = None,
     lag_step: int = 1,
     normalized: bool = False,
+    normalize: bool = False,
 ) -> dict[str, object]:
     """Return cross-correlation context for one frame.
 
@@ -1547,13 +1548,25 @@ def _build_crosscorr_ctx(
             return mag
         return mag / denom
 
+    def _normalize_magnitude(mag: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+        if not normalize:
+            return mag
+        if mag.size == 0:
+            return mag
+        max_mag = float(np.max(mag))
+        if not np.isfinite(max_mag):
+            return mag
+        scale = max(max_mag, eps)
+        return mag / scale
+
     cc = _xcorr_fft(data, ref_data)
     lags = np.arange(-(len(ref_data) - 1), len(data)) * step
-    mag = _to_magnitude(cc, data, ref_data)
+    mag = _normalize_magnitude(_to_magnitude(cc, data, ref_data))
     crosscorr_ctx: dict[str, object] = {
         "cc": cc,
         "lags": lags,
         "mag": mag,
+        "magnitude_normalized": bool(normalize),
     }
 
     period_samples = _repetition_period_samples_from_tx(len(ref_data), step)
@@ -1567,7 +1580,7 @@ def _build_crosscorr_ctx(
     if compare_available:
         cc2 = _xcorr_fft(crosscorr_compare, ref_data)
         lags2 = np.arange(-(len(ref_data) - 1), len(crosscorr_compare)) * step
-        mag2 = _to_magnitude(cc2, crosscorr_compare, ref_data)
+        mag2 = _normalize_magnitude(_to_magnitude(cc2, crosscorr_compare, ref_data))
         crosscorr_ctx.update({"cc2": cc2, "lags2": lags2, "mag2": mag2})
         highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(
             mag2,
@@ -2405,6 +2418,7 @@ def _plot_on_pg(
                 manual_lags=manual_lags,
                 lag_step=step_r,
                 normalized=xcorr_normalized,
+                normalize=xcorr_normalized,
             )
         lags = crosscorr_ctx["lags"]
         mag = crosscorr_ctx["mag"]
@@ -2657,7 +2671,8 @@ def _plot_on_pg(
             scene.sigMouseClicked.connect(_handle_click)
         plot.setTitle(f"Crosscorr. with TX: {title}")
         plot.setLabel("bottom", "Lag")
-        plot.setLabel("left", "Magnitude")
+        mag_axis_label = "Magnitude (normiert)" if xcorr_normalized else "Magnitude"
+        plot.setLabel("left", mag_axis_label)
         plot._crosscorr_peak = max_peak
         plot._crosscorr_peak_traces = visible_peak_traces
     plot.showGrid(x=True, y=True)
@@ -2989,7 +3004,7 @@ def _plot_on_mpl(
                 color=mpl_colors["echo"],
             )
         ax.set_xlabel("Lag")
-        ax.set_ylabel("Magnitude")
+        ax.set_ylabel("Magnitude (normiert)" if xcorr_normalized else "Magnitude")
     ax.set_title(title)
     ax.grid(True)
     _apply_mpl_gray_style(ax)
@@ -4873,6 +4888,7 @@ class TransceiverUI(ctk.CTk):
                     manual_lags=self.manual_xcorr_lags,
                     lag_step=step_r,
                     normalized=self.rx_xcorr_normalized_enable.get(),
+                    normalize=self.rx_xcorr_normalized_enable.get(),
                 )
             crosscorr_title = (
                 f"RX {mode}{title_suffix} ({plot_ref_label})"
