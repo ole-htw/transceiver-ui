@@ -391,14 +391,29 @@ def connect_radios(graph, replay, radio_chan_pairs, freqs, gains, antennas, rate
         ), None)
 
         if ddc_block is not None:
-            log(f"Found DDC block on channel {chan}.", memory_only=memory_only)
-            this_rate = uhd.rfnoc.DdcBlockControl(graph.get_block(ddc_block[0])).set_output_rate(rate, chan)
+            log(
+                f"Found DDC mapping radio channel {chan} -> DDC channel {ddc_block[1]}.",
+                memory_only=memory_only,
+            )
+            this_rate = uhd.rfnoc.DdcBlockControl(graph.get_block(ddc_block[0])).set_output_rate(
+                rate, ddc_block[1]
+            )
         else:
             this_rate = radio.set_rate(rate)
 
+        this_rate = float(this_rate)
+        if not np.isfinite(this_rate) or this_rate <= 0:
+            raise RuntimeError(
+                f"Invalid configured rate returned on {radio.get_unique_id()}:{chan}: {this_rate}"
+            )
+        log(
+            f"--> Effective rate on {radio.get_unique_id()}:{chan}: {this_rate/1e6:.6f} Msps",
+            memory_only=memory_only,
+        )
+
         if actual_rate is None:
             actual_rate = this_rate
-        elif actual_rate != this_rate:
+        elif not np.isclose(actual_rate, this_rate):
             raise RuntimeError("Unexpected rate mismatch across channels.")
 
     return actual_rate
