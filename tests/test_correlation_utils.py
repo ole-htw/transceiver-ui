@@ -1,8 +1,10 @@
 import numpy as np
 
 from transceiver.helpers.correlation_utils import (
+    classify_peak_group,
     filter_peak_indices_to_period_group,
     find_local_maxima_around_peak,
+    find_los_echo,
     resolve_manual_los_idx,
 )
 
@@ -115,3 +117,39 @@ def test_resolve_manual_los_idx_resets_outdated_group_selection() -> None:
     assert was_reset is True
     assert los_idx == base_los_idx
     assert manual_lags["los"] is None
+
+
+def test_classify_peak_group_returns_sorted_group_and_echoes() -> None:
+    n = 220
+    mag = _sinc_lobe(n, 80, 0.9) + _sinc_lobe(n, 120, 1.0) + _sinc_lobe(n, 150, 0.75)
+    cc = mag.astype(np.complex128)
+
+    highest_idx, los_idx, echo_indices, group_indices = classify_peak_group(
+        cc,
+        peaks_before=2,
+        peaks_after=2,
+        min_rel_height=0.05,
+    )
+
+    assert highest_idx == int(np.argmax(mag))
+    assert group_indices == sorted(set(group_indices))
+    assert los_idx == group_indices[0]
+    assert echo_indices == group_indices[1:]
+    assert highest_idx in group_indices
+
+
+def test_find_los_echo_uses_classified_peak_group() -> None:
+    n = 180
+    mag = _sinc_lobe(n, 90, 1.0) + _sinc_lobe(n, 108, 0.7) + _sinc_lobe(n, 126, 0.65)
+    cc = mag.astype(np.complex128)
+
+    los_idx, echo_idx = find_los_echo(cc)
+    _highest_idx, expected_los_idx, expected_echoes, _group = classify_peak_group(
+        cc,
+        peaks_before=0,
+        peaks_after=1,
+        min_rel_height=0.1,
+    )
+
+    assert los_idx == expected_los_idx
+    assert echo_idx == (expected_echoes[0] if expected_echoes else None)

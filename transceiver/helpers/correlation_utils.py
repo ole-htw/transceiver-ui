@@ -37,22 +37,50 @@ def autocorr_fft(x: np.ndarray) -> np.ndarray:
 
 
 def find_los_echo(cc: np.ndarray) -> tuple[int | None, int | None]:
-    """Return indices of the LOS peak and the first echo in ``cc``."""
+    """Return LOS + first echo indices using the shared peak grouping logic."""
+    _highest_idx, los_idx, echo_indices, _group_indices = classify_peak_group(
+        cc,
+        peaks_before=0,
+        peaks_after=1,
+        min_rel_height=0.1,
+    )
+    echo_idx = echo_indices[0] if echo_indices else None
+    return los_idx, echo_idx
+
+
+def classify_peak_group(
+    cc: np.ndarray,
+    *,
+    peaks_before: int = 3,
+    peaks_after: int = 3,
+    min_rel_height: float = 0.1,
+    repetition_period_samples: int | None = None,
+) -> tuple[int | None, int | None, list[int], list[int]]:
+    """Return (highest_idx, los_idx, echo_indices, group_indices)."""
     mag = np.abs(cc)
     if mag.size == 0:
-        return None, None
+        return None, None, [], []
 
-    los = int(np.argmax(mag))
-    echo = None
-    for i in range(los + 1, len(mag) - 1):
-        if mag[i] >= mag[i - 1] and mag[i] >= mag[i + 1]:
-            echo = int(i)
-            break
+    highest_idx = int(np.argmax(mag))
+    peak_indices = find_local_maxima_around_peak(
+        cc,
+        center_idx=highest_idx,
+        peaks_before=peaks_before,
+        peaks_after=peaks_after,
+        min_rel_height=min_rel_height,
+        repetition_period_samples=repetition_period_samples,
+    )
+    if not peak_indices:
+        peak_indices = [highest_idx]
 
-    if echo is None and los + 1 < len(mag):
-        echo = int(np.argmax(mag[los + 1 :]) + los + 1)
+    group_indices = sorted({int(idx) for idx in peak_indices})
+    if highest_idx not in group_indices:
+        group_indices.append(highest_idx)
+        group_indices.sort()
 
-    return los, echo
+    los_idx = int(group_indices[0])
+    echo_indices = [int(idx) for idx in group_indices[1:]]
+    return highest_idx, los_idx, echo_indices, group_indices
 
 
 def find_local_maxima_around_peak(
