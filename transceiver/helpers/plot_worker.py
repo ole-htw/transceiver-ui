@@ -151,6 +151,8 @@ def worker_loop(conn, initial_payload: dict[str, object] | None = None) -> None:
         manual_lags = payload.get("manual_lags") or None
         fullscreen = bool(payload.get("fullscreen", False))
         xcorr_normalized = bool(payload.get("xcorr_normalized", False))
+        interpolation_enabled = bool(payload.get("interpolation_enabled", False))
+        interpolation_factor = float(payload.get("interpolation_factor", 1.0) or 1.0)
         output_path = payload.get("output_path")
         signature = (
             mode,
@@ -195,6 +197,8 @@ def worker_loop(conn, initial_payload: dict[str, object] | None = None) -> None:
             reduce_data=False,
             reduction_step=reduction_step,
             xcorr_normalized=xcorr_normalized,
+            interpolation_enabled=interpolation_enabled,
+            interpolation_factor=interpolation_factor,
         )
         if signature != last_signature:
             plot_item.enableAutoRange(axis="xy", enable=True)
