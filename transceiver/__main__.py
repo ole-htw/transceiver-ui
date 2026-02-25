@@ -3351,19 +3351,10 @@ class TransceiverUI(ctk.CTk):
             toggle_command=self._on_filter_toggle,
         )
         filter_frame.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(8, 0))
-        filter_left = ctk.CTkFrame(filter_body, fg_color="transparent")
-        filter_left.grid(row=0, column=1, sticky="nsew")
-        filter_left.columnconfigure(1, weight=1)
         filter_right = ctk.CTkFrame(filter_body, fg_color="transparent")
-        filter_right.grid(row=0, column=2, sticky="nsew", padx=(12, 0))
+        filter_right.grid(row=0, column=1, sticky="nsew")
         filter_right.columnconfigure(1, weight=1)
 
-        self.fdz_label = ctk.CTkLabel(
-            filter_left,
-            text="frequency-domain zeroing (hard edge / harte Kante)",
-            anchor="e",
-        )
-        self.fdz_label.grid(row=0, column=0, sticky="e", padx=label_padx)
         self.filter_bandwidth_label = ctk.CTkLabel(
             filter_right,
             text="Bandwidth [Hz]",
