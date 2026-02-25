@@ -18,7 +18,6 @@ import math
 import contextlib
 import tempfile
 import os
-from fractions import Fraction
 from multiprocessing import shared_memory, Pipe, Process
 from pathlib import Path
 from datetime import datetime
@@ -136,24 +135,10 @@ XCORR_EXTRA_PEAK_COLORS = (
     "#FB8C00",
     "#3949AB",
 )
-MAX_OVERSAMPLING_DEN = 1024
 CONTINUOUS_INPUT_SLOT_COUNT = 4
 CONTINUOUS_INPUT_SLOT_MIN_BYTES = 4 * 1024 * 1024
 CONTINUOUS_INPUT_SLOT_MAX_BYTES = 64 * 1024 * 1024
 CONTINUOUS_INPUT_SLOT_HEADROOM = 1.35
-
-
-def _oversampling_ratio(oversampling: float) -> Fraction:
-    if oversampling <= 0:
-        raise ValueError("Oversampling muss > 0 sein.")
-    if math.isclose(oversampling, 1.0, rel_tol=0.0, abs_tol=1e-9):
-        return Fraction(1, 1)
-    return Fraction(oversampling).limit_denominator(MAX_OVERSAMPLING_DEN)
-
-
-def _format_oversampling_token(oversampling: float) -> str:
-    text = f"{oversampling:.6f}".rstrip("0").rstrip(".")
-    return text.replace("-", "m").replace(".", "p")
 
 
 def _repetition_period_samples_from_tx(tx_length_samples: int, lag_step: int = 1) -> int:
@@ -1786,14 +1771,11 @@ def _gen_tx_filename(app) -> str:
         samples = int(app.samples_entry.get())
     except Exception:
         samples = 0
-    try:
-        oversampling = parse_number_expr(app.os_entry.get())
-        if oversampling <= 0:
-            raise ValueError
-    except Exception:
-        oversampling = 1.0
-    if not getattr(app, "rrc_enable", tk.BooleanVar(value=False)).get():
-        oversampling = 1.0
+    fdz_var = getattr(app, "fdz_enable", None)
+    fdz_enabled = bool(fdz_var.get()) if fdz_var is not None else False
+    filter_bandwidth = 0.0
+    if hasattr(app, "filter_bandwidth_entry"):
+        filter_bandwidth = _try_parse_number_expr(app.filter_bandwidth_entry.get(), default=0.0)
 
     if w == "sinus":
         f = _try_parse_number_expr(app.f_entry.get(), default=0.0)
@@ -1805,8 +1787,8 @@ def _gen_tx_filename(app) -> str:
     elif w == "zadoffchu":
         q = app.q_entry.get() or "1"
         parts.append(f"q{q}")
-        if oversampling != 1:
-            parts.append(f"os{_format_oversampling_token(oversampling)}")
+        if fdz_enabled and filter_bandwidth > 0:
+            parts.append(f"bw{_pretty(filter_bandwidth)}")
     elif w == "chirp":
         f0 = _try_parse_number_expr(app.f_entry.get(), default=0.0)
         f1 = _try_parse_number_expr(app.f1_entry.get(), default=f0)
@@ -1832,8 +1814,6 @@ def _gen_tx_filename(app) -> str:
     parts.append(f"fs{_pretty(fs)}")
     if w == "zadoffchu":
         parts.append(f"Nsym{samples}")
-        if oversampling != 1:
-            parts.append(f"Nsamp{int(round(samples * oversampling))}")
     elif w == "ofdm_preamble":
         parts.append(f"N{samples}")
     else:
@@ -1843,11 +1823,11 @@ def _gen_tx_filename(app) -> str:
     return str(Path("signals/tx") / name)
 
 
-def _gen_rrc_tx_filename(filename: str) -> str:
+def _gen_filtered_tx_filename(filename: str) -> str:
     """Return a filtered filename derived from *filename*."""
     path = Path(filename)
     stem = path.stem if path.suffix else path.name
-    return str(path.with_name(f"{stem}_rrc{path.suffix}"))
+    return str(path.with_name(f"{stem}_fdz{path.suffix}"))
 
 
 def _gen_repeat_tx_filename(filename: str) -> str:
@@ -3294,12 +3274,12 @@ class TransceiverUI(ctk.CTk):
             "<FocusOut>", lambda _e: self.auto_update_tx_filename()
         )
 
-        self.rrc_enable = tk.BooleanVar(value=True)
+        self.fdz_enable = tk.BooleanVar(value=True)
         filter_frame, filter_body, _ = _make_side_bordered_group(
             gen_body,
             "Filter",
-            toggle_var=self.rrc_enable,
-            toggle_command=self._on_rrc_toggle,
+            toggle_var=self.fdz_enable,
+            toggle_command=self._on_filter_toggle,
         )
         filter_frame.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(8, 0))
         filter_left = ctk.CTkFrame(filter_body, fg_color="transparent")
@@ -3309,58 +3289,28 @@ class TransceiverUI(ctk.CTk):
         filter_right.grid(row=0, column=2, sticky="nsew", padx=(12, 0))
         filter_right.columnconfigure(1, weight=1)
 
-        self.rrc_beta_label = ctk.CTkLabel(filter_left, text="RRC β", anchor="e")
-        self.rrc_beta_label.grid(row=0, column=0, sticky="e", padx=label_padx)
-        self.rrc_beta_entry = SuggestEntry(filter_left, "rrc_beta_entry")
-        self.rrc_beta_entry.insert(0, "0.25")
-        self.rrc_beta_entry.grid(row=0, column=1, sticky="ew")
-        self.rrc_beta_entry.entry.bind(
-            "<FocusOut>",
-            lambda _e: self.auto_update_tx_filename(),
-        )
-
-        self.rrc_span_label = ctk.CTkLabel(filter_right, text="RRC Span", anchor="e")
-        self.rrc_span_label.grid(row=0, column=0, sticky="e", padx=label_padx)
-        self.rrc_span_entry = SuggestEntry(filter_right, "rrc_span_entry")
-        self.rrc_span_entry.insert(0, "6")
-        self.rrc_span_entry.grid(row=0, column=1, sticky="ew")
-        self.rrc_span_entry.entry.bind(
-            "<FocusOut>",
-            lambda _e: self.auto_update_tx_filename(),
-        )
-
-        ctk.CTkLabel(filter_left, text="Oversampling", anchor="e").grid(
-            row=1, column=0, sticky="e", padx=label_padx
-        )
-        self.os_entry = SuggestEntry(filter_left, "os_entry")
-        self.os_entry.insert(0, "1")
-        self.os_entry.grid(row=1, column=1, sticky="ew")
-        self.os_entry.entry.bind(
-            "<FocusOut>",
-            lambda _e: (
-                self._update_oversampling_ratio_label(),
-                self.auto_update_tx_filename(),
-                self._reset_manual_xcorr_lags("Oversampling geändert"),
-            ),
-        )
-        self.os_entry.entry.bind(
-            "<KeyRelease>",
-            lambda _e: self._update_oversampling_ratio_label(),
-        )
-        self.os_ratio_label = ctk.CTkLabel(
+        self.fdz_label = ctk.CTkLabel(
             filter_left,
-            text="Resampling: up/down = 1/1 (effektiv 1×)",
-            anchor="w",
+            text="Frequency-domain zeroing",
+            anchor="e",
         )
-        self.os_ratio_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.fdz_label.grid(row=0, column=0, sticky="e", padx=label_padx)
+        self.filter_bandwidth_label = ctk.CTkLabel(
+            filter_right,
+            text="Bandwidth [Hz]",
+            anchor="e",
+        )
+        self.filter_bandwidth_label.grid(row=0, column=0, sticky="e", padx=label_padx)
+        self.filter_bandwidth_entry = SuggestEntry(filter_right, "filter_bandwidth_entry")
+        self.filter_bandwidth_entry.insert(0, "1e6")
+        self.filter_bandwidth_entry.grid(row=0, column=1, sticky="ew")
+        self.filter_bandwidth_entry.entry.bind(
+            "<FocusOut>",
+            lambda _e: self.auto_update_tx_filename(),
+        )
 
-        if not self.rrc_enable.get():
-            self.rrc_beta_entry.entry.configure(state="disabled")
-            self.rrc_span_entry.entry.configure(state="disabled")
-            self.os_entry.entry.configure(state="disabled")
-        else:
-            self.os_entry.entry.configure(state="normal")
-
+        if not self.fdz_enable.get():
+            self.filter_bandwidth_entry.entry.configure(state="disabled")
         repeat_zero_row = ctk.CTkFrame(gen_body, fg_color="transparent")
         repeat_zero_row.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(6, 0))
         repeat_zero_row.columnconfigure((0, 1), weight=1, uniform="repeat-zeros")
@@ -4061,7 +4011,6 @@ class TransceiverUI(ctk.CTk):
             "Continuous": [],
         }
         self.update_waveform_fields()
-        self._update_oversampling_ratio_label()
         self.auto_update_tx_filename()
         self.auto_update_rx_filename()
         self.toggle_rate_sync(self.sync_var.get())
@@ -4084,10 +4033,6 @@ class TransceiverUI(ctk.CTk):
         self.pn_chip_entry.grid_remove()
         self.pn_seed_label.grid_remove()
         self.pn_seed_entry.grid_remove()
-        self.rrc_beta_label.grid_remove()
-        self.rrc_beta_entry.grid_remove()
-        self.rrc_span_label.grid_remove()
-        self.rrc_span_entry.grid_remove()
         self.ofdm_nfft_label.grid_remove()
         self.ofdm_nfft_entry.grid_remove()
         self.ofdm_cp_label.grid_remove()
@@ -4096,8 +4041,21 @@ class TransceiverUI(ctk.CTk):
         self.ofdm_symbols_entry.grid_remove()
         self.ofdm_short_label.grid_remove()
         self.ofdm_short_entry.grid_remove()
-        self.rrc_beta_entry.entry.configure(state="disabled")
-        self.rrc_span_entry.entry.configure(state="disabled")
+
+        filter_visible = w == "zadoffchu"
+        if filter_visible:
+            self.fdz_label.grid(row=0, column=0, sticky="e", padx=self._label_padx)
+            self.filter_bandwidth_label.grid(
+                row=0, column=0, sticky="e", padx=self._label_padx
+            )
+            self.filter_bandwidth_entry.grid(row=0, column=1, sticky="ew")
+            state = "normal" if self.fdz_enable.get() else "disabled"
+            self.filter_bandwidth_entry.entry.configure(state=state)
+        else:
+            self.fdz_label.grid_remove()
+            self.filter_bandwidth_label.grid_remove()
+            self.filter_bandwidth_entry.grid_remove()
+            self.filter_bandwidth_entry.entry.configure(state="disabled")
 
         if w == "sinus":
             self.f_label.configure(text="f")
@@ -4113,17 +4071,6 @@ class TransceiverUI(ctk.CTk):
         elif w == "zadoffchu":
             self.q_label.grid(row=1, column=0, sticky="e", padx=self._label_padx)
             self.q_entry.grid(row=1, column=1, sticky="ew")
-            self.rrc_beta_label.grid(
-                row=0, column=0, sticky="e", padx=self._label_padx
-            )
-            self.rrc_beta_entry.grid(row=0, column=1, sticky="ew")
-            self.rrc_span_label.grid(
-                row=0, column=0, sticky="e", padx=self._label_padx
-            )
-            self.rrc_span_entry.grid(row=0, column=1, sticky="ew")
-            state = "normal" if self.rrc_enable.get() else "disabled"
-            self.rrc_beta_entry.entry.configure(state=state)
-            self.rrc_span_entry.entry.configure(state=state)
         elif w == "chirp":
             self.f_label.configure(text="f0")
             self.f_label.grid(row=1, column=0, sticky="e", padx=self._label_padx)
@@ -4149,28 +4096,17 @@ class TransceiverUI(ctk.CTk):
             self.pn_seed_label.grid(row=2, column=0, sticky="e", padx=self._label_padx)
             self.pn_seed_entry.grid(row=2, column=1, sticky="ew")
 
-        self._update_oversampling_ratio_label()
         self.auto_update_tx_filename()
         _apply_input_margins(self)
 
-    def _update_oversampling_ratio_label(self) -> None:
-        if not hasattr(self, "os_ratio_label"):
-            return
-        try:
-            oversampling = parse_number_expr(self.os_entry.get()) if self.os_entry.get() else 1.0
-            ratio = _oversampling_ratio(float(oversampling))
-            effective = ratio.numerator / ratio.denominator
-            self.os_ratio_label.configure(
-                text=(
-                    f"Resampling: up/down = {ratio.numerator}/{ratio.denominator} "
-                    f"(effektiv {effective:.6g}×)"
-                )
-            )
-        except ValueError:
-            self.os_ratio_label.configure(text="Resampling: ungültiger Oversampling-Wert")
+    def _fdz_active(self) -> bool:
+        return self.fdz_enable.get() and self.wave_var.get().lower() == "zadoffchu"
 
-    def _rrc_active(self) -> bool:
-        return self.rrc_enable.get() and self.wave_var.get().lower() == "zadoffchu"
+    def _on_filter_toggle(self) -> None:
+        state = "normal" if self.fdz_enable.get() else "disabled"
+        self.filter_bandwidth_entry.entry.configure(state=state)
+        self.auto_update_tx_filename()
+        self._reset_manual_xcorr_lags("Filter geändert")
 
     def _get_repeat_count(self) -> int:
         try:
@@ -4183,7 +4119,7 @@ class TransceiverUI(ctk.CTk):
             return self._zeros_tx_file
         if getattr(self, "_repeat_tx_file", None):
             return self._repeat_tx_file
-        if self._rrc_active():
+        if self._fdz_active():
             return self._filtered_tx_file or self.tx_file.get()
         return self.tx_file.get()
 
@@ -4193,15 +4129,6 @@ class TransceiverUI(ctk.CTk):
         if preferred:
             return preferred
         return self._tx_transmit_file()
-
-    def _on_rrc_toggle(self) -> None:
-        state = "normal" if self.rrc_enable.get() else "disabled"
-        self.rrc_beta_entry.entry.configure(state=state)
-        self.rrc_span_entry.entry.configure(state=state)
-        self.os_entry.entry.configure(state=state)
-        self._update_oversampling_ratio_label()
-        self.auto_update_tx_filename()
-        self._reset_manual_xcorr_lags("RRC/Oversampling geändert")
 
     def _on_repeat_toggle(self) -> None:
         if self.repeat_enable.get():
@@ -4274,8 +4201,8 @@ class TransceiverUI(ctk.CTk):
         self.file_entry.delete(0, tk.END)
         self.file_entry.insert(0, name)
         self.tx_file.delete(0, tk.END)
-        if self._rrc_active():
-            filtered_name = _gen_rrc_tx_filename(name)
+        if self._fdz_active():
+            filtered_name = _gen_filtered_tx_filename(name)
             self._filtered_tx_file = filtered_name
             base_name = filtered_name
         else:
@@ -5579,12 +5506,10 @@ class TransceiverUI(ctk.CTk):
             "f1": self.f1_entry.get(),
             "q": self.q_entry.get(),
             "samples": self.samples_entry.get(),
-            "rrc_oversampling": self.os_entry.get(),
+            "filter_bandwidth": self.filter_bandwidth_entry.get(),
             "repeats": self.repeat_entry.get(),
             "repeats_enabled": self.repeat_enable.get(),
-            "rrc_beta": self.rrc_beta_entry.get(),
-            "rrc_span": self.rrc_span_entry.get(),
-            "rrc_enabled": self.rrc_enable.get(),
+            "fdz_enabled": self.fdz_enable.get(),
             "zeros": self.zeros_var.get(),
             "zeros_enabled": self.zeros_enable.get(),
             "amplitude": self.amp_entry.get(),
@@ -5649,10 +5574,10 @@ class TransceiverUI(ctk.CTk):
         self.q_entry.insert(0, params.get("q", ""))
         self.samples_entry.delete(0, tk.END)
         self.samples_entry.insert(0, params.get("samples", ""))
-        self.os_entry.delete(0, tk.END)
-        self.os_entry.insert(
+        self.filter_bandwidth_entry.delete(0, tk.END)
+        self.filter_bandwidth_entry.insert(
             0,
-            params.get("rrc_oversampling", params.get("oversampling", "1")),
+            params.get("filter_bandwidth", "1e6"),
         )
         self.repeat_entry.delete(0, tk.END)
         repeats_value = params.get("repeats", "1")
@@ -5664,15 +5589,9 @@ class TransceiverUI(ctk.CTk):
             repeat_enabled = str(repeats_value).strip() != "0"
         self.repeat_enable.set(bool(repeat_enabled))
         self._on_repeat_toggle()
-        self.rrc_beta_entry.delete(0, tk.END)
-        self.rrc_beta_entry.insert(0, params.get("rrc_beta", "0.25"))
-        self.rrc_span_entry.delete(0, tk.END)
-        self.rrc_span_entry.insert(0, params.get("rrc_span", "6"))
-        self.rrc_enable.set(params.get("rrc_enabled", True))
-        state = "normal" if self.rrc_enable.get() else "disabled"
-        self.rrc_beta_entry.entry.configure(state=state)
-        self.rrc_span_entry.entry.configure(state=state)
-        self.os_entry.entry.configure(state=state)
+        self.fdz_enable.set(params.get("fdz_enabled", True))
+        state = "normal" if self.fdz_enable.get() else "disabled"
+        self.filter_bandwidth_entry.entry.configure(state=state)
         zeros_value = params.get("zeros", "same")
         zeros_enabled = params.get("zeros_enabled")
         if zeros_enabled is None:
@@ -5861,98 +5780,30 @@ class TransceiverUI(ctk.CTk):
         try:
             fs = _parse_number_expr_or_error(self.fs_entry.get())
             samples = int(self.samples_entry.get())
-            oversampling = (
-                _parse_number_expr_or_error(self.os_entry.get(), allow_empty=True, empty_value=1.0)
-                if self.os_entry.get()
-                else 1.0
-            )
-            if oversampling <= 0:
-                raise ValueError("Oversampling muss > 0 sein.")
-            if not self.rrc_enable.get():
-                oversampling = 1.0
-            self._update_oversampling_ratio_label()
             repeats = self._get_repeat_count() if self.repeat_entry.get() else 1
             zeros_mode = self.zeros_var.get() if self.zeros_enable.get() else "none"
             amp = _parse_number_expr_or_error(self.amp_entry.get())
             waveform = self.wave_var.get()
-            rrc_active = self._rrc_active()
-            self._last_tx_os = 1
-            if waveform == "zadoffchu" and not math.isclose(oversampling, 1.0, rel_tol=0.0, abs_tol=1e-9) and rrc_active:
-                self._last_tx_os = oversampling
-
-            unfiltered_data = None
-            filtered_data = None
 
             if waveform == "sinus":
                 freq = _parse_number_expr_or_error(
                     self.f_entry.get(), allow_empty=True, empty_value=0.0
                 )
-                data = generate_waveform(
-                    waveform, fs, freq, samples
-                )
+                data = generate_waveform(waveform, fs, freq, samples)
             elif waveform == "doppelsinus":
                 f1 = _parse_number_expr_or_error(
                     self.f_entry.get(), allow_empty=True, empty_value=0.0
                 )
                 f2 = _parse_number_expr_or_error(self.f1_entry.get())
-                data = generate_waveform(
-                    waveform,
-                    fs,
-                    f1,
-                    samples,
-                    f1=f2,
-                )
+                data = generate_waveform(waveform, fs, f1, samples, f1=f2)
             elif waveform == "zadoffchu":
                 q = int(self.q_entry.get()) if self.q_entry.get() else 1
-                beta = (
-                    float(self.rrc_beta_entry.get())
-                    if self.rrc_beta_entry.get()
-                    else 0.25
-                )
-                span = (
-                    int(self.rrc_span_entry.get()) if self.rrc_span_entry.get() else 6
-                )
-                if not self.rrc_enable.get():
-                    span = 0
-
-                if rrc_active:
-                    unfiltered_data = generate_waveform(
-                        waveform,
-                        fs,
-                        0.0,
-                        samples,
-                        q=q,
-                    )
-                    filtered_data = generate_waveform(
-                        waveform,
-                        fs,
-                        0.0,
-                        samples,
-                        q=q,
-                    )
-                    if span > 0:
-                        # Legacy-RRC-Pfad ersetzt durch harte FFT-Bandbegrenzung.
-                        # Die bestehende UI nutzt weiterhin Oversampling+β als Bandbreitensteuerung.
-                        bandwidth_hz = max(1.0, fs / float(oversampling) * (1.0 + float(beta)))
-                        filtered_data = apply_frequency_domain_zeroing(filtered_data, fs, bandwidth_hz)
-                    data = filtered_data
-                else:
-                    data = generate_waveform(
-                        waveform,
-                        fs,
-                        0.0,
-                        samples,
-                        q=q,
-                    )
+                data = generate_waveform(waveform, fs, 0.0, samples, q=q)
             elif waveform == "ofdm_preamble":
                 nfft = int(_parse_number_expr_or_error(self.ofdm_nfft_entry.get()))
                 cp_len = int(_parse_number_expr_or_error(self.ofdm_cp_entry.get()))
-                num_symbols = int(
-                    _parse_number_expr_or_error(self.ofdm_symbols_entry.get())
-                )
-                short_repeats = int(
-                    _parse_number_expr_or_error(self.ofdm_short_entry.get())
-                )
+                num_symbols = int(_parse_number_expr_or_error(self.ofdm_symbols_entry.get()))
+                short_repeats = int(_parse_number_expr_or_error(self.ofdm_short_entry.get()))
                 if cp_len >= nfft:
                     raise ValueError("OFDM CP muss kleiner als NFFT sein.")
                 if nfft <= 0:
@@ -5987,18 +5838,19 @@ class TransceiverUI(ctk.CTk):
                     self.f_entry.get(), allow_empty=True, empty_value=0.0
                 )
                 f1_text = self.f1_entry.get()
-                if f1_text:
-                    f1 = _parse_number_expr_or_error(f1_text)
-                else:
-                    f1 = None
-                data = generate_waveform(
-                    waveform,
-                    fs,
-                    f0,
-                    samples,
-                    f0=f0,
-                    f1=f1,
+                f1 = _parse_number_expr_or_error(f1_text) if f1_text else None
+                data = generate_waveform(waveform, fs, f0, samples, f0=f0, f1=f1)
+
+            filter_data = None
+            if self._fdz_active():
+                bandwidth_hz = _parse_number_expr_or_error(
+                    self.filter_bandwidth_entry.get(),
+                    allow_empty=False,
                 )
+                if bandwidth_hz <= 0:
+                    raise ValueError("Bandwidth muss > 0 Hz sein.")
+                filter_data = apply_frequency_domain_zeroing(data, fs, bandwidth_hz)
+                data = filter_data
 
             zeros = 0
             if zeros_mode == "same":
@@ -6020,40 +5872,22 @@ class TransceiverUI(ctk.CTk):
                 zeros_len = int(round(len(signal) * zeros))
                 if zeros_len <= 0:
                     return signal
-                return np.concatenate(
-                    [signal, np.zeros(zeros_len, dtype=np.complex64)]
-                )
+                return np.concatenate([signal, np.zeros(zeros_len, dtype=np.complex64)])
 
-            repeated_data = None
-            if repeats > 1:
-                repeat_source = filtered_data if filtered_data is not None else data
-                repeated_data = np.tile(repeat_source, repeats)
+            repeated_data = np.tile(data, repeats) if repeats > 1 else None
+            final_data = repeated_data if repeated_data is not None else data
+            zeros_data = _append_zeros(final_data) if self.zeros_enable.get() and zeros > 0 else None
 
-            base_data = filtered_data if filtered_data is not None else data
-            final_data = repeated_data if repeated_data is not None else base_data
-            zeros_data = None
-            if self.zeros_enable.get() and zeros > 0:
-                zeros_data = _append_zeros(final_data)
-                final_data = zeros_data
-
-            save_interleaved(
-                self.file_entry.get(),
-                unfiltered_data if unfiltered_data is not None else data,
-                amplitude=amp,
-            )
-            if filtered_data is not None:
-                filtered_filename = self._filtered_tx_file or _gen_rrc_tx_filename(
-                    self.file_entry.get()
-                )
+            save_interleaved(self.file_entry.get(), data, amplitude=amp)
+            if filter_data is not None:
+                filtered_filename = self._filtered_tx_file or _gen_filtered_tx_filename(self.file_entry.get())
                 self._filtered_tx_file = filtered_filename
-                save_interleaved(filtered_filename, filtered_data, amplitude=amp)
+                save_interleaved(filtered_filename, filter_data, amplitude=amp)
+            else:
+                self._filtered_tx_file = None
 
             if repeats > 1 and repeated_data is not None:
-                repeat_base = (
-                    self._filtered_tx_file
-                    if filtered_data is not None
-                    else self.file_entry.get()
-                )
+                repeat_base = self._filtered_tx_file if filter_data is not None else self.file_entry.get()
                 repeat_filename = _gen_repeat_tx_filename(repeat_base)
                 self._repeat_tx_file = repeat_filename
                 self.tx_file.delete(0, tk.END)
@@ -6062,26 +5896,14 @@ class TransceiverUI(ctk.CTk):
                 self._reset_manual_xcorr_lags("TX-Datei geändert")
             else:
                 self._repeat_tx_file = None
-                target_file = (
-                    self._filtered_tx_file
-                    if filtered_data is not None
-                    else self.file_entry.get()
-                )
+                target_file = self._filtered_tx_file if filter_data is not None else self.file_entry.get()
                 self.tx_file.delete(0, tk.END)
                 self.tx_file.insert(0, target_file)
-                if filtered_data is not None:
+                if filter_data is not None:
                     self._reset_manual_xcorr_lags("TX-Datei geändert")
 
             if zeros_data is not None:
-                zeros_base = (
-                    self._repeat_tx_file
-                    if self._repeat_tx_file is not None
-                    else (
-                        self._filtered_tx_file
-                        if filtered_data is not None
-                        else self.file_entry.get()
-                    )
-                )
+                zeros_base = self._repeat_tx_file if self._repeat_tx_file is not None else (self._filtered_tx_file if filter_data is not None else self.file_entry.get())
                 zeros_filename = _gen_zeros_tx_filename(zeros_base)
                 self._zeros_tx_file = zeros_filename
                 self.tx_file.delete(0, tk.END)
@@ -6101,57 +5923,13 @@ class TransceiverUI(ctk.CTk):
                 return signal * scale
 
             scaled_data = _scale_for_display(data)
-            scaled_unfiltered = (
-                _scale_for_display(unfiltered_data)
-                if unfiltered_data is not None
-                else None
-            )
-            scaled_filtered = (
-                _scale_for_display(filtered_data)
-                if filtered_data is not None
-                else None
-            )
-            scaled_repeated = (
-                _scale_for_display(repeated_data)
-                if repeated_data is not None
-                else None
-            )
-            scaled_zeros = (
-                _scale_for_display(zeros_data)
-                if zeros_data is not None
-                else None
-            )
-            symbol_rate = None
-            filtered_symbol_rate = None
-            repeated_symbol_rate = None
-            zeros_symbol_rate = None
-            if waveform == "zadoffchu":
-                symbol_rate = fs
-                if not math.isclose(oversampling, 1.0, rel_tol=0.0, abs_tol=1e-9) and self.rrc_enable.get():
-                    # Oversampling adds samples but does not change the DAC
-                    # playback rate; keep the spectrum in Hz referenced to fs.
-                    filtered_symbol_rate = fs / float(oversampling)
-                    repeated_symbol_rate = filtered_symbol_rate
-                else:
-                    repeated_symbol_rate = symbol_rate
-            if zeros_data is not None:
-                zeros_symbol_rate = repeated_symbol_rate or filtered_symbol_rate or symbol_rate
-            if scaled_unfiltered is not None and scaled_filtered is not None:
-                self._display_gen_plots(
-                    scaled_unfiltered,
-                    fs,
-                    scaled_filtered,
-                    fs,
-                    repeated_data=scaled_repeated,
-                    repeated_fs=fs,
-                    zeros_data=scaled_zeros,
-                    zeros_fs=fs,
-                    symbol_rate=symbol_rate,
-                    filtered_symbol_rate=filtered_symbol_rate,
-                    repeated_symbol_rate=repeated_symbol_rate,
-                    zeros_symbol_rate=zeros_symbol_rate,
-                )
-            elif scaled_repeated is not None or scaled_zeros is not None:
+            scaled_repeated = _scale_for_display(repeated_data) if repeated_data is not None else None
+            scaled_zeros = _scale_for_display(zeros_data) if zeros_data is not None else None
+            symbol_rate = fs if waveform == "zadoffchu" else None
+            repeated_symbol_rate = symbol_rate
+            zeros_symbol_rate = symbol_rate if zeros_data is not None else None
+
+            if scaled_repeated is not None or scaled_zeros is not None:
                 self._display_gen_plots(
                     scaled_data,
                     fs,
