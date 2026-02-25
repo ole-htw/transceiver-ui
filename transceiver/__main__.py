@@ -46,6 +46,7 @@ from .helpers.correlation_utils import (
 from .helpers.path_cancellation import apply_path_cancellation
 from .helpers.continuous_processing import continuous_processing_worker
 from .helpers.echo_aoa import _find_peaks_simple
+from .helpers.interpolation import apply_rx_interpolation
 from .helpers.number_parser import parse_number_expr
 from .helpers.plot_colors import PLOT_COLORS
 from .tx_controller import TxController
@@ -3030,6 +3031,11 @@ class TransceiverUI(ctk.CTk):
         self.rx_channel_view = tk.StringVar(value="Kanal 1")
         self.sync_var = tk.BooleanVar(value=True)
         self.rate_var = tk.StringVar(value="200e6")
+        self.rx_interpolation_enable = tk.BooleanVar(value=False)
+        self.rx_interpolation_method = tk.StringVar(value="interp1d")
+        self.rx_interpolation_method_display = tk.StringVar(
+            value="scipy.interpolate.interp1d"
+        )
         # individual variables used when rate sync is disabled
         self.fs_var = self.rate_var
         self.tx_rate_var = self.rate_var
@@ -3799,6 +3805,57 @@ class TransceiverUI(ctk.CTk):
             row=5, column=0, columnspan=2, sticky="ew", pady=(0, 6)
         )
 
+        (
+            self.rx_interpolation_frame,
+            self.rx_interpolation_body,
+            self.rx_interpolation_check,
+        ) = _make_side_bordered_group(
+            rx_single_tab,
+            "Interpolation",
+            toggle_var=self.rx_interpolation_enable,
+            toggle_command=self._on_rx_interpolation_toggle,
+        )
+        self.rx_interpolation_frame.grid(
+            row=6, column=0, columnspan=2, sticky="ew", pady=(0, 6)
+        )
+        self.rx_interpolation_body.columnconfigure(1, weight=1)
+        self.rx_interpolation_body.columnconfigure(3, weight=1)
+
+        ctk.CTkLabel(self.rx_interpolation_body, text="Methode", anchor="e").grid(
+            row=0, column=0, sticky="e", padx=label_padx
+        )
+        self.rx_interpolation_method_box = ctk.CTkComboBox(
+            self.rx_interpolation_body,
+            values=[
+                "scipy.interpolate.interp1d",
+                "scipy.signal.resample_poly",
+            ],
+            variable=self.rx_interpolation_method_display,
+            command=self._on_rx_interpolation_method_selected,
+            state="readonly",
+            width=200,
+        )
+        self.rx_interpolation_method_box.grid(
+            row=0, column=1, sticky="ew", padx=(0, 8)
+        )
+
+        ctk.CTkLabel(self.rx_interpolation_body, text="Faktor", anchor="e").grid(
+            row=0, column=2, sticky="e", padx=label_padx
+        )
+        self.rx_interpolation_factor_single = SuggestEntry(
+            self.rx_interpolation_body, "rx_interpolation_factor"
+        )
+        self.rx_interpolation_factor_single.insert(0, "2")
+        self.rx_interpolation_factor_single.grid(row=0, column=3, sticky="ew")
+        self.rx_interpolation_factor_single.entry.bind(
+            "<KeyRelease>",
+            lambda _e: self._on_rx_interpolation_factor_changed("single"),
+        )
+        self.rx_interpolation_factor_single.entry.bind(
+            "<FocusOut>",
+            lambda _e: self._on_rx_interpolation_factor_changed("single"),
+        )
+
         self.rx_path_cancel_enable = tk.BooleanVar(value=False)
         (
             self.rx_path_cancel_frame,
@@ -3811,11 +3868,11 @@ class TransceiverUI(ctk.CTk):
             toggle_command=self._on_rx_path_cancel_toggle,
         )
         self.rx_path_cancel_frame.grid(
-            row=6, column=0, columnspan=2, sticky="ew", pady=(0, 6)
+            row=7, column=0, columnspan=2, sticky="ew", pady=(0, 6)
         )
 
         rx_btn_frame = ctk.CTkFrame(rx_single_tab)
-        rx_btn_frame.grid(row=7, column=0, columnspan=2, pady=(0, 5))
+        rx_btn_frame.grid(row=8, column=0, columnspan=2, pady=(0, 5))
         rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
         self.rx_button = ctk.CTkButton(rx_btn_frame, text="Receive", command=self.receive)
@@ -3837,7 +3894,7 @@ class TransceiverUI(ctk.CTk):
             fg_color=terminal_container_fg,
             corner_radius=terminal_container_corner,
         )
-        rx_scroll_container.grid(row=8, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.grid(row=9, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
@@ -3884,7 +3941,7 @@ class TransceiverUI(ctk.CTk):
                 self._update_rx_scrollbar(tab_name),
             ),
         )
-        rx_single_tab.rowconfigure(8, weight=1)
+        rx_single_tab.rowconfigure(9, weight=1)
 
         rx_continuous_tab = rx_tabs.add("Continuous")
         rx_continuous_tab.columnconfigure((0, 1), weight=1)
@@ -4006,9 +4063,58 @@ class TransceiverUI(ctk.CTk):
             row=3, column=0, columnspan=2, sticky="ew", pady=(0, 6)
         )
 
+        (
+            self.rx_cont_interpolation_frame,
+            self.rx_cont_interpolation_body,
+            self.rx_cont_interpolation_check,
+        ) = _make_side_bordered_group(
+            rx_continuous_tab,
+            "Interpolation",
+            toggle_var=self.rx_interpolation_enable,
+            toggle_command=self._on_rx_interpolation_toggle,
+        )
+        self.rx_cont_interpolation_frame.grid(
+            row=4, column=0, columnspan=2, sticky="ew", pady=(0, 6)
+        )
+        self.rx_cont_interpolation_body.columnconfigure(1, weight=1)
+        self.rx_cont_interpolation_body.columnconfigure(3, weight=1)
+        ctk.CTkLabel(
+            self.rx_cont_interpolation_body, text="Methode", anchor="e"
+        ).grid(row=0, column=0, sticky="e", padx=label_padx)
+        self.rx_cont_interpolation_method_box = ctk.CTkComboBox(
+            self.rx_cont_interpolation_body,
+            values=[
+                "scipy.interpolate.interp1d",
+                "scipy.signal.resample_poly",
+            ],
+            variable=self.rx_interpolation_method_display,
+            command=self._on_rx_interpolation_method_selected,
+            state="readonly",
+            width=200,
+        )
+        self.rx_cont_interpolation_method_box.grid(
+            row=0, column=1, sticky="ew", padx=(0, 8)
+        )
+        ctk.CTkLabel(
+            self.rx_cont_interpolation_body, text="Faktor", anchor="e"
+        ).grid(row=0, column=2, sticky="e", padx=label_padx)
+        self.rx_interpolation_factor_cont = SuggestEntry(
+            self.rx_cont_interpolation_body, "rx_interpolation_factor"
+        )
+        self.rx_interpolation_factor_cont.insert(0, "2")
+        self.rx_interpolation_factor_cont.grid(row=0, column=3, sticky="ew")
+        self.rx_interpolation_factor_cont.entry.bind(
+            "<KeyRelease>",
+            lambda _e: self._on_rx_interpolation_factor_changed("continuous"),
+        )
+        self.rx_interpolation_factor_cont.entry.bind(
+            "<FocusOut>",
+            lambda _e: self._on_rx_interpolation_factor_changed("continuous"),
+        )
+
         rx_cont_btn_frame = ctk.CTkFrame(rx_continuous_tab, fg_color="transparent")
         rx_cont_btn_frame.grid(
-            row=4,
+            row=5,
             column=0,
             columnspan=2,
             sticky="ew",
@@ -4033,7 +4139,7 @@ class TransceiverUI(ctk.CTk):
             fg_color=terminal_container_fg,
             corner_radius=terminal_container_corner,
         )
-        rx_cont_scroll_container.grid(row=5, column=0, columnspan=2, sticky="nsew")
+        rx_cont_scroll_container.grid(row=6, column=0, columnspan=2, sticky="nsew")
         rx_cont_scroll_container.columnconfigure(0, weight=1)
         rx_cont_scroll_container.rowconfigure(0, weight=1)
 
@@ -4086,7 +4192,7 @@ class TransceiverUI(ctk.CTk):
                 self._update_rx_scrollbar(tab_name),
             ),
         )
-        rx_continuous_tab.rowconfigure(5, weight=1)
+        rx_continuous_tab.rowconfigure(6, weight=1)
 
         self._rx_scroll_active: dict[str, bool] = {
             "Single": False,
@@ -4113,6 +4219,8 @@ class TransceiverUI(ctk.CTk):
             "Continuous": [],
         }
         self.update_waveform_fields()
+        self._sync_rx_interpolation_factor_entries("single")
+        self._on_rx_interpolation_toggle()
         self.auto_update_tx_filename()
         self.auto_update_rx_filename()
         self.toggle_rate_sync(self.sync_var.get())
@@ -4273,6 +4381,80 @@ class TransceiverUI(ctk.CTk):
     def _on_rx_magnitude_toggle(self) -> None:
         self._reset_manual_xcorr_lags("Betrag geändert")
         self.update_trim()
+
+    def _sync_rx_interpolation_factor_entries(self, source: str | None = None) -> None:
+        source_widget = None
+        if source == "single":
+            source_widget = getattr(self, "rx_interpolation_factor_single", None)
+        elif source == "continuous":
+            source_widget = getattr(self, "rx_interpolation_factor_cont", None)
+        if source_widget is None:
+            source_widget = getattr(self, "rx_interpolation_factor_single", None)
+        if source_widget is None:
+            source_widget = getattr(self, "rx_interpolation_factor_cont", None)
+        if source_widget is None:
+            return
+
+        text = source_widget.get()
+        for widget in (
+            getattr(self, "rx_interpolation_factor_single", None),
+            getattr(self, "rx_interpolation_factor_cont", None),
+        ):
+            if widget is None or widget is source_widget:
+                continue
+            if widget.get() == text:
+                continue
+            widget.delete(0, tk.END)
+            widget.insert(0, text)
+
+    def _on_rx_interpolation_method_selected(self, selected: str) -> None:
+        normalized = "interp1d"
+        if selected == "scipy.signal.resample_poly":
+            normalized = "resample_poly"
+        self.rx_interpolation_method.set(normalized)
+        if self._cont_runtime_config:
+            self._cont_runtime_config["interpolation_method"] = normalized
+        self._reset_manual_xcorr_lags("Interpolation geändert")
+        self.update_trim()
+
+    def _on_rx_interpolation_factor_changed(self, source: str) -> None:
+        self._sync_rx_interpolation_factor_entries(source)
+        if self._cont_runtime_config:
+            self._cont_runtime_config[
+                "interpolation_factor"
+            ] = self._rx_interpolation_factor_text()
+        self._reset_manual_xcorr_lags("Interpolationsfaktor geändert")
+        self.update_trim()
+
+    def _on_rx_interpolation_toggle(self) -> None:
+        state = "normal" if self.rx_interpolation_enable.get() else "disabled"
+        for widget in (
+            getattr(self, "rx_interpolation_method_box", None),
+            getattr(self, "rx_cont_interpolation_method_box", None),
+        ):
+            if widget is not None:
+                widget.configure(state=state)
+        for widget in (
+            getattr(self, "rx_interpolation_factor_single", None),
+            getattr(self, "rx_interpolation_factor_cont", None),
+        ):
+            if widget is not None:
+                widget.entry.configure(state=state)
+        if self._cont_runtime_config:
+            self._cont_runtime_config["interpolation_enabled"] = bool(
+                self.rx_interpolation_enable.get()
+            )
+        self._reset_manual_xcorr_lags("Interpolation geändert")
+        self.update_trim()
+
+    def _rx_interpolation_factor_text(self) -> str:
+        for widget in (
+            getattr(self, "rx_interpolation_factor_single", None),
+            getattr(self, "rx_interpolation_factor_cont", None),
+        ):
+            if widget is not None:
+                return widget.get().strip()
+        return "2"
 
     def _on_rx_xcorr_normalized_toggle(self) -> None:
         normalized_enabled = bool(self.rx_xcorr_normalized_enable.get())
@@ -4588,6 +4770,15 @@ class TransceiverUI(ctk.CTk):
         self.range_slider.set_data(data)
         if self.trim_var.get():
             data = self._trim_data(data)
+        interpolation_factor_text = self._rx_interpolation_factor_text()
+        data, interpolation_factor = apply_rx_interpolation(
+            data,
+            enabled=bool(self.rx_interpolation_enable.get()),
+            method=self.rx_interpolation_method.get(),
+            factor_text=interpolation_factor_text,
+        )
+        if interpolation_factor > 1:
+            fs *= interpolation_factor
 
         def _load_tx_samples(path: str) -> np.ndarray:
             raw = np.fromfile(path, dtype=np.int16)
@@ -5670,6 +5861,9 @@ class TransceiverUI(ctk.CTk):
             "rx_magnitude_enabled": self.rx_magnitude_enable.get(),
             "rx_xcorr_normalized_enabled": self.rx_xcorr_normalized_enable.get(),
             "rx_path_cancellation_enabled": self.rx_path_cancel_enable.get(),
+            "rx_interpolation_enabled": self.rx_interpolation_enable.get(),
+            "rx_interpolation_method": self.rx_interpolation_method.get(),
+            "rx_interpolation_factor": self._rx_interpolation_factor_text(),
             "rx_channel_2": self.rx_channel_2.get(),
             "rx_channel_view": self.rx_channel_view.get(),
             "rx_file": self.rx_file.get(),
@@ -5817,6 +6011,31 @@ class TransceiverUI(ctk.CTk):
         self.rx_path_cancel_enable.set(
             params.get("rx_path_cancellation_enabled", False)
         )
+        self.rx_interpolation_enable.set(params.get("rx_interpolation_enabled", False))
+        interpolation_method = str(params.get("rx_interpolation_method", "interp1d"))
+        if interpolation_method == "scipy.signal.resample_poly":
+            interpolation_method = "resample_poly"
+        elif interpolation_method == "scipy.interpolate.interp1d":
+            interpolation_method = "interp1d"
+        if interpolation_method not in {"interp1d", "resample_poly"}:
+            interpolation_method = "interp1d"
+        self.rx_interpolation_method.set(interpolation_method)
+        self.rx_interpolation_method_display.set(
+            "scipy.signal.resample_poly"
+            if interpolation_method == "resample_poly"
+            else "scipy.interpolate.interp1d"
+        )
+        interpolation_factor = str(params.get("rx_interpolation_factor", "2"))
+        for widget in (
+            getattr(self, "rx_interpolation_factor_single", None),
+            getattr(self, "rx_interpolation_factor_cont", None),
+        ):
+            if widget is None:
+                continue
+            widget.delete(0, tk.END)
+            widget.insert(0, interpolation_factor)
+        self._sync_rx_interpolation_factor_entries("single")
+        self._on_rx_interpolation_toggle()
         self._update_path_cancellation_status()
         self.rx_channel_2.set(params.get("rx_channel_2", False))
         self.rx_channel_view.set(params.get("rx_channel_view", "Kanal 1"))
@@ -6327,6 +6546,9 @@ class TransceiverUI(ctk.CTk):
             'xcorr_normalized_enabled': bool(self.rx_xcorr_normalized_enable.get()),
             'normalize_enabled': bool(self.rx_xcorr_normalized_enable.get()),
             'path_cancel_enabled': bool(self.rx_path_cancel_enable.get()),
+            'interpolation_enabled': bool(self.rx_interpolation_enable.get()),
+            'interpolation_method': self.rx_interpolation_method.get(),
+            'interpolation_factor': self._rx_interpolation_factor_text(),
             'tx_path': tx_reference_path,
         }
 
