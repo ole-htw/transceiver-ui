@@ -5788,9 +5788,10 @@ class TransceiverUI(ctk.CTk):
         self.rx_gain.delete(0, tk.END)
         self.rx_gain.insert(0, params.get("rx_gain", ""))
         self.rx_magnitude_enable.set(params.get("rx_magnitude_enabled", False))
-        self.rx_xcorr_normalized_enable.set(
-            params.get("rx_xcorr_normalized_enabled", False)
-        )
+        rx_xcorr_normalized_enabled = params.get("rx_xcorr_normalized_enabled")
+        if rx_xcorr_normalized_enabled is None:
+            rx_xcorr_normalized_enabled = params.get("xcorr_normalized_enabled", False)
+        self.rx_xcorr_normalized_enable.set(bool(rx_xcorr_normalized_enabled))
         self.rx_path_cancel_enable.set(
             params.get("rx_path_cancellation_enabled", False)
         )
