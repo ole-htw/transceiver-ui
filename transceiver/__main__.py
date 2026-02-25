@@ -2673,6 +2673,35 @@ def _signal_dynamic_view_ranges(
     return (0.0, x_max), (y_min - y_pad, y_max + y_pad)
 
 
+def _signal_dynamic_axis_labels(
+    data: np.ndarray,
+    y_range: tuple[float, float] | None = None,
+) -> tuple[str, str]:
+    """Return dynamic axis labels for signal plots based on current data/range."""
+    sample_count = int(len(data))
+    if sample_count <= 0:
+        return "Sample Index", "Amplitude"
+
+    x_label = f"Sample Index (0…{sample_count - 1})"
+
+    if y_range is None:
+        real_part = np.real(data)
+        imag_part = np.imag(data)
+        y_min = float(min(np.min(real_part), np.min(imag_part))) if data.size else 0.0
+        y_max = float(max(np.max(real_part), np.max(imag_part))) if data.size else 0.0
+    else:
+        y_min, y_max = float(y_range[0]), float(y_range[1])
+
+    if not np.isfinite(y_min) or not np.isfinite(y_max):
+        return x_label, "Amplitude"
+
+    max_abs = max(abs(y_min), abs(y_max))
+    if max_abs <= 0.0:
+        return x_label, "Amplitude (±0.0)"
+
+    return x_label, f"Amplitude (±{max_abs:.3g})"
+
+
 def _clear_pg_plot(plot_item: pg.PlotItem) -> None:
     if plot_item.legend is not None:
         legend = plot_item.legend
@@ -4720,16 +4749,21 @@ class TransceiverUI(ctk.CTk):
             )
             if mode == "Signal":
                 signal_ranges = _signal_dynamic_view_ranges(plot_data)
+                y_range = None
                 if signal_ranges is not None:
                     (x_min, x_max), (y_min, y_max) = signal_ranges
                     plot_item.setXRange(x_min, x_max, padding=0.0)
                     plot_item.setYRange(y_min, y_max, padding=0.0)
+                    y_range = (y_min, y_max)
                     plot_info["initialized"] = True
                 elif not plot_info["initialized"]:
                     plot_item.enableAutoRange(axis="xy", enable=True)
                     plot_item.autoRange()
                     plot_item.enableAutoRange(axis="xy", enable=False)
                     plot_info["initialized"] = True
+                x_label, y_label = _signal_dynamic_axis_labels(plot_data, y_range)
+                plot_item.setLabel("bottom", x_label)
+                plot_item.setLabel("left", y_label)
             elif not plot_info["initialized"]:
                 plot_item.enableAutoRange(axis="xy", enable=True)
                 plot_item.autoRange()
