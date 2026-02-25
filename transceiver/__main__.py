@@ -2903,10 +2903,7 @@ class TransceiverUI(ctk.CTk):
         self._tx_indicator_blank: ctk.CTkImage | None = None
         self._cont_task_queue: multiprocessing.Queue | None = None
         self._cont_result_queue: multiprocessing.Queue | None = None
-        self._cont_worker_processes: list[Process] = []
-        self._cont_frame_seq = 0
-        self._cont_last_rendered_seq = -1
-        self._cont_worker_latency_ms = 0.0
+        self._cont_worker_process: Process | None = None
         self._cont_task_queue_drops = 0
         self._cont_rendered_frames = 0
         self._cont_last_processing_ms = 0.0
@@ -3586,14 +3583,6 @@ class TransceiverUI(ctk.CTk):
         self.rx_echo_aoa_label.grid(
             row=1, column=1, sticky="w", padx=label_padx, pady=(4, 0)
         )
-        self.rx_cont_metrics_label = ctk.CTkLabel(
-            rx_ant_content,
-            text="Continuous: queue_drops=0 · worker_drops=0 · worker_latency=0.0 ms",
-            anchor="w",
-        )
-        self.rx_cont_metrics_label.grid(
-            row=2, column=0, columnspan=2, sticky="w", padx=label_padx, pady=(4, 0)
-        )
 
         ctk.CTkLabel(rx_ant_content, text="Antennenabstand [m]", anchor="e").grid(
             row=1, column=2, sticky="e", padx=label_padx, pady=(4, 0)
@@ -3805,27 +3794,6 @@ class TransceiverUI(ctk.CTk):
         )
         self.rx_cont_restart_margin.insert(0, "1.5")
         self.rx_cont_restart_margin.grid(row=2, column=1, sticky="ew")
-
-        ctk.CTkLabel(rx_cont_params_left, text="Worker", anchor="e").grid(
-            row=3, column=0, sticky="e", padx=label_padx
-        )
-        self.rx_cont_worker_count = SuggestEntry(rx_cont_params_left, "rx_cont_worker_count")
-        self.rx_cont_worker_count.insert(0, "1")
-        self.rx_cont_worker_count.grid(row=3, column=1, sticky="ew")
-
-        ctk.CTkLabel(rx_cont_params_right, text="Heavy-k", anchor="e").grid(
-            row=3, column=0, sticky="e", padx=label_padx
-        )
-        self.rx_cont_heavy_every = SuggestEntry(rx_cont_params_right, "rx_cont_heavy_every")
-        self.rx_cont_heavy_every.insert(0, "1")
-        self.rx_cont_heavy_every.grid(row=3, column=1, sticky="ew")
-
-        self.rx_cont_adaptive_load = tk.BooleanVar(value=True)
-        ctk.CTkCheckBox(
-            rx_cont_params_body,
-            text="Adaptive Lastreduktion",
-            variable=self.rx_cont_adaptive_load,
-        ).grid(row=2, column=1, columnspan=2, sticky="w", pady=(4, 0))
 
         ctk.CTkLabel(rx_cont_params_body, text="Args", anchor="e").grid(
             row=1, column=0, sticky="e", padx=label_padx
@@ -6273,13 +6241,9 @@ class TransceiverUI(ctk.CTk):
             restart_margin = _parse_number_expr_or_error(
                 self.rx_cont_restart_margin.get()
             )
-            worker_count = int(round(_parse_number_expr_or_error(self.rx_cont_worker_count.get())))
-            heavy_every = int(round(_parse_number_expr_or_error(self.rx_cont_heavy_every.get())))
         except ValueError as exc:
             messagebox.showerror("Continuous", str(exc))
             return
-        worker_count = max(1, min(16, worker_count))
-        heavy_every = max(1, heavy_every)
         tx_reference_path = _strip_zeros_tx_filename(self.tx_file.get())
         self._cont_runtime_config = {
             'trim_enabled': bool(self.trim_var.get()),
@@ -6289,11 +6253,6 @@ class TransceiverUI(ctk.CTk):
             'magnitude_enabled': bool(self.rx_magnitude_enable.get()),
             'path_cancel_enabled': bool(self.rx_path_cancel_enable.get()),
             'tx_path': tx_reference_path,
-            'heavy_every': heavy_every,
-            'adaptive_load_enabled': bool(self.rx_cont_adaptive_load.get()),
-            'adaptive_target_processing_ms': max(40.0, snippet_seconds * 900.0),
-            'adaptive_target_end_to_end_ms': max(120.0, snippet_interval * 1200.0),
-            'worker_count': worker_count,
         }
 
         cmd = [
@@ -6344,29 +6303,19 @@ class TransceiverUI(ctk.CTk):
         self._process_queue()
 
     def _start_continuous_pipeline(self) -> None:
-        worker_count = int(self._cont_runtime_config.get('worker_count', 1))
-        worker_count = max(1, min(16, worker_count))
-        queue_size = max(2, worker_count * 2)
-        self._cont_task_queue = multiprocessing.Queue(maxsize=queue_size)
-        self._cont_result_queue = multiprocessing.Queue(maxsize=queue_size)
-        self._cont_frame_seq = 0
-        self._cont_last_rendered_seq = -1
-        self._cont_worker_latency_ms = 0.0
+        self._cont_task_queue = multiprocessing.Queue(maxsize=2)
+        self._cont_result_queue = multiprocessing.Queue(maxsize=2)
         self._cont_task_queue_drops = 0
         self._cont_rendered_frames = 0
         self._cont_last_processing_ms = 0.0
         self._cont_last_end_to_end_ms = 0.0
         self._cont_worker_result_drops = 0
-        self._cont_worker_processes = []
-        for worker_idx in range(worker_count):
-            proc = Process(
-                target=continuous_processing_worker,
-                args=(self._cont_task_queue, self._cont_result_queue, worker_idx),
-                daemon=True,
-            )
-            proc.start()
-            self._cont_worker_processes.append(proc)
-        self._update_continuous_metrics_label()
+        self._cont_worker_process = Process(
+            target=continuous_processing_worker,
+            args=(self._cont_task_queue, self._cont_result_queue),
+            daemon=True,
+        )
+        self._cont_worker_process.start()
         self.after(25, self._poll_continuous_results)
 
     def _ensure_continuous_input_pool(self, required_nbytes: int) -> _ContinuousInputShmPool:
@@ -6395,15 +6344,12 @@ class TransceiverUI(ctk.CTk):
     def _stop_continuous_pipeline(self) -> None:
         if self._cont_task_queue is not None:
             with contextlib.suppress(Exception):
-                for _ in range(max(1, len(self._cont_worker_processes))):
-                    self._cont_task_queue.put_nowait(None)
-        for proc in self._cont_worker_processes:
-            if not proc.is_alive():
-                continue
-            proc.join(timeout=2)
-            if proc.is_alive():
-                proc.terminate()
-                proc.join(timeout=1)
+                self._cont_task_queue.put_nowait(None)
+        if self._cont_worker_process is not None and self._cont_worker_process.is_alive():
+            self._cont_worker_process.join(timeout=2)
+            if self._cont_worker_process.is_alive():
+                self._cont_worker_process.terminate()
+                self._cont_worker_process.join(timeout=1)
         for q in (self._cont_task_queue, self._cont_result_queue):
             if q is None:
                 continue
@@ -6420,12 +6366,11 @@ class TransceiverUI(ctk.CTk):
                 q.join_thread()
         self._cont_task_queue = None
         self._cont_result_queue = None
-        self._cont_worker_processes = []
+        self._cont_worker_process = None
         if self._cont_input_pool is not None:
             self._cont_input_pool.close()
         self._cont_input_pool = None
         self._cont_input_pool_bytes = 0
-        self._update_continuous_metrics_label()
 
     def _enqueue_continuous_task(self, task: dict[str, object]) -> None:
         q = self._cont_task_queue
@@ -6443,33 +6388,17 @@ class TransceiverUI(ctk.CTk):
             dropped_task = q.get_nowait()
         except Exception:
             self._release_input_slot_from_payload(task)
-            self._update_continuous_metrics_label()
             return
         self._release_input_slot_from_payload(dropped_task)
         try:
             q.put_nowait(task)
         except Exception:
             self._release_input_slot_from_payload(task)
-        self._update_continuous_metrics_label()
-
-    def _update_continuous_metrics_label(self) -> None:
-        if not hasattr(self, 'rx_cont_metrics_label'):
-            return
-        self.rx_cont_metrics_label.configure(
-            text=(
-                "Continuous: "
-                f"queue_drops={self._cont_task_queue_drops} · "
-                f"worker_drops={self._cont_worker_result_drops} · "
-                f"worker_latency={self._cont_worker_latency_ms:.1f} ms · "
-                f"processing={self._cont_last_processing_ms:.1f} ms · "
-                f"end2end={self._cont_last_end_to_end_ms:.1f} ms"
-            )
-        )
 
     def _poll_continuous_results(self) -> None:
         q = self._cont_result_queue
         if q is not None:
-            latest: dict[str, object] | None = None
+            latest = None
             worker_drops = 0
             while True:
                 try:
@@ -6478,30 +6407,14 @@ class TransceiverUI(ctk.CTk):
                     break
                 except Exception:
                     break
-                if not isinstance(item, dict):
-                    continue
-                if latest is None:
-                    latest = item
-                    continue
-                latest_seq = int(latest.get('seq_no', -1))
-                item_seq = int(item.get('seq_no', -1))
-                if item_seq >= latest_seq:
+                if latest is not None:
                     worker_drops += 1
                     self._release_input_slot_from_payload(latest)
-                    latest = item
-                else:
-                    worker_drops += 1
-                    self._release_input_slot_from_payload(item)
+                latest = item
             self._cont_worker_result_drops += worker_drops
             if latest is not None:
-                seq_no = int(latest.get('seq_no', -1))
-                if seq_no > self._cont_last_rendered_seq:
-                    self._release_input_slot_from_payload(latest)
-                    self._render_continuous_payload(latest)
-                    self._cont_last_rendered_seq = seq_no
-                else:
-                    self._release_input_slot_from_payload(latest)
-            self._update_continuous_metrics_label()
+                self._release_input_slot_from_payload(latest)
+                self._render_continuous_payload(latest)
         if getattr(self, '_cont_thread', None) is not None or q is not None:
             self.after(25, self._poll_continuous_results)
 
@@ -6515,10 +6428,8 @@ class TransceiverUI(ctk.CTk):
         self.latest_fs_raw = fs
         self._cont_rendered_frames += 1
         self._cont_last_processing_ms = float(payload.get('processing_ms', 0.0))
-        self._cont_worker_latency_ms = float(payload.get('worker_latency_ms', 0.0))
         frame_ts = float(payload.get('frame_ts', time.monotonic()))
         self._cont_last_end_to_end_ms = (time.monotonic() - frame_ts) * 1000.0
-        self._update_continuous_metrics_label()
 
         self._display_rx_plots(plot_data, fs, reset_manual=False, target_tab='Continuous')
 
@@ -6618,11 +6529,7 @@ class TransceiverUI(ctk.CTk):
                     'data_nbytes': int(frame.nbytes),
                     'fs': rate,
                     'frame_ts': time.monotonic(),
-                    'seq_no': self._cont_frame_seq,
-                    'last_processing_ms': self._cont_last_processing_ms,
-                    'last_end_to_end_ms': self._cont_last_end_to_end_ms,
                 }
-                self._cont_frame_seq += 1
                 payload.update(self._cont_runtime_config)
                 self._enqueue_continuous_task(payload)
 
