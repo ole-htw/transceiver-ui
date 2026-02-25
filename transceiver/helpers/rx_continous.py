@@ -987,6 +987,43 @@ def main(callback=None, args=None, stop_event=None):
     recovery_attempts = [0] * num_ports
     recovery_failures = [0] * num_ports
     pending = {}
+    emitter_drop_count = 0
+    emitter_drop_warn_every = 25
+
+    def _log_emitter_drop(reason: str):
+        nonlocal emitter_drop_count
+        emitter_drop_count += 1
+        if emitter_drop_count == 1 or emitter_drop_count % emitter_drop_warn_every == 0:
+            log(
+                f"[emitter] drop #{emitter_drop_count}: {reason}",
+                memory_only=args.memory_only,
+            )
+
+    def _enqueue_emit_request(msg: dict):
+        """
+        Enqueue emitter work without blocking snippet workers.
+
+        Strategy: latest-wins.
+        - Try immediate enqueue.
+        - If full, drop one oldest pending emitter message and retry.
+        - If still full, drop the new message and count it.
+        """
+        try:
+            emit_q.put_nowait(msg)
+            return
+        except queue.Full:
+            _log_emitter_drop("queue full; attempting latest-wins replacement")
+
+        try:
+            emit_q.get_nowait()
+        except queue.Empty:
+            _log_emitter_drop("queue still full but no removable item found; dropping newest")
+            return
+
+        try:
+            emit_q.put_nowait(msg)
+        except queue.Full:
+            _log_emitter_drop("queue remained full after replacement attempt; dropping newest")
 
     def handle_read_result(result_msg):
         port = int(result_msg.get("port", -1))
@@ -1000,7 +1037,7 @@ def main(callback=None, args=None, stop_event=None):
                 f"({0 if data is None else len(data)} items)",
                 memory_only=args.memory_only,
             )
-            emit_q.put(
+            _enqueue_emit_request(
                 {
                     "kind": "emit_request",
                     "port": port,
@@ -1214,6 +1251,12 @@ def main(callback=None, args=None, stop_event=None):
                 emitter.terminate()
         else:
             emitter.join(timeout=2.0)
+
+        if emitter_drop_count:
+            log(
+                f"[emitter] total dropped emitter messages: {emitter_drop_count}",
+                memory_only=args.memory_only,
+            )
 
         time.sleep(0.1)
 
