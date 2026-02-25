@@ -5259,7 +5259,17 @@ class TransceiverUI(ctk.CTk):
             bg_color = _resolve_ctk_frame_bg(target_frame)
             pg_bg_color = _tk_color_to_rgb(target_frame, bg_color)
             axis_color = "#9E9E9E"
-            zoom_half_window = 50
+            base_half_window = 50.0
+            interpolation_factor = 1.0
+            if bool(getattr(self, "_latest_rx_data_interpolated", False)):
+                raw_factor = self._rx_effective_interpolation_factor()
+                try:
+                    parsed_factor = float(raw_factor)
+                except (TypeError, ValueError):
+                    parsed_factor = 1.0
+                if np.isfinite(parsed_factor) and parsed_factor > 0:
+                    interpolation_factor = parsed_factor
+            zoom_half_window = base_half_window * interpolation_factor
 
             def _crosscorr_zoom_range(
                 precomputed_ctx: dict[str, object] | None,
@@ -5293,9 +5303,15 @@ class TransceiverUI(ctk.CTk):
                 if not focus_lags:
                     return None
                 center = float(sum(focus_lags) / len(focus_lags))
+                lag_min = float(np.min(los_lags))
+                lag_max = float(np.max(los_lags))
+                max_half_window = max(10.0, (lag_max - lag_min) / 2.0)
+                zoom_half_window_clamped = float(
+                    np.clip(zoom_half_window, 10.0, max_half_window)
+                )
                 return (
-                    center - zoom_half_window,
-                    center + zoom_half_window,
+                    center - zoom_half_window_clamped,
+                    center + zoom_half_window_clamped,
                 )
 
             pg_state = getattr(self, "_rx_cont_pg_state", None)
