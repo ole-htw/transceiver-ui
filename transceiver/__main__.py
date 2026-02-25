@@ -22,6 +22,7 @@ from multiprocessing import shared_memory, Pipe, Process
 from pathlib import Path
 from datetime import datetime
 from queue import Empty as ThreadQueueEmpty
+from collections import deque
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageTk
@@ -136,6 +137,7 @@ XCORR_EXTRA_PEAK_COLORS = (
     "#3949AB",
 )
 MAX_OVERSAMPLING_DEN = 1024
+CONTINUOUS_SHM_SLOTS = 4
 
 
 def _oversampling_ratio(oversampling: float) -> Fraction:
@@ -245,6 +247,50 @@ def _configure_multiprocessing() -> None:
         multiprocessing.set_start_method("spawn")
     except RuntimeError:
         pass
+
+
+class _ContinuousInputShmPool:
+    """Fixed-size slot pool for passing continuous RX frames via shared memory."""
+
+    def __init__(self, slot_count: int, slot_nbytes: int) -> None:
+        self.slot_count = max(1, int(slot_count))
+        self.slot_nbytes = max(1, int(slot_nbytes))
+        self.slot_stride = self.slot_nbytes
+        self._shm = _create_shared_memory(self.slot_stride * self.slot_count)
+        self.name = self._shm.name
+        self._free_slots: deque[int] = deque(range(self.slot_count))
+        self._in_use_slots: set[int] = set()
+
+    def acquire(self) -> int | None:
+        if not self._free_slots:
+            return None
+        slot = self._free_slots.popleft()
+        self._in_use_slots.add(slot)
+        return slot
+
+    def release(self, slot: int | None) -> None:
+        if slot is None:
+            return
+        slot_id = int(slot)
+        if slot_id not in self._in_use_slots:
+            return
+        self._in_use_slots.remove(slot_id)
+        self._free_slots.append(slot_id)
+
+    def write(self, slot: int, data: np.ndarray) -> None:
+        nbytes = int(data.nbytes)
+        if nbytes > self.slot_nbytes:
+            raise ValueError(f"Frame too large for slot ({nbytes} > {self.slot_nbytes}).")
+        offset = self.slot_stride * int(slot)
+        target = np.ndarray(data.shape, dtype=data.dtype, buffer=self._shm.buf, offset=offset)
+        target[...] = data
+
+    def close(self) -> None:
+        with contextlib.suppress(Exception):
+            self._shm.close()
+        with contextlib.suppress(Exception):
+            self._shm.unlink()
+        _SHM_REGISTRY.discard(self.name)
 
 
 def _make_section(
@@ -2864,6 +2910,8 @@ class TransceiverUI(ctk.CTk):
         self._cont_last_end_to_end_ms = 0.0
         self._cont_worker_result_drops = 0
         self._cont_runtime_config: dict[str, object] = {}
+        self._cont_input_pool: _ContinuousInputShmPool | None = None
+        self._cont_input_pool_bytes = 0
         self._build_tx_indicator_assets()
         self.create_widgets()
         try:
@@ -6270,6 +6318,29 @@ class TransceiverUI(ctk.CTk):
         self._cont_worker_process.start()
         self.after(25, self._poll_continuous_results)
 
+    def _ensure_continuous_input_pool(self, required_nbytes: int) -> _ContinuousInputShmPool:
+        size = max(1, int(required_nbytes))
+        pool = self._cont_input_pool
+        if pool is not None and self._cont_input_pool_bytes >= size:
+            return pool
+        if pool is not None:
+            pool.close()
+        self._cont_input_pool = _ContinuousInputShmPool(CONTINUOUS_SHM_SLOTS, size)
+        self._cont_input_pool_bytes = size
+        return self._cont_input_pool
+
+    def _release_input_slot_from_payload(self, payload: dict[str, object] | None) -> None:
+        if not payload:
+            return
+        pool = self._cont_input_pool
+        if pool is None:
+            return
+        slot = payload.get('slot_id')
+        if slot is None:
+            return
+        with contextlib.suppress(Exception):
+            pool.release(int(slot))
+
     def _stop_continuous_pipeline(self) -> None:
         if self._cont_task_queue is not None:
             with contextlib.suppress(Exception):
@@ -6282,6 +6353,13 @@ class TransceiverUI(ctk.CTk):
         for q in (self._cont_task_queue, self._cont_result_queue):
             if q is None:
                 continue
+            while True:
+                try:
+                    item = q.get_nowait()
+                except Exception:
+                    break
+                if isinstance(item, dict):
+                    self._release_input_slot_from_payload(item)
             with contextlib.suppress(Exception):
                 q.close()
             with contextlib.suppress(Exception):
@@ -6289,10 +6367,15 @@ class TransceiverUI(ctk.CTk):
         self._cont_task_queue = None
         self._cont_result_queue = None
         self._cont_worker_process = None
+        if self._cont_input_pool is not None:
+            self._cont_input_pool.close()
+        self._cont_input_pool = None
+        self._cont_input_pool_bytes = 0
 
     def _enqueue_continuous_task(self, task: dict[str, object]) -> None:
         q = self._cont_task_queue
         if q is None:
+            self._release_input_slot_from_payload(task)
             return
         try:
             q.put_nowait(task)
@@ -6300,14 +6383,17 @@ class TransceiverUI(ctk.CTk):
         except Exception:
             pass
         self._cont_task_queue_drops += 1
+        dropped_task = None
         try:
-            q.get_nowait()
+            dropped_task = q.get_nowait()
         except Exception:
+            self._release_input_slot_from_payload(task)
             return
+        self._release_input_slot_from_payload(dropped_task)
         try:
             q.put_nowait(task)
         except Exception:
-            pass
+            self._release_input_slot_from_payload(task)
 
     def _poll_continuous_results(self) -> None:
         q = self._cont_result_queue
@@ -6323,9 +6409,11 @@ class TransceiverUI(ctk.CTk):
                     break
                 if latest is not None:
                     worker_drops += 1
+                    self._release_input_slot_from_payload(latest)
                 latest = item
             self._cont_worker_result_drops += worker_drops
             if latest is not None:
+                self._release_input_slot_from_payload(latest)
                 self._render_continuous_payload(latest)
         if getattr(self, '_cont_thread', None) is not None or q is not None:
             self.after(25, self._poll_continuous_results)
@@ -6418,8 +6506,27 @@ class TransceiverUI(ctk.CTk):
             def _callback(*, data: np.ndarray, **_info: object) -> None:
                 if not data.size:
                     return
+                frame = np.ascontiguousarray(data)
+                try:
+                    pool = self._ensure_continuous_input_pool(int(frame.nbytes))
+                except Exception:
+                    return
+                slot_id = pool.acquire()
+                if slot_id is None:
+                    self._cont_task_queue_drops += 1
+                    return
+                try:
+                    pool.write(slot_id, frame)
+                except Exception:
+                    pool.release(slot_id)
+                    return
                 payload = {
-                    'data': np.array(data, copy=True),
+                    'input_shm_name': pool.name,
+                    'slot_id': slot_id,
+                    'slot_stride': pool.slot_stride,
+                    'data_shape': tuple(int(v) for v in frame.shape),
+                    'data_dtype': frame.dtype.str,
+                    'data_nbytes': int(frame.nbytes),
                     'fs': rate,
                     'frame_ts': time.monotonic(),
                 }

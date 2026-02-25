@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import multiprocessing
 import time
+from multiprocessing import shared_memory
 
 import numpy as np
 
@@ -14,8 +15,11 @@ from .path_cancellation import apply_path_cancellation
 
 
 def _decimate_for_display(data: np.ndarray, max_points: int = 4096) -> np.ndarray:
-    del max_points
-    return np.asarray(data)
+    arr = np.asarray(data)
+    if arr.size <= max_points or max_points <= 0:
+        return arr
+    step = max(1, int(np.ceil(arr.size / max_points)))
+    return arr[::step]
 
 
 def continuous_processing_worker(
@@ -25,6 +29,26 @@ def continuous_processing_worker(
     """Process continuous RX frames and emit preprocessed UI payloads."""
     cached_tx_path: str | None = None
     cached_tx_data = np.array([], dtype=np.complex64)
+    input_shm_name: str | None = None
+    input_shm: shared_memory.SharedMemory | None = None
+
+    def _get_input_memory(name: str) -> shared_memory.SharedMemory | None:
+        nonlocal input_shm_name, input_shm
+        if input_shm_name == name and input_shm is not None:
+            return input_shm
+        if input_shm is not None:
+            try:
+                input_shm.close()
+            except Exception:
+                pass
+            input_shm = None
+            input_shm_name = None
+        try:
+            input_shm = shared_memory.SharedMemory(name=name)
+            input_shm_name = name
+        except Exception:
+            return None
+        return input_shm
 
     while True:
         task = task_queue.get()
@@ -32,7 +56,24 @@ def continuous_processing_worker(
             break
 
         started = time.monotonic()
-        data = np.asarray(task.get("data", np.array([], dtype=np.complex64)))
+        slot_id = int(task.get("slot_id", -1))
+        data_shape = tuple(task.get("data_shape", ()))
+        data_dtype = np.dtype(task.get("data_dtype", np.complex64))
+        data_nbytes = int(task.get("data_nbytes", 0))
+        shm_name = str(task.get("input_shm_name", ""))
+        data = np.array([], dtype=np.complex64)
+        if shm_name and data_shape and data_nbytes > 0:
+            shm = _get_input_memory(shm_name)
+            if shm is not None:
+                slot_stride = int(task.get("slot_stride", data_nbytes))
+                slot_offset = slot_stride * max(0, slot_id)
+                if slot_offset + data_nbytes <= len(shm.buf):
+                    data = np.ndarray(
+                        data_shape,
+                        dtype=data_dtype,
+                        buffer=shm.buf,
+                        offset=slot_offset,
+                    )
         fs = float(task.get("fs", 1.0))
         tx_path = task.get("tx_path")
         trim_enabled = bool(task.get("trim_enabled", False))
@@ -91,5 +132,12 @@ def continuous_processing_worker(
                 "aoa_series": None,
                 "aoa_time": None,
                 "processing_ms": (time.monotonic() - started) * 1000.0,
+                "slot_id": slot_id,
             }
         )
+
+    if input_shm is not None:
+        try:
+            input_shm.close()
+        except Exception:
+            pass
