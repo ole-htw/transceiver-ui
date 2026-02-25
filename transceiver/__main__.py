@@ -1794,8 +1794,12 @@ def _gen_tx_filename(app) -> str:
         samples = int(app.samples_entry.get())
     except Exception:
         samples = 0
+    filter_mode = "frequency_domain_zeroing"
+    if hasattr(app, "filter_mode_var"):
+        filter_mode = str(app.filter_mode_var.get() or "frequency_domain_zeroing").strip().lower()
     fdz_var = getattr(app, "fdz_enable", None)
-    fdz_enabled = bool(fdz_var.get()) if fdz_var is not None else False
+    filter_enabled = bool(fdz_var.get()) if fdz_var is not None else False
+    filter_active = filter_enabled and w == "zadoffchu" and filter_mode == "frequency_domain_zeroing"
     filter_bandwidth = 0.0
     if hasattr(app, "filter_bandwidth_entry"):
         filter_bandwidth = _try_parse_number_expr(app.filter_bandwidth_entry.get(), default=0.0)
@@ -1832,7 +1836,7 @@ def _gen_tx_filename(app) -> str:
         parts.append(f"pn{_pretty(pn_rate)}")
         parts.append(f"seed{pn_seed}")
 
-    if fdz_enabled and filter_bandwidth > 0:
+    if filter_active and filter_bandwidth > 0:
         parts.append(_format_bandwidth_token(filter_bandwidth))
 
     parts.append(f"fs{_pretty(fs)}")
@@ -3299,6 +3303,7 @@ class TransceiverUI(ctk.CTk):
         )
 
         self.fdz_enable = tk.BooleanVar(value=True)
+        self.filter_mode_var = tk.StringVar(value="frequency_domain_zeroing")
         filter_frame, filter_body, _ = _make_side_bordered_group(
             gen_body,
             "Filter",
@@ -3330,7 +3335,7 @@ class TransceiverUI(ctk.CTk):
         self.filter_bandwidth_entry.grid(row=0, column=1, sticky="ew")
         self.filter_bandwidth_entry.entry.bind(
             "<FocusOut>",
-            lambda _e: self.auto_update_tx_filename(),
+            lambda _e: self._on_filter_bandwidth_changed(),
         )
 
         if not self.fdz_enable.get():
@@ -4123,14 +4128,23 @@ class TransceiverUI(ctk.CTk):
         self.auto_update_tx_filename()
         _apply_input_margins(self)
 
-    def _fdz_active(self) -> bool:
-        return self.fdz_enable.get() and self.wave_var.get().lower() == "zadoffchu"
+    def _is_filter_active(self) -> bool:
+        mode = (self.filter_mode_var.get() or "frequency_domain_zeroing").strip().lower()
+        return (
+            self.fdz_enable.get()
+            and self.wave_var.get().lower() == "zadoffchu"
+            and mode == "frequency_domain_zeroing"
+        )
+
+    def _on_filter_bandwidth_changed(self) -> None:
+        self.auto_update_tx_filename()
+        self._reset_manual_xcorr_lags("Filter/Bandbreite geändert")
 
     def _on_filter_toggle(self) -> None:
         state = "normal" if self.fdz_enable.get() else "disabled"
         self.filter_bandwidth_entry.entry.configure(state=state)
         self.auto_update_tx_filename()
-        self._reset_manual_xcorr_lags("Filter geändert")
+        self._reset_manual_xcorr_lags("Filter/Bandbreite geändert")
 
     def _get_repeat_count(self) -> int:
         try:
@@ -4143,7 +4157,7 @@ class TransceiverUI(ctk.CTk):
             return self._zeros_tx_file
         if getattr(self, "_repeat_tx_file", None):
             return self._repeat_tx_file
-        if self._fdz_active():
+        if self._is_filter_active():
             return self._filtered_tx_file or self.tx_file.get()
         return self.tx_file.get()
 
@@ -4225,7 +4239,7 @@ class TransceiverUI(ctk.CTk):
         self.file_entry.delete(0, tk.END)
         self.file_entry.insert(0, name)
         self.tx_file.delete(0, tk.END)
-        if self._fdz_active():
+        if self._is_filter_active():
             filtered_name = _gen_filtered_tx_filename(name)
             self._filtered_tx_file = filtered_name
             base_name = filtered_name
@@ -5530,10 +5544,11 @@ class TransceiverUI(ctk.CTk):
             "f1": self.f1_entry.get(),
             "q": self.q_entry.get(),
             "samples": self.samples_entry.get(),
-            "filter_bandwidth": self.filter_bandwidth_entry.get(),
+            "filter_enabled": self.fdz_enable.get(),
+            "filter_mode": (self.filter_mode_var.get() or "frequency_domain_zeroing"),
+            "filter_bandwidth_hz": self.filter_bandwidth_entry.get(),
             "repeats": self.repeat_entry.get(),
             "repeats_enabled": self.repeat_enable.get(),
-            "fdz_enabled": self.fdz_enable.get(),
             "zeros": self.zeros_var.get(),
             "zeros_enabled": self.zeros_enable.get(),
             "amplitude": self.amp_entry.get(),
@@ -5598,11 +5613,21 @@ class TransceiverUI(ctk.CTk):
         self.q_entry.insert(0, params.get("q", ""))
         self.samples_entry.delete(0, tk.END)
         self.samples_entry.insert(0, params.get("samples", ""))
+        filter_bandwidth_value = params.get("filter_bandwidth_hz")
+        if filter_bandwidth_value is None:
+            filter_bandwidth_value = params.get("filter_bandwidth")
+        if filter_bandwidth_value is None and "rrc_oversampling" in params:
+            fs_for_filter = _try_parse_number_expr(str(params.get("fs", "")), default=0.0)
+            oversampling = _try_parse_number_expr(
+                str(params.get("rrc_oversampling", "")),
+                default=0.0,
+            )
+            if fs_for_filter > 0 and oversampling > 0:
+                filter_bandwidth_value = str(fs_for_filter / oversampling)
+        if filter_bandwidth_value is None:
+            filter_bandwidth_value = "1e6"
         self.filter_bandwidth_entry.delete(0, tk.END)
-        self.filter_bandwidth_entry.insert(
-            0,
-            params.get("filter_bandwidth", "1e6"),
-        )
+        self.filter_bandwidth_entry.insert(0, str(filter_bandwidth_value))
         self.repeat_entry.delete(0, tk.END)
         repeats_value = params.get("repeats", "1")
         self.repeat_entry.insert(0, repeats_value)
@@ -5613,7 +5638,26 @@ class TransceiverUI(ctk.CTk):
             repeat_enabled = str(repeats_value).strip() != "0"
         self.repeat_enable.set(bool(repeat_enabled))
         self._on_repeat_toggle()
-        self.fdz_enable.set(params.get("fdz_enabled", True))
+        filter_enabled = params.get("filter_enabled")
+        if filter_enabled is None:
+            if "fdz_enabled" in params:
+                filter_enabled = params.get("fdz_enabled")
+            elif "rrc_enabled" in params:
+                filter_enabled = params.get("rrc_enabled")
+            else:
+                filter_enabled = True
+        self.fdz_enable.set(bool(filter_enabled))
+
+        filter_mode = params.get("filter_mode")
+        if filter_mode is None:
+            if "fdz_enabled" in params:
+                filter_mode = "frequency_domain_zeroing"
+            elif "rrc_enabled" in params:
+                filter_mode = "frequency_domain_zeroing"
+            else:
+                filter_mode = "frequency_domain_zeroing"
+        self.filter_mode_var.set(str(filter_mode))
+
         state = "normal" if self.fdz_enable.get() else "disabled"
         self.filter_bandwidth_entry.entry.configure(state=state)
         zeros_value = params.get("zeros", "same")
@@ -5866,7 +5910,7 @@ class TransceiverUI(ctk.CTk):
                 data = generate_waveform(waveform, fs, f0, samples, f0=f0, f1=f1)
 
             filter_data = None
-            if self._fdz_active():
+            if self._is_filter_active():
                 bandwidth_hz = _parse_number_expr_or_error(
                     self.filter_bandwidth_entry.get(),
                     allow_empty=False,
