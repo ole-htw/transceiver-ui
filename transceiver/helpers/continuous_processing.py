@@ -12,6 +12,7 @@ from .echo_aoa import (
     _xcorr_fft_two_channel_batched,
 )
 from .path_cancellation import apply_path_cancellation
+from .interpolation import apply_rx_interpolation
 
 
 def _decimate_for_display(data: np.ndarray, max_points: int = 4096) -> np.ndarray:
@@ -66,6 +67,9 @@ def continuous_processing_worker(
             magnitude_enabled = bool(task.get("magnitude_enabled", False))
             rx_channel_view = str(task.get("rx_channel_view", "Kanal 1"))
             path_cancel_enabled = bool(task.get("path_cancel_enabled", False))
+            interpolation_enabled = bool(task.get("interpolation_enabled", False))
+            interpolation_method = str(task.get("interpolation_method", "interp1d"))
+            interpolation_factor = str(task.get("interpolation_factor", "2"))
 
             if use_shared_input:
                 if slot_id < 0 or slot_id >= len(input_slots) or nbytes <= 0 or nbytes > input_slot_size:
@@ -124,6 +128,14 @@ def continuous_processing_worker(
                     e = int(round(plot_data.size * trim_end / 100.0))
                     e = max(s + 1, min(plot_data.size, e))
                     plot_data = plot_data[s:e]
+                plot_data, interpolation_scale = apply_rx_interpolation(
+                    plot_data,
+                    enabled=interpolation_enabled,
+                    method=interpolation_method,
+                    factor_text=interpolation_factor,
+                )
+                if interpolation_scale > 1:
+                    fs *= interpolation_scale
                 if magnitude_enabled:
                     plot_data = np.abs(plot_data)
 
