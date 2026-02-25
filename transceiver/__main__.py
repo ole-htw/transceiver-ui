@@ -1528,6 +1528,7 @@ def _build_crosscorr_ctx(
     crosscorr_compare: np.ndarray | None = None,
     manual_lags: dict[str, int | None] | None = None,
     lag_step: int = 1,
+    normalized: bool = False,
 ) -> dict[str, object]:
     """Return cross-correlation context for one frame.
 
@@ -1536,9 +1537,19 @@ def _build_crosscorr_ctx(
     present, ``cc2``, ``lags2`` and ``mag2`` are included as well.
     """
     step = max(1, int(lag_step))
+
+    def _to_magnitude(corr: np.ndarray, lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:
+        mag = np.abs(corr)
+        if not normalized:
+            return mag
+        denom = float(np.linalg.norm(lhs) * np.linalg.norm(rhs))
+        if denom <= 0.0 or not np.isfinite(denom):
+            return mag
+        return mag / denom
+
     cc = _xcorr_fft(data, ref_data)
     lags = np.arange(-(len(ref_data) - 1), len(data)) * step
-    mag = np.abs(cc)
+    mag = _to_magnitude(cc, data, ref_data)
     crosscorr_ctx: dict[str, object] = {
         "cc": cc,
         "lags": lags,
@@ -1556,7 +1567,7 @@ def _build_crosscorr_ctx(
     if compare_available:
         cc2 = _xcorr_fft(crosscorr_compare, ref_data)
         lags2 = np.arange(-(len(ref_data) - 1), len(crosscorr_compare)) * step
-        mag2 = np.abs(cc2)
+        mag2 = _to_magnitude(cc2, crosscorr_compare, ref_data)
         crosscorr_ctx.update({"cc2": cc2, "lags2": lags2, "mag2": mag2})
         highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(
             mag2,
@@ -2178,6 +2189,7 @@ def _spawn_plot_worker(
     manual_lags: dict[str, int | None] | None = None,
     crosscorr_compare: np.ndarray | None = None,
     fullscreen: bool = False,
+    xcorr_normalized: bool = False,
 ) -> str | None:
     """Launch the PyQtGraph plot worker in a separate process."""
     temp_dir = Path(tempfile.mkdtemp(prefix="transceiver_plot_"))
@@ -2296,6 +2308,7 @@ def _spawn_plot_worker(
         if compare_path is not None:
             payload["compare_file"] = str(compare_path)
     output_path = None
+    payload["xcorr_normalized"] = bool(xcorr_normalized)
     if manual_lags is not None:
         payload["manual_lags"] = {
             key: (int(val) if val is not None else None)
@@ -2317,6 +2330,7 @@ def _plot_on_pg(
     crosscorr_compare: np.ndarray | None = None,
     manual_lags: dict[str, int | None] | None = None,
     crosscorr_ctx: dict[str, object] | None = None,
+    xcorr_normalized: bool = False,
     on_los_drag=None,
     on_echo_drag=None,
     on_los_drag_end=None,
@@ -2390,6 +2404,7 @@ def _plot_on_pg(
                 crosscorr_compare=crosscorr_compare,
                 manual_lags=manual_lags,
                 lag_step=step_r,
+                normalized=xcorr_normalized,
             )
         lags = crosscorr_ctx["lags"]
         mag = crosscorr_ctx["mag"]
@@ -2788,6 +2803,7 @@ def _plot_on_mpl(
     ref_data: np.ndarray | None = None,
     crosscorr_compare: np.ndarray | None = None,
     manual_lags: dict[str, int | None] | None = None,
+    xcorr_normalized: bool = False,
 ) -> None:
     """Helper to draw a small matplotlib preview plot."""
     mpl_colors = PLOT_COLORS
@@ -2836,7 +2852,11 @@ def _plot_on_mpl(
         fs /= step_r
         cc = _xcorr_fft(data, ref_data)
         lags = np.arange(-(len(ref_data) - 1), len(data)) * step_r
-        mag = np.abs(cc)
+        if xcorr_normalized:
+            denom = float(np.linalg.norm(data) * np.linalg.norm(ref_data))
+            mag = np.abs(cc) / denom if denom > 0.0 and np.isfinite(denom) else np.abs(cc)
+        else:
+            mag = np.abs(cc)
         ax.plot(lags, mag, color=mpl_colors["crosscorr"])
         compare_handles: list[Line2D] = []
         if crosscorr_compare is not None and crosscorr_compare.size:
@@ -2844,7 +2864,11 @@ def _plot_on_mpl(
             lags2 = np.arange(
                 -(len(ref_data) - 1), len(crosscorr_compare)
             ) * step_r
-            mag2 = np.abs(cc2)
+            if xcorr_normalized:
+                denom2 = float(np.linalg.norm(crosscorr_compare) * np.linalg.norm(ref_data))
+                mag2 = np.abs(cc2) / denom2 if denom2 > 0.0 and np.isfinite(denom2) else np.abs(cc2)
+            else:
+                mag2 = np.abs(cc2)
             ax.plot(
                 lags2,
                 mag2,
@@ -3746,6 +3770,21 @@ class TransceiverUI(ctk.CTk):
             row=4, column=0, columnspan=2, sticky="ew", pady=(0, 6)
         )
 
+        self.rx_xcorr_normalized_enable = tk.BooleanVar(value=False)
+        (
+            self.rx_xcorr_normalized_frame,
+            self.rx_xcorr_normalized_body,
+            self.rx_xcorr_normalized_check,
+        ) = _make_side_bordered_group(
+            rx_single_tab,
+            "Kreuzkorrelation normiert",
+            toggle_var=self.rx_xcorr_normalized_enable,
+            toggle_command=self._on_rx_xcorr_normalized_toggle,
+        )
+        self.rx_xcorr_normalized_frame.grid(
+            row=5, column=0, columnspan=2, sticky="ew", pady=(0, 6)
+        )
+
         self.rx_path_cancel_enable = tk.BooleanVar(value=False)
         (
             self.rx_path_cancel_frame,
@@ -3758,11 +3797,11 @@ class TransceiverUI(ctk.CTk):
             toggle_command=self._on_rx_path_cancel_toggle,
         )
         self.rx_path_cancel_frame.grid(
-            row=5, column=0, columnspan=2, sticky="ew", pady=(0, 6)
+            row=6, column=0, columnspan=2, sticky="ew", pady=(0, 6)
         )
 
         rx_btn_frame = ctk.CTkFrame(rx_single_tab)
-        rx_btn_frame.grid(row=6, column=0, columnspan=2, pady=(0, 5))
+        rx_btn_frame.grid(row=7, column=0, columnspan=2, pady=(0, 5))
         rx_btn_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
         self.rx_button = ctk.CTkButton(rx_btn_frame, text="Receive", command=self.receive)
@@ -3784,7 +3823,7 @@ class TransceiverUI(ctk.CTk):
             fg_color=terminal_container_fg,
             corner_radius=terminal_container_corner,
         )
-        rx_scroll_container.grid(row=7, column=0, columnspan=2, sticky="nsew")
+        rx_scroll_container.grid(row=8, column=0, columnspan=2, sticky="nsew")
         rx_scroll_container.columnconfigure(0, weight=1)
         rx_scroll_container.rowconfigure(0, weight=1)
 
@@ -3831,7 +3870,7 @@ class TransceiverUI(ctk.CTk):
                 self._update_rx_scrollbar(tab_name),
             ),
         )
-        rx_single_tab.rowconfigure(7, weight=1)
+        rx_single_tab.rowconfigure(8, weight=1)
 
         rx_continuous_tab = rx_tabs.add("Continuous")
         rx_continuous_tab.columnconfigure((0, 1), weight=1)
@@ -4201,6 +4240,10 @@ class TransceiverUI(ctk.CTk):
 
     def _on_rx_magnitude_toggle(self) -> None:
         self._reset_manual_xcorr_lags("Betrag geändert")
+        self.update_trim()
+
+    def _on_rx_xcorr_normalized_toggle(self) -> None:
+        self._reset_manual_xcorr_lags("XCorr-Normierung geändert")
         self.update_trim()
 
     def _on_rx_path_cancel_toggle(self) -> None:
@@ -4611,6 +4654,7 @@ class TransceiverUI(ctk.CTk):
                     ref,
                     crosscorr_compare if mode == "Crosscorr" else None,
                     manual_lags=self.manual_xcorr_lags,
+                    xcorr_normalized=self.rx_xcorr_normalized_enable.get(),
                 )
                 canvas = FigureCanvasTkAgg(fig, master=target_frame)
                 canvas.draw()
@@ -4828,6 +4872,7 @@ class TransceiverUI(ctk.CTk):
                     crosscorr_compare=compare_reduced,
                     manual_lags=self.manual_xcorr_lags,
                     lag_step=step_r,
+                    normalized=self.rx_xcorr_normalized_enable.get(),
                 )
             crosscorr_title = (
                 f"RX {mode}{title_suffix} ({plot_ref_label})"
@@ -4844,6 +4889,7 @@ class TransceiverUI(ctk.CTk):
                 crosscorr_compare=crosscorr_compare if mode == "Crosscorr" else None,
                 manual_lags=self.manual_xcorr_lags if mode == "Crosscorr" else None,
                 crosscorr_ctx=crosscorr_ctx,
+                xcorr_normalized=self.rx_xcorr_normalized_enable.get(),
             )
             if mode == "Signal":
                 signal_ranges = _signal_dynamic_view_ranges(plot_data)
@@ -5504,6 +5550,7 @@ class TransceiverUI(ctk.CTk):
             manual_lags=self.manual_xcorr_lags,
             crosscorr_compare=crosscorr_compare,
             fullscreen=True,
+            xcorr_normalized=self.rx_xcorr_normalized_enable.get(),
         )
         if mode == "Crosscorr":
             self._start_manual_xcorr_polling(output_path)
@@ -5535,7 +5582,11 @@ class TransceiverUI(ctk.CTk):
         n = min(len(data), len(ref))
         cc = _xcorr_fft(data[:n], ref[:n])
         self.full_xcorr_lags = np.arange(-n + 1, n)
-        self.full_xcorr_mag = np.abs(cc)
+        if self.rx_xcorr_normalized_enable.get():
+            denom = float(np.linalg.norm(data[:n]) * np.linalg.norm(ref[:n]))
+            self.full_xcorr_mag = np.abs(cc) / denom if denom > 0.0 and np.isfinite(denom) else np.abs(cc)
+        else:
+            self.full_xcorr_mag = np.abs(cc)
         self.echo_aoa_results = []
         self._show_toast("Cross-correlation calculated")
 
@@ -5573,6 +5624,7 @@ class TransceiverUI(ctk.CTk):
             "rx_dur": self.rx_dur.get(),
             "rx_gain": self.rx_gain.get(),
             "rx_magnitude_enabled": self.rx_magnitude_enable.get(),
+            "rx_xcorr_normalized_enabled": self.rx_xcorr_normalized_enable.get(),
             "rx_path_cancellation_enabled": self.rx_path_cancel_enable.get(),
             "rx_channel_2": self.rx_channel_2.get(),
             "rx_channel_view": self.rx_channel_view.get(),
@@ -5708,6 +5760,9 @@ class TransceiverUI(ctk.CTk):
         self.rx_gain.delete(0, tk.END)
         self.rx_gain.insert(0, params.get("rx_gain", ""))
         self.rx_magnitude_enable.set(params.get("rx_magnitude_enabled", False))
+        self.rx_xcorr_normalized_enable.set(
+            params.get("rx_xcorr_normalized_enabled", False)
+        )
         self.rx_path_cancel_enable.set(
             params.get("rx_path_cancellation_enabled", False)
         )
@@ -6219,6 +6274,7 @@ class TransceiverUI(ctk.CTk):
             'trim_end': float(self.trim_end.get()),
             'rx_channel_view': self.rx_channel_view.get(),
             'magnitude_enabled': bool(self.rx_magnitude_enable.get()),
+            'xcorr_normalized_enabled': bool(self.rx_xcorr_normalized_enable.get()),
             'path_cancel_enabled': bool(self.rx_path_cancel_enable.get()),
             'tx_path': tx_reference_path,
         }
