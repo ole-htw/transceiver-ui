@@ -2845,6 +2845,9 @@ class TransceiverUI(ctk.CTk):
         self._filtered_tx_file = None
         self._last_generated_tx_file: str | None = None
         self._active_tx_file: str | None = None
+        self._cached_tx_path: str | None = None
+        self._cached_tx_data = np.array([], dtype=np.complex64)
+        self._cached_tx_load_error_path: str | None = None
         self._tx_controller = None
         self._tx_output_capture: _FDCapture | None = None
         self._closing = False
@@ -4096,6 +4099,10 @@ class TransceiverUI(ctk.CTk):
             self.rx_path_cancel_check.configure(state="normal")
 
     def _reset_manual_xcorr_lags(self, reason: str | None = None) -> None:
+        if reason == "TX-Datei geändert":
+            self._cached_tx_path = None
+            self._cached_tx_data = np.array([], dtype=np.complex64)
+            self._cached_tx_load_error_path = None
         if self.manual_xcorr_lags.get("los") is None and self.manual_xcorr_lags.get(
             "echo"
         ) is None:
@@ -4390,10 +4397,27 @@ class TransceiverUI(ctk.CTk):
             return raw[:, 0] + 1j * raw[:, 1]
 
         tx_reference_path = _strip_zeros_tx_filename(self.tx_file.get())
-        try:
-            self.tx_data = _load_tx_samples(tx_reference_path)
-        except Exception:
-            self.tx_data = np.array([], dtype=np.complex64)
+        if tx_reference_path == self._cached_tx_path:
+            self.tx_data = self._cached_tx_data
+        else:
+            try:
+                tx_data = _load_tx_samples(tx_reference_path)
+            except Exception as exc:
+                self.tx_data = np.array([], dtype=np.complex64)
+                self._cached_tx_path = tx_reference_path
+                self._cached_tx_data = self.tx_data
+                if self._cached_tx_load_error_path != tx_reference_path:
+                    logging.warning(
+                        "TX-Referenzdatei konnte nicht geladen werden (%s): %s",
+                        tx_reference_path,
+                        exc,
+                    )
+                    self._cached_tx_load_error_path = tx_reference_path
+            else:
+                self.tx_data = tx_data
+                self._cached_tx_path = tx_reference_path
+                self._cached_tx_data = tx_data
+                self._cached_tx_load_error_path = None
         ref_data, ref_label = self._get_crosscorr_reference()
         if self.rx_magnitude_enable.get():
             data = np.abs(data)
