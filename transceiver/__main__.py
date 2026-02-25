@@ -37,7 +37,7 @@ from .helpers import rx_convert
 from .helpers.correlation_utils import (
     apply_manual_lags as _apply_manual_lags,
     autocorr_fft as _autocorr_fft,
-    find_local_maxima_around_peak as _find_local_maxima_around_peak,
+    classify_peak_group as _classify_peak_group,
     find_los_echo as _find_los_echo,
     filter_peak_indices_to_period_group as _filter_peak_indices_to_period_group,
     lag_overlap as _lag_overlap,
@@ -164,30 +164,12 @@ def _classify_visible_xcorr_peaks(
     min_rel_height: float = XCORR_EXTRA_PEAK_MIN_REL_HEIGHT,
 ) -> tuple[int | None, int | None, list[int]]:
     """Return (highest_idx, los_idx, echo_indices) from visible local maxima."""
-    mag = np.abs(cc)
-    if mag.size == 0:
-        return None, None, []
-
-    highest_idx = int(np.argmax(mag))
-    peak_indices = _find_local_maxima_around_peak(
+    highest_idx, los_idx, echo_indices, _group_indices = _classify_peak_group(
         cc,
-        center_idx=highest_idx,
         peaks_before=peaks_before,
         peaks_after=peaks_after,
         min_rel_height=min_rel_height,
     )
-    if not peak_indices:
-        peak_indices = [highest_idx]
-
-    # Stage 1: keep only peaks from the dominant group around the highest peak.
-    group_indices = sorted({int(idx) for idx in peak_indices})
-    if highest_idx not in group_indices:
-        group_indices.append(highest_idx)
-        group_indices.sort()
-
-    # Stage 2: classify based on lag-ordered group list.
-    los_idx = int(group_indices[0])
-    echo_indices = [int(idx) for idx in group_indices[1:]]
     return highest_idx, los_idx, echo_indices
 
 

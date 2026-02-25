@@ -6,6 +6,7 @@ import argparse
 import os # For basename in title
 import time # To measure correlation time
 from transceiver.helpers.plot_colors import PLOT_COLORS
+from transceiver.helpers.correlation_utils import find_los_echo
 
 def read_signal_file(filename):
     """Liest eine Binärdatei mit interleaved int16 Samples und gibt ein komplexes Signal zurück."""
@@ -33,21 +34,6 @@ def read_signal_file(filename):
     print(f"Datei {filename} eingelesen: {len(signal)} komplexe Samples.")
     return signal
 
-
-def find_los_echo(cc: np.ndarray) -> tuple[int | None, int | None]:
-    """Return indices of the LOS peak and the first echo."""
-    mag = np.abs(cc)
-    if mag.size == 0:
-        return None, None
-    los = int(np.argmax(mag))
-    echo = None
-    for i in range(los + 1, len(mag) - 1):
-        if mag[i] >= mag[i - 1] and mag[i] >= mag[i + 1]:
-            echo = int(i)
-            break
-    if echo is None and los + 1 < len(mag):
-        echo = int(np.argmax(mag[los + 1:]) + los + 1)
-    return los, echo
 
 def main():
     parser = argparse.ArgumentParser(
