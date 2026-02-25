@@ -1,10 +1,28 @@
 import numpy as np
+import pytest
 
 from transceiver.helpers.continuous_processing import (
-    _correlate_and_estimate_echo_aoa,
+    _correlate_and_estimate_echo_aoa as _correlate_cp,
     _xcorr_fft_two_channel_batched,
 )
 from transceiver.helpers.correlation_utils import xcorr_fft
+from transceiver.helpers.echo_aoa import (
+    _correlate_and_estimate_echo_aoa as _correlate_shared,
+)
+
+
+@pytest.mark.parametrize("correlate_impl", [_correlate_cp, _correlate_shared])
+def test_correlate_and_estimate_echo_aoa_validation_mode(correlate_impl):
+    rng = np.random.default_rng(7)
+    ch1 = rng.standard_normal(1024) + 1j * rng.standard_normal(1024)
+    ch2 = rng.standard_normal(1024) + 1j * rng.standard_normal(1024)
+    txr = rng.standard_normal(257) + 1j * rng.standard_normal(257)
+
+    out = correlate_impl(ch1, ch2, txr, validate=True)
+    cc1, cc2 = out["results"]
+
+    assert np.allclose(cc1, xcorr_fft(ch1, txr), rtol=1e-6, atol=1e-6)
+    assert np.allclose(cc2, xcorr_fft(ch2, txr), rtol=1e-6, atol=1e-6)
 
 
 def test_batched_xcorr_matches_single_channel_reference():
@@ -22,29 +40,17 @@ def test_batched_xcorr_matches_single_channel_reference():
     assert np.allclose(cc_batched[1], cc2_ref, rtol=1e-6, atol=1e-6)
 
 
-def test_correlate_and_estimate_echo_aoa_validation_mode():
-    rng = np.random.default_rng(7)
-    ch1 = rng.standard_normal(1024) + 1j * rng.standard_normal(1024)
-    ch2 = rng.standard_normal(1024) + 1j * rng.standard_normal(1024)
-    txr = rng.standard_normal(257) + 1j * rng.standard_normal(257)
-
-    out = _correlate_and_estimate_echo_aoa(ch1, ch2, txr, validate=True)
-    cc1, cc2 = out["results"]
-
-    assert np.allclose(cc1, xcorr_fft(ch1, txr), rtol=1e-6, atol=1e-6)
-    assert np.allclose(cc2, xcorr_fft(ch2, txr), rtol=1e-6, atol=1e-6)
-
-
-def test_correlate_and_estimate_echo_aoa_debug_arrays_optional():
+@pytest.mark.parametrize("correlate_impl", [_correlate_cp, _correlate_shared])
+def test_correlate_and_estimate_echo_aoa_debug_arrays_optional(correlate_impl):
     rng = np.random.default_rng(123)
     ch1 = rng.standard_normal(256) + 1j * rng.standard_normal(256)
     ch2 = rng.standard_normal(256) + 1j * rng.standard_normal(256)
     txr = rng.standard_normal(64) + 1j * rng.standard_normal(64)
 
-    out = _correlate_and_estimate_echo_aoa(ch1, ch2, txr)
+    out = correlate_impl(ch1, ch2, txr)
     assert set(out.keys()) == {"results"}
 
-    out_debug = _correlate_and_estimate_echo_aoa(
+    out_debug = correlate_impl(
         ch1,
         ch2,
         txr,

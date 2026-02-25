@@ -45,6 +45,7 @@ from .helpers.correlation_utils import (
 )
 from .helpers.path_cancellation import apply_path_cancellation
 from .helpers.continuous_processing import continuous_processing_worker
+from .helpers.echo_aoa import _find_peaks_simple
 from .helpers.number_parser import parse_number_expr
 from .helpers.plot_colors import PLOT_COLORS
 from .tx_controller import TxController
@@ -1650,59 +1651,6 @@ def _format_amp(val: float) -> str:
     if abs_v >= 1e-6:
         return f"{val:.6f}"
     return f"{val:.2e}"
-
-
-def _find_peaks_simple(
-    mag: np.ndarray,
-    rel_thresh: float = 0.2,
-    min_dist: int = 200,
-) -> list[int]:
-    """Find local maxima in *mag* with relative threshold and spacing."""
-    mag = np.asarray(mag)
-    if mag.size < 3:
-        return []
-
-    thr = float(rel_thresh) * float(np.max(mag))
-    inner = mag[1:-1]
-    candidate_mask = (
-        (inner >= mag[:-2])
-        & (inner >= mag[2:])
-        & (inner >= thr)
-    )
-    candidates = np.flatnonzero(candidate_mask) + 1
-    if candidates.size == 0:
-        return []
-
-    min_dist = int(min_dist)
-    if min_dist <= 1:
-        return candidates.tolist()
-
-    block_radius = min_dist - 1
-    max_picks = max(1, int(np.ceil(mag.size / float(min_dist))))
-    top_k = min(candidates.size, max(max_picks * 8, 64))
-
-    if top_k < candidates.size:
-        strong_sel = np.argpartition(mag[candidates], -top_k)[-top_k:]
-        strong_candidates = candidates[strong_sel]
-    else:
-        strong_candidates = candidates
-
-    strengths = mag[strong_candidates]
-    order = np.argsort(-strengths, kind="stable")
-    blocked = np.zeros(mag.size, dtype=bool)
-    picked: list[int] = []
-
-    for idx in strong_candidates[order]:
-        i = int(idx)
-        if blocked[i]:
-            continue
-        picked.append(i)
-        start = max(i - block_radius, 0)
-        end = min(i + block_radius + 1, mag.size)
-        blocked[start:end] = True
-
-    picked.sort()
-    return picked
 
 
 def _decimate_for_display(data: np.ndarray, max_points: int = 4096) -> np.ndarray:
