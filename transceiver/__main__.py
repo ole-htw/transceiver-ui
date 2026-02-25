@@ -3115,7 +3115,11 @@ class TransceiverUI(ctk.CTk):
         self._tx_running = False
         self._last_tx_end = 0.0
         self._filtered_tx_file = None
+        self._repeat_tx_file = None
+        self._zeros_tx_file = None
         self._last_generated_tx_file: str | None = None
+        self._tx_authoritative_file: str | None = None
+        self._restoring_state = False
         self._active_tx_file: str | None = None
         self._cached_tx_path: str | None = None
         self._cached_tx_data = np.array([], dtype=np.complex64)
@@ -4419,9 +4423,15 @@ class TransceiverUI(ctk.CTk):
 
     def _tx_transmit_file_for_start(self) -> str:
         """Return the newest generated TX file when starting a transmission."""
+        authoritative = (self._tx_authoritative_file or "").strip()
+        if authoritative:
+            return authoritative
         preferred = self._last_generated_tx_file
         if preferred:
             return preferred
+        current_entry = self.tx_file.get().strip()
+        if current_entry:
+            return current_entry
         return self._tx_transmit_file()
 
     def _on_repeat_toggle(self) -> None:
@@ -4437,6 +4447,8 @@ class TransceiverUI(ctk.CTk):
             self.repeat_entry.delete(0, tk.END)
             self.repeat_entry.insert(0, "0")
             self.repeat_entry.entry.configure(state="disabled")
+        if self._restoring_state:
+            return
         self.auto_update_tx_filename()
 
     def _on_zeros_toggle(self) -> None:
@@ -4449,7 +4461,56 @@ class TransceiverUI(ctk.CTk):
             if current:
                 self._zeros_last_value = current
             self.zeros_combo.configure(state="disabled")
+        if self._restoring_state:
+            return
         self.auto_update_tx_filename()
+
+    def _rebuild_tx_file_state(
+        self,
+        *,
+        preferred_tx_file: str | None = None,
+        update_last_generated: bool = False,
+        reset_manual_on_change: bool = True,
+    ) -> str:
+        """Recompute TX path state from current UI parameters and sync UI + internals."""
+        previous = self.tx_file.get().strip()
+        base_name = self.file_entry.get().strip() or _gen_tx_filename(self)
+        self.file_entry.delete(0, tk.END)
+        self.file_entry.insert(0, base_name)
+
+        path_base = base_name
+        if self._is_filter_active():
+            self._filtered_tx_file = _gen_filtered_tx_filename(base_name)
+            path_base = self._filtered_tx_file
+        else:
+            self._filtered_tx_file = None
+
+        if self._get_repeat_count() > 1:
+            self._repeat_tx_file = _gen_repeat_tx_filename(path_base)
+            path_base = self._repeat_tx_file
+        else:
+            self._repeat_tx_file = None
+
+        if self.zeros_enable.get():
+            self._zeros_tx_file = _gen_zeros_tx_filename(path_base)
+            effective_tx_file = self._zeros_tx_file
+        else:
+            self._zeros_tx_file = None
+            effective_tx_file = path_base
+
+        requested = (preferred_tx_file or "").strip()
+        authoritative_tx_file = requested or effective_tx_file
+        self._tx_authoritative_file = authoritative_tx_file
+        if update_last_generated:
+            self._last_generated_tx_file = authoritative_tx_file
+
+        self.tx_file.delete(0, tk.END)
+        self.tx_file.insert(0, authoritative_tx_file)
+
+        if reset_manual_on_change and previous != authoritative_tx_file:
+            self._reset_manual_xcorr_lags("TX-Datei geändert")
+
+        return authoritative_tx_file
 
     def _on_rx_magnitude_toggle(self) -> None:
         self._reset_manual_xcorr_lags("Betrag geändert")
@@ -4684,35 +4745,7 @@ class TransceiverUI(ctk.CTk):
 
     def auto_update_tx_filename(self) -> None:
         """Update TX filename entry based on current parameters."""
-        previous = self.tx_file.get()
-        name = _gen_tx_filename(self)
-        self.file_entry.delete(0, tk.END)
-        self.file_entry.insert(0, name)
-        self.tx_file.delete(0, tk.END)
-        if self._is_filter_active():
-            filtered_name = _gen_filtered_tx_filename(name)
-            self._filtered_tx_file = filtered_name
-            base_name = filtered_name
-        else:
-            self._filtered_tx_file = None
-            base_name = name
-        repeats = self._get_repeat_count()
-        if repeats > 1:
-            repeat_name = _gen_repeat_tx_filename(base_name)
-            self._repeat_tx_file = repeat_name
-            base_name = repeat_name
-        else:
-            self._repeat_tx_file = None
-        zeros_enabled = self.zeros_enable.get()
-        if zeros_enabled:
-            zeros_name = _gen_zeros_tx_filename(base_name)
-            self._zeros_tx_file = zeros_name
-            self.tx_file.insert(0, zeros_name)
-        else:
-            self._zeros_tx_file = None
-            self.tx_file.insert(0, base_name)
-        if previous != self.tx_file.get():
-            self._reset_manual_xcorr_lags("TX-Datei geändert")
+        self._rebuild_tx_file_state()
 
     def auto_update_rx_filename(self) -> None:
         """Update RX filename entry based on current parameters."""
@@ -6286,220 +6319,231 @@ class TransceiverUI(ctk.CTk):
         self.after(AUTOSAVE_INTERVAL * 1000, self._autosave_state)
 
     def _apply_params(self, params: dict) -> None:
-        self.wave_var.set(params.get("waveform", "sinus"))
-        self.update_waveform_fields()
-        self.fs_entry.delete(0, tk.END)
-        self.fs_entry.insert(0, params.get("fs", ""))
-        self.f_entry.delete(0, tk.END)
-        self.f_entry.insert(0, params.get("f", ""))
-        self.f1_entry.delete(0, tk.END)
-        self.f1_entry.insert(0, params.get("f1", ""))
-        self.q_entry.delete(0, tk.END)
-        self.q_entry.insert(0, params.get("q", ""))
-        self.samples_entry.delete(0, tk.END)
-        self.samples_entry.insert(0, params.get("samples", ""))
-        filter_bandwidth_value = params.get("filter_bandwidth_mhz")
-        if filter_bandwidth_value is None:
-            filter_bandwidth_hz = params.get("filter_bandwidth_hz")
-            if filter_bandwidth_hz is not None:
-                filter_bandwidth_value = str(
-                    _try_parse_number_expr(str(filter_bandwidth_hz), default=0.0) / 1e6
+        self._restoring_state = True
+        try:
+            self.wave_var.set(params.get("waveform", "sinus"))
+            self.update_waveform_fields()
+            self.fs_entry.delete(0, tk.END)
+            self.fs_entry.insert(0, params.get("fs", ""))
+            self.f_entry.delete(0, tk.END)
+            self.f_entry.insert(0, params.get("f", ""))
+            self.f1_entry.delete(0, tk.END)
+            self.f1_entry.insert(0, params.get("f1", ""))
+            self.q_entry.delete(0, tk.END)
+            self.q_entry.insert(0, params.get("q", ""))
+            self.samples_entry.delete(0, tk.END)
+            self.samples_entry.insert(0, params.get("samples", ""))
+            filter_bandwidth_value = params.get("filter_bandwidth_mhz")
+            if filter_bandwidth_value is None:
+                filter_bandwidth_hz = params.get("filter_bandwidth_hz")
+                if filter_bandwidth_hz is not None:
+                    filter_bandwidth_value = str(
+                        _try_parse_number_expr(str(filter_bandwidth_hz), default=0.0) / 1e6
+                    )
+            if filter_bandwidth_value is None:
+                filter_bandwidth_value = params.get("filter_bandwidth")
+            if filter_bandwidth_value is None and "rrc_oversampling" in params:
+                fs_for_filter = _try_parse_number_expr(
+                    str(params.get("fs", "")), default=0.0
                 )
-        if filter_bandwidth_value is None:
-            filter_bandwidth_value = params.get("filter_bandwidth")
-        if filter_bandwidth_value is None and "rrc_oversampling" in params:
-            fs_for_filter = _try_parse_number_expr(str(params.get("fs", "")), default=0.0)
-            oversampling = _try_parse_number_expr(
-                str(params.get("rrc_oversampling", "")),
-                default=0.0,
-            )
-            if fs_for_filter > 0 and oversampling > 0:
-                filter_bandwidth_value = str((fs_for_filter / oversampling) / 1e6)
-        if filter_bandwidth_value is None:
-            filter_bandwidth_value = "1"
-        self.filter_bandwidth_entry.delete(0, tk.END)
-        self.filter_bandwidth_entry.insert(0, str(filter_bandwidth_value))
-        self.repeat_entry.delete(0, tk.END)
-        repeats_value = params.get("repeats", "1")
-        self.repeat_entry.insert(0, repeats_value)
-        if str(repeats_value).strip() not in ("", "0"):
-            self._repeat_last_value = str(repeats_value)
-        repeat_enabled = params.get("repeats_enabled")
-        if repeat_enabled is None:
-            repeat_enabled = str(repeats_value).strip() != "0"
-        self.repeat_enable.set(bool(repeat_enabled))
-        self._on_repeat_toggle()
-        filter_enabled = params.get("filter_enabled")
-        if filter_enabled is None:
-            if "fdz_enabled" in params:
-                filter_enabled = params.get("fdz_enabled")
-            elif "rrc_enabled" in params:
-                filter_enabled = params.get("rrc_enabled")
-            else:
-                filter_enabled = True
-        self.fdz_enable.set(bool(filter_enabled))
+                oversampling = _try_parse_number_expr(
+                    str(params.get("rrc_oversampling", "")),
+                    default=0.0,
+                )
+                if fs_for_filter > 0 and oversampling > 0:
+                    filter_bandwidth_value = str((fs_for_filter / oversampling) / 1e6)
+            if filter_bandwidth_value is None:
+                filter_bandwidth_value = "1"
+            self.filter_bandwidth_entry.delete(0, tk.END)
+            self.filter_bandwidth_entry.insert(0, str(filter_bandwidth_value))
+            self.repeat_entry.delete(0, tk.END)
+            repeats_value = params.get("repeats", "1")
+            self.repeat_entry.insert(0, repeats_value)
+            if str(repeats_value).strip() not in ("", "0"):
+                self._repeat_last_value = str(repeats_value)
+            repeat_enabled = params.get("repeats_enabled")
+            if repeat_enabled is None:
+                repeat_enabled = str(repeats_value).strip() != "0"
+            self.repeat_enable.set(bool(repeat_enabled))
+            self._on_repeat_toggle()
+            filter_enabled = params.get("filter_enabled")
+            if filter_enabled is None:
+                if "fdz_enabled" in params:
+                    filter_enabled = params.get("fdz_enabled")
+                elif "rrc_enabled" in params:
+                    filter_enabled = params.get("rrc_enabled")
+                else:
+                    filter_enabled = True
+            self.fdz_enable.set(bool(filter_enabled))
 
-        filter_mode = params.get("filter_mode")
-        if filter_mode is None:
-            if "fdz_enabled" in params:
-                filter_mode = "frequency_domain_zeroing"
-            elif "rrc_enabled" in params:
-                filter_mode = "frequency_domain_zeroing"
-            else:
-                filter_mode = "frequency_domain_zeroing"
-        self.filter_mode_var.set(str(filter_mode))
+            filter_mode = params.get("filter_mode")
+            if filter_mode is None:
+                if "fdz_enabled" in params:
+                    filter_mode = "frequency_domain_zeroing"
+                elif "rrc_enabled" in params:
+                    filter_mode = "frequency_domain_zeroing"
+                else:
+                    filter_mode = "frequency_domain_zeroing"
+            self.filter_mode_var.set(str(filter_mode))
 
-        state = "normal" if self.fdz_enable.get() else "disabled"
-        self.filter_bandwidth_entry.entry.configure(state=state)
-        zeros_value = params.get("zeros", "same")
-        zeros_enabled = params.get("zeros_enabled")
-        if zeros_enabled is None:
-            zeros_enabled = str(zeros_value).strip() not in ("", "none")
-        if zeros_value not in self.zeros_values:
-            zeros_value = "same"
-        self.zeros_var.set(zeros_value)
-        if zeros_value:
-            self._zeros_last_value = zeros_value
-        self.zeros_enable.set(bool(zeros_enabled))
-        self._on_zeros_toggle()
-        self.amp_entry.delete(0, tk.END)
-        self.amp_entry.insert(0, params.get("amplitude", ""))
-        self.ofdm_nfft_entry.delete(0, tk.END)
-        self.ofdm_nfft_entry.insert(0, params.get("ofdm_nfft", "64"))
-        self.ofdm_cp_entry.delete(0, tk.END)
-        self.ofdm_cp_entry.insert(0, params.get("ofdm_cp", "16"))
-        self.ofdm_symbols_entry.delete(0, tk.END)
-        self.ofdm_symbols_entry.insert(0, params.get("ofdm_symbols", "2"))
-        self.ofdm_short_entry.delete(0, tk.END)
-        self.ofdm_short_entry.insert(0, params.get("ofdm_short_repeats", "10"))
-        self.file_entry.delete(0, tk.END)
-        self.file_entry.insert(0, params.get("file", ""))
-        self.tx_args.delete(0, tk.END)
-        self.tx_args.insert(0, params.get("tx_args", ""))
-        self.tx_rate.delete(0, tk.END)
-        self.tx_rate.insert(0, params.get("tx_rate", ""))
-        self.tx_freq.delete(0, tk.END)
-        self.tx_freq.insert(0, params.get("tx_freq", ""))
-        self.tx_gain.delete(0, tk.END)
-        self.tx_gain.insert(0, params.get("tx_gain", ""))
-        self.tx_file.delete(0, tk.END)
-        self.tx_file.insert(0, params.get("tx_file", ""))
-        self.rx_args.delete(0, tk.END)
-        self.rx_args.insert(0, params.get("rx_args", ""))
-        self.rx_rate.delete(0, tk.END)
-        self.rx_rate.insert(0, params.get("rx_rate", ""))
-        self.rx_freq.delete(0, tk.END)
-        self.rx_freq.insert(0, params.get("rx_freq", ""))
-        self.rx_dur.delete(0, tk.END)
-        self.rx_dur.insert(0, params.get("rx_dur", ""))
-        self.rx_gain.delete(0, tk.END)
-        self.rx_gain.insert(0, params.get("rx_gain", ""))
-        self.rx_magnitude_enable.set(params.get("rx_magnitude_enabled", False))
-        rx_xcorr_normalized_enabled = params.get("rx_xcorr_normalized_enabled")
-        if rx_xcorr_normalized_enabled is None:
-            rx_xcorr_normalized_enabled = params.get("xcorr_normalized_enabled", False)
-        self.rx_xcorr_normalized_enable.set(bool(rx_xcorr_normalized_enabled))
-        self.rx_path_cancel_enable.set(
-            params.get("rx_path_cancellation_enabled", False)
-        )
-        interpolation_enabled = params.get("rx_interpolation_enabled")
-        if interpolation_enabled is None:
-            interpolation_enabled = params.get("interpolation_enabled", False)
-        self.rx_interpolation_enable.set(bool(interpolation_enabled))
+            state = "normal" if self.fdz_enable.get() else "disabled"
+            self.filter_bandwidth_entry.entry.configure(state=state)
+            zeros_value = params.get("zeros", "same")
+            zeros_enabled = params.get("zeros_enabled")
+            if zeros_enabled is None:
+                zeros_enabled = str(zeros_value).strip() not in ("", "none")
+            if zeros_value not in self.zeros_values:
+                zeros_value = "same"
+            self.zeros_var.set(zeros_value)
+            if zeros_value:
+                self._zeros_last_value = zeros_value
+            self.zeros_enable.set(bool(zeros_enabled))
+            self._on_zeros_toggle()
+            self.amp_entry.delete(0, tk.END)
+            self.amp_entry.insert(0, params.get("amplitude", ""))
+            self.ofdm_nfft_entry.delete(0, tk.END)
+            self.ofdm_nfft_entry.insert(0, params.get("ofdm_nfft", "64"))
+            self.ofdm_cp_entry.delete(0, tk.END)
+            self.ofdm_cp_entry.insert(0, params.get("ofdm_cp", "16"))
+            self.ofdm_symbols_entry.delete(0, tk.END)
+            self.ofdm_symbols_entry.insert(0, params.get("ofdm_symbols", "2"))
+            self.ofdm_short_entry.delete(0, tk.END)
+            self.ofdm_short_entry.insert(0, params.get("ofdm_short_repeats", "10"))
+            self.file_entry.delete(0, tk.END)
+            self.file_entry.insert(0, params.get("file", ""))
+            self.tx_args.delete(0, tk.END)
+            self.tx_args.insert(0, params.get("tx_args", ""))
+            self.tx_rate.delete(0, tk.END)
+            self.tx_rate.insert(0, params.get("tx_rate", ""))
+            self.tx_freq.delete(0, tk.END)
+            self.tx_freq.insert(0, params.get("tx_freq", ""))
+            self.tx_gain.delete(0, tk.END)
+            self.tx_gain.insert(0, params.get("tx_gain", ""))
+            self.tx_file.delete(0, tk.END)
+            restored_tx_file = str(params.get("tx_file", "") or "")
+            self.tx_file.insert(0, restored_tx_file)
+            self._rebuild_tx_file_state(
+                preferred_tx_file=restored_tx_file,
+                reset_manual_on_change=False,
+            )
+            self.rx_args.delete(0, tk.END)
+            self.rx_args.insert(0, params.get("rx_args", ""))
+            self.rx_rate.delete(0, tk.END)
+            self.rx_rate.insert(0, params.get("rx_rate", ""))
+            self.rx_freq.delete(0, tk.END)
+            self.rx_freq.insert(0, params.get("rx_freq", ""))
+            self.rx_dur.delete(0, tk.END)
+            self.rx_dur.insert(0, params.get("rx_dur", ""))
+            self.rx_gain.delete(0, tk.END)
+            self.rx_gain.insert(0, params.get("rx_gain", ""))
+            self.rx_magnitude_enable.set(params.get("rx_magnitude_enabled", False))
+            rx_xcorr_normalized_enabled = params.get("rx_xcorr_normalized_enabled")
+            if rx_xcorr_normalized_enabled is None:
+                rx_xcorr_normalized_enabled = params.get("xcorr_normalized_enabled", False)
+            self.rx_xcorr_normalized_enable.set(bool(rx_xcorr_normalized_enabled))
+            self.rx_path_cancel_enable.set(
+                params.get("rx_path_cancellation_enabled", False)
+            )
+            interpolation_enabled = params.get("rx_interpolation_enabled")
+            if interpolation_enabled is None:
+                interpolation_enabled = params.get("interpolation_enabled", False)
+            self.rx_interpolation_enable.set(bool(interpolation_enabled))
 
-        interpolation_method = params.get("rx_interpolation_method")
-        if interpolation_method is None:
-            interpolation_method = params.get("interpolation_method", "interp1d")
-        interpolation_method = str(interpolation_method)
-        if interpolation_method == "scipy.signal.resample_poly":
-            interpolation_method = "resample_poly"
-        elif interpolation_method == "scipy.interpolate.interp1d":
-            interpolation_method = "interp1d"
-        if interpolation_method not in {"interp1d", "resample_poly"}:
-            interpolation_method = "interp1d"
-        self.rx_interpolation_method.set(interpolation_method)
-        self.rx_interpolation_method_display.set(
-            "scipy.signal.resample_poly"
-            if interpolation_method == "resample_poly"
-            else "scipy.interpolate.interp1d"
-        )
-        interpolation_factor = params.get("rx_interpolation_factor")
-        if interpolation_factor is None:
-            interpolation_factor = params.get("interpolation_factor", "2")
-        interpolation_factor = str(interpolation_factor).strip() or "2"
-        for widget in (
-            getattr(self, "rx_interpolation_factor_single", None),
-            getattr(self, "rx_interpolation_factor_cont", None),
-        ):
-            if widget is None:
-                continue
-            widget.delete(0, tk.END)
-            widget.insert(0, interpolation_factor)
-        self._sync_rx_interpolation_factor_entries("single")
-        if hasattr(self, "_cont_runtime_config"):
-            self._cont_runtime_config["interpolation_enabled"] = bool(
-                self.rx_interpolation_enable.get()
+            interpolation_method = params.get("rx_interpolation_method")
+            if interpolation_method is None:
+                interpolation_method = params.get("interpolation_method", "interp1d")
+            interpolation_method = str(interpolation_method)
+            if interpolation_method == "scipy.signal.resample_poly":
+                interpolation_method = "resample_poly"
+            elif interpolation_method == "scipy.interpolate.interp1d":
+                interpolation_method = "interp1d"
+            if interpolation_method not in {"interp1d", "resample_poly"}:
+                interpolation_method = "interp1d"
+            self.rx_interpolation_method.set(interpolation_method)
+            self.rx_interpolation_method_display.set(
+                "scipy.signal.resample_poly"
+                if interpolation_method == "resample_poly"
+                else "scipy.interpolate.interp1d"
             )
-            self._cont_runtime_config["interpolation_method"] = (
-                self.rx_interpolation_method.get()
+            interpolation_factor = params.get("rx_interpolation_factor")
+            if interpolation_factor is None:
+                interpolation_factor = params.get("interpolation_factor", "2")
+            interpolation_factor = str(interpolation_factor).strip() or "2"
+            for widget in (
+                getattr(self, "rx_interpolation_factor_single", None),
+                getattr(self, "rx_interpolation_factor_cont", None),
+            ):
+                if widget is None:
+                    continue
+                widget.delete(0, tk.END)
+                widget.insert(0, interpolation_factor)
+            self._sync_rx_interpolation_factor_entries("single")
+            if hasattr(self, "_cont_runtime_config"):
+                self._cont_runtime_config["interpolation_enabled"] = bool(
+                    self.rx_interpolation_enable.get()
+                )
+                self._cont_runtime_config["interpolation_method"] = (
+                    self.rx_interpolation_method.get()
+                )
+                self._cont_runtime_config["interpolation_factor"] = (
+                    self._rx_interpolation_factor_text()
+                )
+            self._sync_rx_interpolation_controls_only()
+            self._update_path_cancellation_status()
+            self.rx_channel_2.set(params.get("rx_channel_2", False))
+            self.rx_channel_view.set(params.get("rx_channel_view", "Kanal 1"))
+            self.rx_file.delete(0, tk.END)
+            self.rx_file.insert(0, params.get("rx_file", ""))
+            self.rx_cont_rate.delete(0, tk.END)
+            self.rx_cont_rate.insert(0, params.get("rx_cont_rate", "200e6"))
+            self.rx_cont_freq.delete(0, tk.END)
+            self.rx_cont_freq.insert(0, params.get("rx_cont_freq", "5.18e9"))
+            self.rx_cont_ring_seconds.delete(0, tk.END)
+            self.rx_cont_ring_seconds.insert(0, params.get("rx_cont_ring_seconds", "4.0"))
+            self.rx_cont_gain.delete(0, tk.END)
+            self.rx_cont_gain.insert(0, params.get("rx_cont_gain", "80"))
+            self.rx_cont_restart_margin.delete(0, tk.END)
+            self.rx_cont_restart_margin.insert(
+                0, params.get("rx_cont_restart_margin", "1.5")
             )
-            self._cont_runtime_config["interpolation_factor"] = (
-                self._rx_interpolation_factor_text()
+            self.rx_cont_args.delete(0, tk.END)
+            self.rx_cont_args.insert(
+                0,
+                params.get(
+                    "rx_cont_args", "addr=192.168.20.2,clock_source=external"
+                ),
             )
-        self._sync_rx_interpolation_controls_only()
-        self._update_path_cancellation_status()
-        self.rx_channel_2.set(params.get("rx_channel_2", False))
-        self.rx_channel_view.set(params.get("rx_channel_view", "Kanal 1"))
-        self.rx_file.delete(0, tk.END)
-        self.rx_file.insert(0, params.get("rx_file", ""))
-        self.rx_cont_rate.delete(0, tk.END)
-        self.rx_cont_rate.insert(0, params.get("rx_cont_rate", "200e6"))
-        self.rx_cont_freq.delete(0, tk.END)
-        self.rx_cont_freq.insert(0, params.get("rx_cont_freq", "5.18e9"))
-        self.rx_cont_ring_seconds.delete(0, tk.END)
-        self.rx_cont_ring_seconds.insert(0, params.get("rx_cont_ring_seconds", "4.0"))
-        self.rx_cont_gain.delete(0, tk.END)
-        self.rx_cont_gain.insert(0, params.get("rx_cont_gain", "80"))
-        self.rx_cont_restart_margin.delete(0, tk.END)
-        self.rx_cont_restart_margin.insert(
-            0, params.get("rx_cont_restart_margin", "1.5")
-        )
-        self.rx_cont_args.delete(0, tk.END)
-        self.rx_cont_args.insert(
-            0,
-            params.get(
-                "rx_cont_args", "addr=192.168.20.2,clock_source=external"
-            ),
-        )
-        self.rx_cont_snippet_seconds.delete(0, tk.END)
-        self.rx_cont_snippet_seconds.insert(
-            0, params.get("rx_cont_snippet_seconds", "0.05")
-        )
-        self.rx_cont_snippet_interval.delete(0, tk.END)
-        self.rx_cont_snippet_interval.insert(
-            0, params.get("rx_cont_snippet_interval", "1.0")
-        )
-        self.rx_cont_output_prefix.delete(0, tk.END)
-        self.rx_cont_output_prefix.insert(
-            0, params.get("rx_cont_output_prefix", "signals/rx/snippet")
-        )
-        self.rx_view.set(params.get("rx_view", "Signal"))
-        rx_active_tab = params.get("rx_active_tab", "Single")
-        if hasattr(self, "rx_tabs"):
-            try:
-                self.rx_tabs.set(rx_active_tab)
-            except Exception:
-                self.rx_tabs.set("Single")
-        self.rx_ant_spacing.delete(0, tk.END)
-        self.rx_ant_spacing.insert(0, params.get("rx_ant_spacing", "0.03"))
-        self.rx_wavelength.delete(0, tk.END)
-        self.rx_wavelength.insert(0, params.get("rx_wavelength", "3e8/5.18e9"))
-        self.trim_var.set(params.get("trim", False))
-        self.trim_start.set(params.get("trim_start", 0.0))
-        self.trim_end.set(params.get("trim_end", 100.0))
-        self.update_trim()
-        self.sync_var.set(params.get("sync_rates", True))
-        self.toggle_rate_sync(self.sync_var.get())
+            self.rx_cont_snippet_seconds.delete(0, tk.END)
+            self.rx_cont_snippet_seconds.insert(
+                0, params.get("rx_cont_snippet_seconds", "0.05")
+            )
+            self.rx_cont_snippet_interval.delete(0, tk.END)
+            self.rx_cont_snippet_interval.insert(
+                0, params.get("rx_cont_snippet_interval", "1.0")
+            )
+            self.rx_cont_output_prefix.delete(0, tk.END)
+            self.rx_cont_output_prefix.insert(
+                0, params.get("rx_cont_output_prefix", "signals/rx/snippet")
+            )
+            self.rx_view.set(params.get("rx_view", "Signal"))
+            rx_active_tab = params.get("rx_active_tab", "Single")
+            if hasattr(self, "rx_tabs"):
+                try:
+                    self.rx_tabs.set(rx_active_tab)
+                except Exception:
+                    self.rx_tabs.set("Single")
+            self.rx_ant_spacing.delete(0, tk.END)
+            self.rx_ant_spacing.insert(0, params.get("rx_ant_spacing", "0.03"))
+            self.rx_wavelength.delete(0, tk.END)
+            self.rx_wavelength.insert(0, params.get("rx_wavelength", "3e8/5.18e9"))
+            self.trim_var.set(params.get("trim", False))
+            self.trim_start.set(params.get("trim_start", 0.0))
+            self.trim_end.set(params.get("trim_end", 100.0))
+            self.update_trim()
+            self.sync_var.set(params.get("sync_rates", True))
+            self.toggle_rate_sync(self.sync_var.get())
+        finally:
+            self._restoring_state = False
 
     def open_load_preset_window(self) -> None:
         win = ctk.CTkToplevel(self)
@@ -6723,6 +6767,9 @@ class TransceiverUI(ctk.CTk):
                     self.tx_file.insert(0, self._tx_transmit_file())
 
             self._last_generated_tx_file = self._tx_transmit_file()
+            self._tx_authoritative_file = self._last_generated_tx_file
+            self.tx_file.delete(0, tk.END)
+            self.tx_file.insert(0, self._tx_authoritative_file or "")
 
             def _scale_for_display(signal: np.ndarray) -> np.ndarray:
                 max_abs = np.max(np.abs(signal)) if np.any(signal) else 1.0
