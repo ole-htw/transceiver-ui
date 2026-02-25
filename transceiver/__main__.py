@@ -1809,6 +1809,11 @@ def _parse_number_expr_or_error(
     return parse_number_expr(text)
 
 
+def _parse_filter_bandwidth_mhz_or_error(text: str) -> float:
+    """Parse filter bandwidth entered in MHz and return Hz."""
+    return _parse_number_expr_or_error(text, allow_empty=False) * 1e6
+
+
 def _gen_tx_filename(app) -> str:
     """Generate TX filename based on current UI settings."""
     w = app.wave_var.get().lower()
@@ -1826,7 +1831,9 @@ def _gen_tx_filename(app) -> str:
     filter_active = filter_enabled and w == "zadoffchu" and filter_mode == "frequency_domain_zeroing"
     filter_bandwidth = 0.0
     if hasattr(app, "filter_bandwidth_entry"):
-        filter_bandwidth = _try_parse_number_expr(app.filter_bandwidth_entry.get(), default=0.0)
+        filter_bandwidth = (
+            _try_parse_number_expr(app.filter_bandwidth_entry.get(), default=0.0) * 1e6
+        )
 
     if w == "sinus":
         f = _try_parse_number_expr(app.f_entry.get(), default=0.0)
@@ -3357,12 +3364,12 @@ class TransceiverUI(ctk.CTk):
 
         self.filter_bandwidth_label = ctk.CTkLabel(
             filter_right,
-            text="Bandwidth [Hz]",
+            text="Bandwidth [MHz]",
             anchor="e",
         )
         self.filter_bandwidth_label.grid(row=0, column=0, sticky="e", padx=label_padx)
         self.filter_bandwidth_entry = SuggestEntry(filter_right, "filter_bandwidth_entry")
-        self.filter_bandwidth_entry.insert(0, "1e6")
+        self.filter_bandwidth_entry.insert(0, "1")
         self.filter_bandwidth_entry.grid(row=0, column=1, sticky="ew")
         self.filter_bandwidth_entry.entry.bind(
             "<FocusOut>",
@@ -5634,7 +5641,7 @@ class TransceiverUI(ctk.CTk):
             "samples": self.samples_entry.get(),
             "filter_enabled": self.fdz_enable.get(),
             "filter_mode": (self.filter_mode_var.get() or "frequency_domain_zeroing"),
-            "filter_bandwidth_hz": self.filter_bandwidth_entry.get(),
+            "filter_bandwidth_mhz": self.filter_bandwidth_entry.get(),
             "repeats": self.repeat_entry.get(),
             "repeats_enabled": self.repeat_enable.get(),
             "zeros": self.zeros_var.get(),
@@ -5702,7 +5709,13 @@ class TransceiverUI(ctk.CTk):
         self.q_entry.insert(0, params.get("q", ""))
         self.samples_entry.delete(0, tk.END)
         self.samples_entry.insert(0, params.get("samples", ""))
-        filter_bandwidth_value = params.get("filter_bandwidth_hz")
+        filter_bandwidth_value = params.get("filter_bandwidth_mhz")
+        if filter_bandwidth_value is None:
+            filter_bandwidth_hz = params.get("filter_bandwidth_hz")
+            if filter_bandwidth_hz is not None:
+                filter_bandwidth_value = str(
+                    _try_parse_number_expr(str(filter_bandwidth_hz), default=0.0) / 1e6
+                )
         if filter_bandwidth_value is None:
             filter_bandwidth_value = params.get("filter_bandwidth")
         if filter_bandwidth_value is None and "rrc_oversampling" in params:
@@ -5712,9 +5725,9 @@ class TransceiverUI(ctk.CTk):
                 default=0.0,
             )
             if fs_for_filter > 0 and oversampling > 0:
-                filter_bandwidth_value = str(fs_for_filter / oversampling)
+                filter_bandwidth_value = str((fs_for_filter / oversampling) / 1e6)
         if filter_bandwidth_value is None:
-            filter_bandwidth_value = "1e6"
+            filter_bandwidth_value = "1"
         self.filter_bandwidth_entry.delete(0, tk.END)
         self.filter_bandwidth_entry.insert(0, str(filter_bandwidth_value))
         self.repeat_entry.delete(0, tk.END)
@@ -6004,12 +6017,11 @@ class TransceiverUI(ctk.CTk):
 
             filter_data = None
             if self._is_filter_active():
-                bandwidth_hz = _parse_number_expr_or_error(
-                    self.filter_bandwidth_entry.get(),
-                    allow_empty=False,
+                bandwidth_hz = _parse_filter_bandwidth_mhz_or_error(
+                    self.filter_bandwidth_entry.get()
                 )
                 if bandwidth_hz <= 0:
-                    raise ValueError("Bandwidth muss > 0 Hz sein.")
+                    raise ValueError("Bandwidth muss > 0 MHz sein.")
                 filter_data = apply_frequency_domain_zeroing(data, fs, bandwidth_hz)
                 data = filter_data
 
