@@ -3538,13 +3538,17 @@ class TransceiverUI(ctk.CTk):
         self.zeros_combo.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=6)
         self.zeros_combo.configure(state="disabled")
 
+        upsampling_row = ctk.CTkFrame(gen_body, fg_color="transparent")
+        upsampling_row.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        upsampling_row.columnconfigure(0, weight=1)
+
         upsampling_frame, upsampling_body, _ = _make_side_bordered_group(
-            repeat_zero_row,
+            upsampling_row,
             "Upsampling",
             toggle_var=self.upsampling_enable,
             toggle_command=self._on_upsampling_toggle,
         )
-        upsampling_frame.grid(row=0, column=2, sticky="ew", padx=(6, 0))
+        upsampling_frame.grid(row=0, column=0, sticky="ew")
         ctk.CTkLabel(upsampling_body, text="Target fs [Hz]", anchor="e").grid(
             row=0,
             column=0,
@@ -3582,13 +3586,13 @@ class TransceiverUI(ctk.CTk):
         self._on_upsampling_toggle()
 
         file_frame, file_body, _ = _make_side_bordered_group(gen_body, "File")
-        file_frame.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        file_frame.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(6, 0))
         self.file_entry = SuggestEntry(file_body, "file_entry")
         self.file_entry.insert(0, "tx_signal.bin")
         self.file_entry.grid(row=0, column=1, columnspan=2, sticky="ew", padx=(0, 10))
 
         gen_buttons = ctk.CTkFrame(gen_body, fg_color="transparent")
-        gen_buttons.grid(row=4, column=0, columnspan=3, sticky="ew", pady=5)
+        gen_buttons.grid(row=5, column=0, columnspan=3, sticky="ew", pady=5)
         gen_buttons.columnconfigure((0, 1, 2, 3), weight=1)
         ctk.CTkButton(gen_buttons, text="Generate", command=self.generate).grid(
             row=0, column=0, padx=3, sticky="ew"
@@ -3607,7 +3611,7 @@ class TransceiverUI(ctk.CTk):
         ).grid(row=0, column=3, padx=3, sticky="ew")
 
         scroll_container = ctk.CTkFrame(gen_body)
-        scroll_container.grid(row=5, column=0, columnspan=3, sticky="nsew")
+        scroll_container.grid(row=6, column=0, columnspan=3, sticky="nsew")
         scroll_container.columnconfigure(0, weight=1)
         scroll_container.rowconfigure(0, weight=1)
 
@@ -3652,7 +3656,7 @@ class TransceiverUI(ctk.CTk):
                 self._update_gen_scrollbar(),
             ),
         )
-        gen_body.rowconfigure(5, weight=1)
+        gen_body.rowconfigure(6, weight=1)
         self.gen_canvases = []
         self.latest_data = None
         self.latest_fs = 0.0
