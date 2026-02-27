@@ -1802,6 +1802,23 @@ def _try_parse_number_expr(text: str, default: float = 0.0) -> float:
         return default
 
 
+def _coerce_bool(value: object, default: bool = False) -> bool:
+    """Best-effort conversion for persisted boolean-like values."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "disabled", ""}:
+            return False
+    return bool(value)
+
+
 def _parse_number_expr_or_error(
     text: str,
     *,
@@ -1874,6 +1891,21 @@ def _gen_tx_filename(app) -> str:
     if filter_active and filter_bandwidth > 0:
         parts.append(_format_bandwidth_token(filter_bandwidth))
 
+    if getattr(app, "upsampling_enable", None) is not None and app.upsampling_enable.get():
+        fs_target = _try_parse_number_expr(app.upsampling_target_rate_entry.get(), default=0.0)
+        if fs > 0 and fs_target > fs:
+            factor = fs_target / fs
+            if math.isfinite(factor) and factor > 0:
+                rounded_factor = round(factor)
+                if abs(factor - rounded_factor) < 1e-9:
+                    parts.append(f"upx{int(rounded_factor)}")
+                else:
+                    parts.append(f"upsFs{_pretty(fs_target)}")
+            else:
+                parts.append(f"upsFs{_pretty(fs_target)}")
+        elif fs_target > 0:
+            parts.append(f"upsFs{_pretty(fs_target)}")
+
     parts.append(f"fs{_pretty(fs)}")
     if w == "zadoffchu":
         parts.append(f"Nsym{samples}")
@@ -1905,6 +1937,13 @@ def _gen_zeros_tx_filename(filename: str) -> str:
     path = Path(filename)
     stem = path.stem if path.suffix else path.name
     return str(path.with_name(f"{stem}_zeros{path.suffix}"))
+
+
+def _gen_upsampled_tx_filename(filename: str) -> str:
+    """Return an upsampled filename derived from *filename*."""
+    path = Path(filename)
+    stem = path.stem if path.suffix else path.name
+    return str(path.with_name(f"{stem}_upsampled{path.suffix}"))
 
 
 def _strip_repeat_tx_filename(filename: str) -> str:
@@ -3120,6 +3159,7 @@ class TransceiverUI(ctk.CTk):
         self._tx_running = False
         self._last_tx_end = 0.0
         self._filtered_tx_file = None
+        self._upsampled_tx_file = None
         self._repeat_tx_file = None
         self._zeros_tx_file = None
         self._last_generated_tx_file: str | None = None
@@ -3528,6 +3568,10 @@ class TransceiverUI(ctk.CTk):
         self.upsampling_target_rate_entry.entry.bind(
             "<FocusOut>",
             lambda _e: self._on_upsampling_target_rate_focus_out(),
+        )
+        self.upsampling_target_rate_entry.entry.bind(
+            "<KeyRelease>",
+            lambda _e: self.auto_update_tx_filename(),
         )
         ctk.CTkLabel(
             upsampling_body,
@@ -4461,8 +4505,10 @@ class TransceiverUI(ctk.CTk):
             return self._zeros_tx_file
         if getattr(self, "_repeat_tx_file", None):
             return self._repeat_tx_file
-        if self._is_filter_active():
-            return self._filtered_tx_file or self.tx_file.get()
+        if getattr(self, "_filtered_tx_file", None):
+            return self._filtered_tx_file
+        if getattr(self, "_upsampled_tx_file", None):
+            return self._upsampled_tx_file
         return self.tx_file.get()
 
     def _tx_transmit_file_for_start(self) -> str:
@@ -4533,8 +4579,14 @@ class TransceiverUI(ctk.CTk):
         self.file_entry.insert(0, base_name)
 
         path_base = base_name
+        if self.upsampling_enable.get():
+            self._upsampled_tx_file = _gen_upsampled_tx_filename(base_name)
+            path_base = self._upsampled_tx_file
+        else:
+            self._upsampled_tx_file = None
+
         if self._is_filter_active():
-            self._filtered_tx_file = _gen_filtered_tx_filename(base_name)
+            self._filtered_tx_file = _gen_filtered_tx_filename(path_base)
             path_base = self._filtered_tx_file
         else:
             self._filtered_tx_file = None
@@ -6319,8 +6371,9 @@ class TransceiverUI(ctk.CTk):
             "repeats_enabled": self.repeat_enable.get(),
             "zeros": self.zeros_var.get(),
             "zeros_enabled": self.zeros_enable.get(),
-            "upsampling_enabled": self.upsampling_enable.get(),
-            "upsampling_target_rate": self.upsampling_target_rate_entry.get(),
+            "upsampling_enabled": bool(self.upsampling_enable.get()),
+            "upsampling_target_rate": self.upsampling_target_rate_entry.get()
+            or self.upsampling_target_rate_var.get(),
             "amplitude": self.amp_entry.get(),
             "ofdm_nfft": self.ofdm_nfft_entry.get(),
             "ofdm_cp": self.ofdm_cp_entry.get(),
@@ -6455,11 +6508,21 @@ class TransceiverUI(ctk.CTk):
                 self._zeros_last_value = zeros_value
             self.zeros_enable.set(bool(zeros_enabled))
             self._on_zeros_toggle()
-            upsampling_target_rate = str(params.get("upsampling_target_rate", "") or "")
+            upsampling_target_rate_value = params.get("upsampling_target_rate")
+            if upsampling_target_rate_value is None:
+                upsampling_target_rate_value = params.get("upsampling_target_fs")
+            if upsampling_target_rate_value is None:
+                upsampling_target_rate_value = params.get("upsampling_rate")
+            upsampling_target_rate = str(upsampling_target_rate_value or "")
             self.upsampling_target_rate_var.set(upsampling_target_rate)
             self.upsampling_target_rate_entry.delete(0, tk.END)
             self.upsampling_target_rate_entry.insert(0, upsampling_target_rate)
-            self.upsampling_enable.set(bool(params.get("upsampling_enabled", False)))
+            upsampling_enabled = params.get("upsampling_enabled")
+            if upsampling_enabled is None:
+                upsampling_enabled = params.get("upsample_enabled")
+            if upsampling_enabled is None:
+                upsampling_enabled = bool(upsampling_target_rate.strip())
+            self.upsampling_enable.set(_coerce_bool(upsampling_enabled, default=False))
             self._on_upsampling_toggle()
             self.amp_entry.delete(0, tk.END)
             self.amp_entry.insert(0, params.get("amplitude", ""))
@@ -6806,16 +6869,25 @@ class TransceiverUI(ctk.CTk):
             final_data = repeated_data if repeated_data is not None else data
             zeros_data = _append_zeros(final_data) if self.zeros_enable.get() and zeros > 0 else None
 
-            save_interleaved(self.file_entry.get(), data, amplitude=amp)
+            base_tx_filename = (
+                self._upsampled_tx_file
+                if self.upsampling_enable.get()
+                else self.file_entry.get()
+            )
+            if self.upsampling_enable.get():
+                self._upsampled_tx_file = base_tx_filename
+            else:
+                self._upsampled_tx_file = None
+            save_interleaved(base_tx_filename, data, amplitude=amp)
             if filter_data is not None:
-                filtered_filename = self._filtered_tx_file or _gen_filtered_tx_filename(self.file_entry.get())
+                filtered_filename = self._filtered_tx_file or _gen_filtered_tx_filename(base_tx_filename)
                 self._filtered_tx_file = filtered_filename
                 save_interleaved(filtered_filename, filter_data, amplitude=amp)
             else:
                 self._filtered_tx_file = None
 
             if repeats > 1 and repeated_data is not None:
-                repeat_base = self._filtered_tx_file if filter_data is not None else self.file_entry.get()
+                repeat_base = self._filtered_tx_file if filter_data is not None else base_tx_filename
                 repeat_filename = _gen_repeat_tx_filename(repeat_base)
                 self._repeat_tx_file = repeat_filename
                 self.tx_file.delete(0, tk.END)
@@ -6824,14 +6896,14 @@ class TransceiverUI(ctk.CTk):
                 self._reset_manual_xcorr_lags("TX-Datei geändert")
             else:
                 self._repeat_tx_file = None
-                target_file = self._filtered_tx_file if filter_data is not None else self.file_entry.get()
+                target_file = self._filtered_tx_file if filter_data is not None else base_tx_filename
                 self.tx_file.delete(0, tk.END)
                 self.tx_file.insert(0, target_file)
                 if filter_data is not None:
                     self._reset_manual_xcorr_lags("TX-Datei geändert")
 
             if zeros_data is not None:
-                zeros_base = self._repeat_tx_file if self._repeat_tx_file is not None else (self._filtered_tx_file if filter_data is not None else self.file_entry.get())
+                zeros_base = self._repeat_tx_file if self._repeat_tx_file is not None else (self._filtered_tx_file if filter_data is not None else base_tx_filename)
                 zeros_filename = _gen_zeros_tx_filename(zeros_base)
                 self._zeros_tx_file = zeros_filename
                 self.tx_file.delete(0, tk.END)
