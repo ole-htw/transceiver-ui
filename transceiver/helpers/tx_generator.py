@@ -185,6 +185,33 @@ def apply_post_filter(
     raise ValueError(f"Unbekannter Filtermodus: {filter_mode}")
 
 
+def apply_tx_upsampling(
+    signal: np.ndarray,
+    fs: float,
+    target_fs: float,
+    method: str = "linear",
+) -> tuple[np.ndarray, float]:
+    """Upsample TX samples auf ``target_fs`` und liefere (signal, effektive_fs)."""
+    if signal.size == 0:
+        return signal.astype(np.complex64), float(target_fs)
+
+    mode = str(method).strip().lower()
+    if mode != "linear":
+        raise ValueError(f"Unbekannte Upsampling-Methode: {method}")
+
+    factor = float(target_fs) / float(fs)
+    if factor <= 1.0:
+        raise ValueError("target_fs muss größer als fs sein.")
+
+    input_idx = np.arange(signal.size, dtype=np.float64)
+    out_len = max(1, int(round(signal.size * factor)))
+    output_idx = np.linspace(0.0, signal.size - 1, out_len, dtype=np.float64)
+    up_i = np.interp(output_idx, input_idx, signal.real)
+    up_q = np.interp(output_idx, input_idx, signal.imag)
+    upsampled = (up_i + 1j * up_q).astype(np.complex64, copy=False)
+    return upsampled, float(target_fs)
+
+
 def _trim_to_length(x: np.ndarray, length: int) -> np.ndarray:
     """Trimmt oder paddet (mit Nullen) auf genau 'length' Samples."""
     if length <= 0:
