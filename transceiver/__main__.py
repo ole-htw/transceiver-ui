@@ -4573,11 +4573,15 @@ class TransceiverUI(ctk.CTk):
         reset_manual_on_change: bool = True,
     ) -> str:
         """Recompute TX path state from current UI parameters and sync UI + internals."""
+        file_entry_widget_ready = hasattr(self, "file_entry")
         tx_file_widget_ready = hasattr(self, "tx_file")
         previous = self.tx_file.get().strip() if tx_file_widget_ready else ""
-        base_name = self.file_entry.get().strip() or _gen_tx_filename(self)
-        self.file_entry.delete(0, tk.END)
-        self.file_entry.insert(0, base_name)
+        if file_entry_widget_ready:
+            base_name = self.file_entry.get().strip() or _gen_tx_filename(self)
+            self.file_entry.delete(0, tk.END)
+            self.file_entry.insert(0, base_name)
+        else:
+            base_name = "tx_signal.bin"
 
         path_base = base_name
         if self.upsampling_enable.get():
