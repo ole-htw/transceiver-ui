@@ -3095,6 +3095,8 @@ class TransceiverUI(ctk.CTk):
         self.rx_interpolation_method_display = tk.StringVar(
             value="scipy.interpolate.interp1d"
         )
+        self.upsampling_enable = tk.BooleanVar(value=False)
+        self.upsampling_target_rate_var = tk.StringVar(value="")
         # individual variables used when rate sync is disabled
         self.fs_var = self.rate_var
         self.tx_rate_var = self.rate_var
@@ -3151,6 +3153,10 @@ class TransceiverUI(ctk.CTk):
         self._cont_input_slots: list[shared_memory.SharedMemory] = []
         self._cont_input_slot_size = 0
         self._cont_input_free_slots: deque[int] = deque()
+        self.repeat_enable = tk.BooleanVar(value=True)
+        self.zeros_enable = tk.BooleanVar(value=False)
+        self._repeat_last_value = "1"
+        self._zeros_last_value = "same"
         self._build_tx_indicator_assets()
         self.create_widgets()
         try:
@@ -3450,10 +3456,8 @@ class TransceiverUI(ctk.CTk):
             self.filter_bandwidth_entry.entry.configure(state="disabled")
         repeat_zero_row = ctk.CTkFrame(gen_body, fg_color="transparent")
         repeat_zero_row.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(6, 0))
-        repeat_zero_row.columnconfigure((0, 1), weight=1, uniform="repeat-zeros")
+        repeat_zero_row.columnconfigure((0, 1, 2), weight=1, uniform="repeat-zeros")
 
-        self.repeat_enable = tk.BooleanVar(value=True)
-        self._repeat_last_value = "1"
         repeat_frame, repeat_body, _ = _make_side_bordered_group(
             repeat_zero_row,
             "Repeats",
@@ -3467,8 +3471,6 @@ class TransceiverUI(ctk.CTk):
         self.repeat_entry.sugg_frame.grid_remove()
         self.repeat_entry.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=6)
 
-        self.zeros_enable = tk.BooleanVar(value=False)
-        self._zeros_last_value = "same"
         zeros_frame, zeros_body, _ = _make_side_bordered_group(
             repeat_zero_row,
             "Zeros",
@@ -3492,6 +3494,45 @@ class TransceiverUI(ctk.CTk):
         )
         self.zeros_combo.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=6)
         self.zeros_combo.configure(state="disabled")
+
+        upsampling_frame, upsampling_body, _ = _make_side_bordered_group(
+            repeat_zero_row,
+            "Upsampling",
+            toggle_var=self.upsampling_enable,
+            toggle_command=self._on_upsampling_toggle,
+        )
+        upsampling_frame.grid(row=0, column=2, sticky="ew", padx=(6, 0))
+        ctk.CTkLabel(upsampling_body, text="Target fs [Hz]", anchor="e").grid(
+            row=0,
+            column=0,
+            sticky="e",
+            padx=label_padx,
+            pady=(6, 2),
+        )
+        self.upsampling_target_rate_entry = SuggestEntry(
+            upsampling_body,
+            "upsampling_target_rate_entry",
+        )
+        self.upsampling_target_rate_entry.grid(
+            row=0,
+            column=1,
+            sticky="ew",
+            padx=(0, 10),
+            pady=(6, 2),
+        )
+        self.upsampling_target_rate_entry.delete(0, tk.END)
+        self.upsampling_target_rate_entry.insert(0, self.upsampling_target_rate_var.get())
+        self.upsampling_target_rate_entry.entry.bind(
+            "<FocusOut>",
+            lambda _e: self._on_upsampling_target_rate_focus_out(),
+        )
+        ctk.CTkLabel(
+            upsampling_body,
+            text="Zielrate muss > Basis-fs sein",
+            anchor="w",
+            text_color="gray60",
+        ).grid(row=1, column=1, sticky="w", padx=(0, 10), pady=(0, 6))
+        self._on_upsampling_toggle()
 
         file_frame, file_body, _ = _make_side_bordered_group(gen_body, "File")
         file_frame.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(6, 0))
@@ -4464,6 +4505,16 @@ class TransceiverUI(ctk.CTk):
         if self._restoring_state:
             return
         self.auto_update_tx_filename()
+
+    def _on_upsampling_target_rate_focus_out(self) -> None:
+        self.upsampling_target_rate_var.set(self.upsampling_target_rate_entry.get())
+        self.auto_update_tx_filename()
+
+    def _on_upsampling_toggle(self) -> None:
+        state = "normal" if self.upsampling_enable.get() else "disabled"
+        self.upsampling_target_rate_entry.entry.configure(state=state)
+        if not self._restoring_state:
+            self.auto_update_tx_filename()
 
     def _rebuild_tx_file_state(
         self,
@@ -6265,6 +6316,8 @@ class TransceiverUI(ctk.CTk):
             "repeats_enabled": self.repeat_enable.get(),
             "zeros": self.zeros_var.get(),
             "zeros_enabled": self.zeros_enable.get(),
+            "upsampling_enabled": self.upsampling_enable.get(),
+            "upsampling_target_rate": self.upsampling_target_rate_entry.get(),
             "amplitude": self.amp_entry.get(),
             "ofdm_nfft": self.ofdm_nfft_entry.get(),
             "ofdm_cp": self.ofdm_cp_entry.get(),
@@ -6399,6 +6452,12 @@ class TransceiverUI(ctk.CTk):
                 self._zeros_last_value = zeros_value
             self.zeros_enable.set(bool(zeros_enabled))
             self._on_zeros_toggle()
+            upsampling_target_rate = str(params.get("upsampling_target_rate", "") or "")
+            self.upsampling_target_rate_var.set(upsampling_target_rate)
+            self.upsampling_target_rate_entry.delete(0, tk.END)
+            self.upsampling_target_rate_entry.insert(0, upsampling_target_rate)
+            self.upsampling_enable.set(bool(params.get("upsampling_enabled", False)))
+            self._on_upsampling_toggle()
             self.amp_entry.delete(0, tk.END)
             self.amp_entry.insert(0, params.get("amplitude", ""))
             self.ofdm_nfft_entry.delete(0, tk.END)
