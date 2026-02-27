@@ -30,7 +30,11 @@ import pyqtgraph as pg
 from pyqtgraph import exporters as pg_exporters
 
 import sys
-from .helpers.tx_generator import apply_frequency_domain_zeroing, generate_waveform
+from .helpers.tx_generator import (
+    apply_frequency_domain_zeroing,
+    apply_tx_upsampling,
+    generate_waveform,
+)
 from .helpers.iq_utils import save_interleaved
 from .helpers import rx_convert
 from .helpers.correlation_utils import (
@@ -6752,6 +6756,22 @@ class TransceiverUI(ctk.CTk):
                 f1 = _parse_number_expr_or_error(f1_text) if f1_text else None
                 data = generate_waveform(waveform, fs, f0, samples, f0=f0, f1=f1)
 
+            fs_effective = fs
+            if self.upsampling_enable.get():
+                target_fs = _parse_number_expr_or_error(self.upsampling_target_rate_entry.get())
+                if fs <= 0:
+                    raise ValueError("Basis-Abtastrate muss > 0 sein.")
+                if not math.isfinite(target_fs):
+                    raise ValueError("Ziel-Abtastrate muss endlich sein.")
+                if target_fs <= fs:
+                    raise ValueError("Ziel-Abtastrate muss strikt größer als Basis-Abtastrate sein.")
+                data, fs_effective = apply_tx_upsampling(
+                    data,
+                    fs,
+                    target_fs,
+                    method="linear",
+                )
+
             filter_data = None
             if self._is_filter_active():
                 bandwidth_hz = _parse_filter_bandwidth_mhz_or_error(
@@ -6759,7 +6779,7 @@ class TransceiverUI(ctk.CTk):
                 )
                 if bandwidth_hz <= 0:
                     raise ValueError("Bandwidth muss > 0 MHz sein.")
-                filter_data = apply_frequency_domain_zeroing(data, fs, bandwidth_hz)
+                filter_data = apply_frequency_domain_zeroing(data, fs_effective, bandwidth_hz)
                 data = filter_data
 
             zeros = 0
@@ -6838,18 +6858,18 @@ class TransceiverUI(ctk.CTk):
             scaled_data = _scale_for_display(data)
             scaled_repeated = _scale_for_display(repeated_data) if repeated_data is not None else None
             scaled_zeros = _scale_for_display(zeros_data) if zeros_data is not None else None
-            symbol_rate = fs if waveform == "zadoffchu" else None
+            symbol_rate = fs_effective if waveform == "zadoffchu" else None
             repeated_symbol_rate = symbol_rate
             zeros_symbol_rate = symbol_rate if zeros_data is not None else None
 
             if scaled_repeated is not None or scaled_zeros is not None:
                 self._display_gen_plots(
                     scaled_data,
-                    fs,
+                    fs_effective,
                     repeated_data=scaled_repeated,
-                    repeated_fs=fs,
+                    repeated_fs=fs_effective,
                     zeros_data=scaled_zeros,
-                    zeros_fs=fs,
+                    zeros_fs=fs_effective,
                     symbol_rate=symbol_rate,
                     repeated_symbol_rate=repeated_symbol_rate,
                     zeros_symbol_rate=zeros_symbol_rate,
@@ -6857,9 +6877,9 @@ class TransceiverUI(ctk.CTk):
             else:
                 self._display_gen_plots(
                     scaled_data,
-                    fs,
+                    fs_effective,
                     zeros_data=scaled_zeros,
-                    zeros_fs=fs,
+                    zeros_fs=fs_effective,
                     symbol_rate=symbol_rate,
                     zeros_symbol_rate=zeros_symbol_rate,
                 )
