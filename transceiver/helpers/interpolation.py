@@ -115,3 +115,69 @@ def apply_rx_interpolation(
     )
     scale = int(round(fs_new))
     return interpolated, max(1, scale)
+
+
+def apply_tx_upsampling(
+    signal: np.ndarray,
+    fs_in: float,
+    fs_target: float,
+    method: str = "resample_poly",
+) -> tuple[np.ndarray, float]:
+    """Upsample TX-Samples auf ``fs_target`` und liefere ``(signal, fs_out)``.
+
+    Standardmäßig wird ``scipy.signal.resample_poly`` mit einem robusten
+    rationalen Verhältnis genutzt. Alternativ kann ``method='linear'`` für
+    lineare Interpolation (Fallback) gewählt werden.
+    """
+    arr = np.asarray(signal)
+    fs_in = float(fs_in)
+    fs_target = float(fs_target)
+
+    if fs_in <= 0.0:
+        raise ValueError("fs_in muss > 0 sein")
+    if fs_target <= fs_in:
+        raise ValueError("fs_target muss strikt größer als fs_in sein")
+    if arr.size == 0:
+        return arr, fs_target
+
+    normalized = _normalize_method(method)
+    if importlib.util.find_spec("scipy") is None:
+        raise RuntimeError(
+            "Upsampling benötigt SciPy, ist aber in dieser Umgebung nicht verfügbar"
+        )
+
+    try:
+        if normalized == "resample_poly":
+            signal_mod = importlib.import_module("scipy.signal")
+            ratio = Fraction(fs_target / fs_in).limit_denominator(4096)
+            if ratio.numerator <= 0 or ratio.denominator <= 0:
+                raise ValueError("Ungültiges Upsampling-Verhältnis")
+            result = signal_mod.resample_poly(
+                arr,
+                up=ratio.numerator,
+                down=ratio.denominator,
+            )
+            fs_out = fs_in * ratio.numerator / ratio.denominator
+            return np.asarray(result), float(fs_out)
+
+        interpolate = importlib.import_module("scipy.interpolate")
+        x = np.arange(arr.size, dtype=np.float64)
+        factor = fs_target / fs_in
+        output_len = max(1, int(round(arr.size * factor)))
+        x_new = np.linspace(0.0, float(arr.size - 1), output_len)
+        if np.iscomplexobj(arr):
+            real_fn = interpolate.interp1d(x, arr.real, kind="linear")
+            imag_fn = interpolate.interp1d(x, arr.imag, kind="linear")
+            result = real_fn(x_new) + 1j * imag_fn(x_new)
+        else:
+            fn = interpolate.interp1d(x, arr, kind="linear")
+            result = fn(x_new)
+        return np.asarray(result), fs_target
+    except ValueError:
+        raise
+    except Exception as exc:
+        logging.warning(
+            "TX-Upsampling fehlgeschlagen, verwende Originalsignal als Fallback: %s",
+            exc,
+        )
+        return arr, fs_in
