@@ -4573,7 +4573,8 @@ class TransceiverUI(ctk.CTk):
         reset_manual_on_change: bool = True,
     ) -> str:
         """Recompute TX path state from current UI parameters and sync UI + internals."""
-        previous = self.tx_file.get().strip()
+        tx_file_widget_ready = hasattr(self, "tx_file")
+        previous = self.tx_file.get().strip() if tx_file_widget_ready else ""
         base_name = self.file_entry.get().strip() or _gen_tx_filename(self)
         self.file_entry.delete(0, tk.END)
         self.file_entry.insert(0, base_name)
@@ -4610,8 +4611,9 @@ class TransceiverUI(ctk.CTk):
         if update_last_generated:
             self._last_generated_tx_file = authoritative_tx_file
 
-        self.tx_file.delete(0, tk.END)
-        self.tx_file.insert(0, authoritative_tx_file)
+        if tx_file_widget_ready:
+            self.tx_file.delete(0, tk.END)
+            self.tx_file.insert(0, authoritative_tx_file)
 
         if reset_manual_on_change and previous != authoritative_tx_file:
             self._reset_manual_xcorr_lags("TX-Datei geändert")
