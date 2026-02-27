@@ -3883,9 +3883,12 @@ class TransceiverUI(ctk.CTk):
         self.rx_interpolation_frame.grid(
             row=6, column=0, columnspan=2, sticky="ew", pady=(0, 6)
         )
-        self.rx_interpolation_body.columnconfigure(0, weight=1)
-        self.rx_interpolation_body.columnconfigure(2, weight=1)
+        self.rx_interpolation_body.columnconfigure(1, weight=1)
+        self.rx_interpolation_body.columnconfigure(3, weight=1)
 
+        ctk.CTkLabel(self.rx_interpolation_body, text="Methode", anchor="e").grid(
+            row=0, column=0, sticky="e", padx=label_padx
+        )
         self.rx_interpolation_method_box = ctk.CTkComboBox(
             self.rx_interpolation_body,
             values=[
@@ -3897,16 +3900,18 @@ class TransceiverUI(ctk.CTk):
             state="readonly",
             width=200,
         )
-        self.rx_interpolation_method_box.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self.rx_interpolation_method_box.grid(
+            row=0, column=1, sticky="ew", padx=(0, 8)
+        )
 
         ctk.CTkLabel(self.rx_interpolation_body, text="Faktor", anchor="e").grid(
-            row=0, column=1, sticky="e", padx=label_padx
+            row=0, column=2, sticky="e", padx=label_padx
         )
         self.rx_interpolation_factor_single = SuggestEntry(
             self.rx_interpolation_body, "rx_interpolation_factor"
         )
         self.rx_interpolation_factor_single.insert(0, "2")
-        self.rx_interpolation_factor_single.grid(row=0, column=2, sticky="ew")
+        self.rx_interpolation_factor_single.grid(row=0, column=3, sticky="ew")
         self.rx_interpolation_factor_single.entry.bind(
             "<KeyRelease>",
             lambda _e: self._on_rx_interpolation_factor_changed("single"),
@@ -4142,8 +4147,11 @@ class TransceiverUI(ctk.CTk):
         self.rx_cont_interpolation_frame.grid(
             row=4, column=0, columnspan=2, sticky="ew", pady=(0, 6)
         )
-        self.rx_cont_interpolation_body.columnconfigure(0, weight=1)
-        self.rx_cont_interpolation_body.columnconfigure(2, weight=1)
+        self.rx_cont_interpolation_body.columnconfigure(1, weight=1)
+        self.rx_cont_interpolation_body.columnconfigure(3, weight=1)
+        ctk.CTkLabel(
+            self.rx_cont_interpolation_body, text="Methode", anchor="e"
+        ).grid(row=0, column=0, sticky="e", padx=label_padx)
         self.rx_cont_interpolation_method_box = ctk.CTkComboBox(
             self.rx_cont_interpolation_body,
             values=[
@@ -4156,16 +4164,16 @@ class TransceiverUI(ctk.CTk):
             width=200,
         )
         self.rx_cont_interpolation_method_box.grid(
-            row=0, column=0, sticky="ew", padx=(0, 8)
+            row=0, column=1, sticky="ew", padx=(0, 8)
         )
         ctk.CTkLabel(
             self.rx_cont_interpolation_body, text="Faktor", anchor="e"
-        ).grid(row=0, column=1, sticky="e", padx=label_padx)
+        ).grid(row=0, column=2, sticky="e", padx=label_padx)
         self.rx_interpolation_factor_cont = SuggestEntry(
             self.rx_cont_interpolation_body, "rx_interpolation_factor"
         )
         self.rx_interpolation_factor_cont.insert(0, "2")
-        self.rx_interpolation_factor_cont.grid(row=0, column=2, sticky="ew")
+        self.rx_interpolation_factor_cont.grid(row=0, column=3, sticky="ew")
         self.rx_interpolation_factor_cont.entry.bind(
             "<KeyRelease>",
             lambda _e: self._on_rx_interpolation_factor_changed("continuous"),
