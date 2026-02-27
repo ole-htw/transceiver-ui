@@ -32,7 +32,6 @@ from pyqtgraph import exporters as pg_exporters
 import sys
 from .helpers.tx_generator import (
     apply_frequency_domain_zeroing,
-    apply_tx_upsampling,
     generate_waveform,
 )
 from .helpers.iq_utils import save_interleaved
@@ -50,7 +49,7 @@ from .helpers.correlation_utils import (
 from .helpers.path_cancellation import apply_path_cancellation
 from .helpers.continuous_processing import continuous_processing_worker
 from .helpers.echo_aoa import _find_peaks_simple
-from .helpers.interpolation import _apply_rx_interpolation
+from .helpers.interpolation import _apply_rx_interpolation, apply_tx_upsampling
 from .helpers.number_parser import parse_number_expr
 from .helpers.plot_colors import PLOT_COLORS
 from .tx_controller import TxController
@@ -6767,9 +6766,8 @@ class TransceiverUI(ctk.CTk):
                     raise ValueError("Ziel-Abtastrate muss strikt größer als Basis-Abtastrate sein.")
                 data, fs_effective = apply_tx_upsampling(
                     data,
-                    fs,
-                    target_fs,
-                    method="linear",
+                    fs_in=fs,
+                    fs_target=target_fs,
                 )
 
             filter_data = None
