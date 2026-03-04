@@ -4713,12 +4713,27 @@ class TransceiverUI(ctk.CTk):
         self.update_trim()
 
     def _rx_interpolation_factor_text(self) -> str:
-        for widget in (
+        widgets = (
             getattr(self, "rx_interpolation_factor_single", None),
             getattr(self, "rx_interpolation_factor_cont", None),
-        ):
-            if widget is not None:
-                return widget.get().strip()
+        )
+
+        focused = self.focus_get()
+        for widget in widgets:
+            if widget is None:
+                continue
+            entry_widget = getattr(widget, "entry", None)
+            if focused is widget or (entry_widget is not None and focused is entry_widget):
+                text = widget.get().strip()
+                if text:
+                    return text
+
+        for widget in widgets:
+            if widget is None:
+                continue
+            text = widget.get().strip()
+            if text:
+                return text
         return "2"
 
     def _rx_effective_interpolation_factor(self) -> float:
