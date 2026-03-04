@@ -117,7 +117,13 @@ def continuous_processing_worker(
             path_cancel_enabled = bool(task.get("path_cancel_enabled", False))
             interpolation_enabled = bool(task.get("interpolation_enabled", False))
             interpolation_method = str(task.get("interpolation_method", "interp1d"))
-            interpolation_factor = str(task.get("interpolation_factor", "2"))
+            interpolation_factor_raw = task.get("interpolation_factor")
+            interpolation_factor = (
+                str(interpolation_factor_raw)
+                if interpolation_factor_raw is not None
+                else None
+            )
+            interpolation_factor_expr = interpolation_factor or "2"
             active_plot_tab = _normalize_active_tab(str(task.get("active_plot_tab", "Signal")))
             normalize_enabled = bool(
                 task.get(
@@ -219,7 +225,7 @@ def continuous_processing_worker(
                                 fs=fs,
                                 enabled=True,
                                 method=interpolation_method,
-                                factor_expr=interpolation_factor,
+                                factor_expr=interpolation_factor_expr,
                             )
                             if ref_data.size:
                                 ref_data, _ = _apply_rx_interpolation(
@@ -227,7 +233,7 @@ def continuous_processing_worker(
                                     fs=fs,
                                     enabled=True,
                                     method=interpolation_method,
-                                    factor_expr=interpolation_factor,
+                                    factor_expr=interpolation_factor_expr,
                                 )
                             if crosscorr_compare is not None and crosscorr_compare.size:
                                 crosscorr_compare, _ = _apply_rx_interpolation(
@@ -235,7 +241,7 @@ def continuous_processing_worker(
                                     fs=fs,
                                     enabled=True,
                                     method=interpolation_method,
-                                    factor_expr=interpolation_factor,
+                                    factor_expr=interpolation_factor_expr,
                                 )
                         except Exception:
                             plot_data = orig_plot_data
