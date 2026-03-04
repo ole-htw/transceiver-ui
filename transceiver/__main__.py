@@ -6422,6 +6422,10 @@ class TransceiverUI(ctk.CTk):
             "rx_interpolation_enabled": self.rx_interpolation_enable.get(),
             "rx_interpolation_method": self.rx_interpolation_method.get(),
             "rx_interpolation_factor": self._rx_interpolation_factor_text(),
+            # Legacy aliases kept for compatibility with older state/preset readers.
+            "interpolation_enabled": self.rx_interpolation_enable.get(),
+            "interpolation_method": self.rx_interpolation_method.get(),
+            "interpolation_factor": self._rx_interpolation_factor_text(),
             "rx_channel_2": self.rx_channel_2.get(),
             "rx_channel_view": self.rx_channel_view.get(),
             "rx_file": self.rx_file.get(),
