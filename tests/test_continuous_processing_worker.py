@@ -131,3 +131,31 @@ def test_continuous_worker_keeps_latest_active_tab_for_follow_up_tasks(monkeypat
 
     assert spectrum_result["active_plot_tab"] == "Spectrum"
     assert spectrum_result["plot_data"].size == 128
+
+
+def test_continuous_worker_does_not_inject_default_interpolation_factor_when_missing():
+    tasks: mp.Queue = mp.Queue()
+    results: mp.Queue = mp.Queue()
+
+    worker = threading.Thread(
+        target=continuous_processing_worker,
+        args=(tasks, results),
+        daemon=True,
+    )
+    worker.start()
+
+    frame = np.ones((2, 128), dtype=np.complex64)
+    tasks.put(
+        {
+            "data": frame,
+            "fs": 1.0,
+            "rx_channel_view": "Kanal 1",
+            "active_plot_tab": "Signal",
+        }
+    )
+
+    result = results.get(timeout=5)
+    tasks.put(None)
+    worker.join(timeout=5)
+
+    assert result["interpolation_factor"] is None
