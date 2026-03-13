@@ -34,8 +34,13 @@ class _UiNavigator:
 
         def _on_event(event: NavigationEvent) -> None:
             if event.type in {"connection_error", "aborted", "timeout"}:
+                detail = event.message or 'ohne Details'
+                if event.type == "connection_error":
+                    detail = (
+                        f"{detail} | ROS-Umgebung prüfen (TRANSCEIVER_REMOTE_ROS_ENV_CMD / TRANSCEIVER_REMOTE_ROS_SETUP)"
+                    )
                 self._on_operator_message(
-                    f"Navigation {event.type} (Versuch {event.attempt}): {event.message or 'ohne Details'}"
+                    f"Navigation {event.type} (Versuch {event.attempt}): {detail}"
                 )
             if event.type == "succeeded":
                 self._on_status("navigation", "succeeded")
