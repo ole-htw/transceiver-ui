@@ -275,6 +275,35 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 ),
             )
 
+    @staticmethod
+    def _serialize_point(point: MeasurementPoint) -> dict[str, Any]:
+        point_payload: dict[str, Any] = {
+            "id": point.id,
+            "name": point.name,
+            "x": point.x,
+            "y": point.y,
+            "z": point.z,
+        }
+
+        if point.notes is not None:
+            point_payload["notes"] = point.notes
+        if point.measurement_profile is not None:
+            point_payload["measurement_profile"] = point.measurement_profile
+
+        if point.yaw is not None:
+            point_payload["yaw"] = point.yaw
+            return point_payload
+
+        quaternion_values = {
+            "qx": point.qx,
+            "qy": point.qy,
+            "qz": point.qz,
+            "qw": point.qw,
+        }
+        if all(value is not None for value in quaternion_values.values()):
+            point_payload.update(quaternion_values)
+        return point_payload
+
     def _validate_selected(self) -> None:
         if not self._mission_points:
             self._set_validation_text("Bitte zuerst mindestens einen Messpunkt anlegen.")
@@ -288,12 +317,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 repeat=repeat,
                 wait_after_arrival_s=0.0,
             )
+            serialized_points = [self._serialize_point(point) for point in mission.points]
             measurement_mission_from_dict(
                 {
                     "name": mission.name,
                     "repeat": mission.repeat,
                     "wait_after_arrival_s": mission.wait_after_arrival_s,
-                    "points": [point.__dict__ for point in mission.points],
+                    "points": serialized_points,
                 }
             )
         except Exception as exc:
