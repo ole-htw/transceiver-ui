@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import threading
 import time
 import zipfile
@@ -13,7 +12,7 @@ from typing import Any
 import customtkinter as ctk
 
 from .app_config import MissionRuntimeConfig
-from .measurement_mission import MeasurementMission, load_measurement_mission
+from .measurement_mission import MeasurementMission, MeasurementPoint, measurement_mission_from_dict
 from .measurement_run_executor import (
     JsonRunLogStore,
     MeasurementRunExecutor,
@@ -72,7 +71,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.geometry("1100x700")
         self.minsize(980, 640)
 
-        self._mission_file: Path | None = None
         self._mission: MeasurementMission | None = None
         self._executor: MeasurementRunExecutor | None = None
         self._run_thread: threading.Thread | None = None
@@ -85,30 +83,76 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(3, weight=1)
+        self.rowconfigure(4, weight=1)
 
         workflow = ctk.CTkFrame(self)
         workflow.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
-        workflow.columnconfigure(1, weight=1)
+        for col in range(6):
+            workflow.columnconfigure(col, weight=0)
+        workflow.columnconfigure(5, weight=1)
 
-        ctk.CTkLabel(workflow, text="1) Missionsdatei").grid(row=0, column=0, padx=8, pady=8)
-        self.file_var = tk.StringVar(value="Keine Datei geladen")
-        ctk.CTkLabel(workflow, textvariable=self.file_var, anchor="w").grid(row=0, column=1, sticky="ew", padx=8)
-        ctk.CTkButton(workflow, text="Laden/Auswählen", command=self._choose_mission_file).grid(row=0, column=2, padx=8)
-        ctk.CTkButton(workflow, text="Validieren", command=self._validate_selected).grid(row=0, column=3, padx=(0, 8))
+        ctk.CTkLabel(workflow, text="1) Missionsparameter").grid(row=0, column=0, padx=8, pady=8)
+        ctk.CTkLabel(workflow, text="Name").grid(row=0, column=1, padx=(8, 2))
+        self.mission_name_var = tk.StringVar(value="mission-ui")
+        ctk.CTkEntry(workflow, textvariable=self.mission_name_var, width=190).grid(row=0, column=2, padx=(0, 8))
+        ctk.CTkLabel(workflow, text="Wiederholungen").grid(row=0, column=3, padx=(8, 2))
+        self.repeat_var = tk.StringVar(value="1")
+        ctk.CTkEntry(workflow, textvariable=self.repeat_var, width=70).grid(row=0, column=4, padx=(0, 8))
+        ctk.CTkButton(workflow, text="Mission validieren", command=self._validate_selected).grid(row=0, column=5, padx=(0, 8), sticky="w")
+
+        points_editor = ctk.CTkFrame(self)
+        points_editor.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
+        for col in range(9):
+            points_editor.columnconfigure(col, weight=0)
+        points_editor.columnconfigure(8, weight=1)
+
+        ctk.CTkLabel(points_editor, text="2) Messpunkt anlegen").grid(row=0, column=0, padx=8, pady=8)
+        self.point_id_var = tk.StringVar(value="")
+        self.point_name_var = tk.StringVar(value="")
+        self.point_x_var = tk.StringVar(value="0.0")
+        self.point_y_var = tk.StringVar(value="0.0")
+        self.point_z_var = tk.StringVar(value="0.0")
+        self.point_yaw_var = tk.StringVar(value="0.0")
+
+        self._labeled_entry(points_editor, row=0, column=1, label="ID", variable=self.point_id_var, width=80)
+        self._labeled_entry(points_editor, row=0, column=2, label="Name", variable=self.point_name_var, width=120)
+        self._labeled_entry(points_editor, row=0, column=3, label="X", variable=self.point_x_var, width=90)
+        self._labeled_entry(points_editor, row=0, column=4, label="Y", variable=self.point_y_var, width=90)
+        self._labeled_entry(points_editor, row=0, column=5, label="Z", variable=self.point_z_var, width=90)
+        self._labeled_entry(points_editor, row=0, column=6, label="Yaw", variable=self.point_yaw_var, width=90)
+        ctk.CTkButton(points_editor, text="Punkt hinzufügen", command=self._add_point).grid(row=0, column=7, padx=(8, 3))
+        ctk.CTkButton(points_editor, text="Auswahl entfernen", command=self._remove_selected_point).grid(row=0, column=8, padx=(3, 8), sticky="w")
+
+        points_table_frame = ctk.CTkFrame(self)
+        points_table_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 6))
+        points_table_frame.columnconfigure(0, weight=1)
+        point_columns = ("idx", "id", "name", "x", "y", "z", "yaw")
+        self.points_table = ttk.Treeview(points_table_frame, columns=point_columns, show="headings", height=5)
+        self.points_table.grid(row=0, column=0, sticky="ew")
+        for key, title in {
+            "idx": "#",
+            "id": "ID",
+            "name": "Name",
+            "x": "X",
+            "y": "Y",
+            "z": "Z",
+            "yaw": "Yaw",
+        }.items():
+            self.points_table.heading(key, text=title)
+            self.points_table.column(key, stretch=True, width=95)
 
         self.validation_box = ctk.CTkTextbox(self, height=110)
-        self.validation_box.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
-        self.validation_box.insert("1.0", "2) Validierungsergebnis erscheint hier.\n")
+        self.validation_box.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 6))
+        self.validation_box.insert("1.0", "3) Validierungsergebnis erscheint hier.\n")
         self.validation_box.configure(state="disabled")
 
         controls = ctk.CTkFrame(self)
-        controls.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 6))
+        controls.grid(row=4, column=0, sticky="ew", padx=10, pady=(0, 6))
         for col in range(8):
             controls.columnconfigure(col, weight=0)
         controls.columnconfigure(7, weight=1)
 
-        ctk.CTkLabel(controls, text="3) Laufsteuerung").grid(row=0, column=0, padx=8, pady=8)
+        ctk.CTkLabel(controls, text="4) Laufsteuerung").grid(row=0, column=0, padx=8, pady=8)
         self.start_btn = ctk.CTkButton(controls, text="Start", command=self._start_run)
         self.start_btn.grid(row=0, column=1, padx=3)
         self.pause_btn = ctk.CTkButton(controls, text="Pause", command=self._pause_run, state="disabled")
@@ -123,7 +167,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         ctk.CTkLabel(controls, textvariable=self.live_var, anchor="w").grid(row=0, column=7, sticky="ew", padx=8)
 
         table_frame = ctk.CTkFrame(self)
-        table_frame.grid(row=3, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        table_frame.grid(row=5, column=0, sticky="nsew", padx=10, pady=(0, 10))
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
@@ -147,6 +191,23 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         scroll.grid(row=0, column=1, sticky="ns")
         self.results_table.configure(yscrollcommand=scroll.set)
 
+        self._mission_points: list[MeasurementPoint] = []
+
+    @staticmethod
+    def _labeled_entry(
+        parent: ctk.CTkFrame,
+        *,
+        row: int,
+        column: int,
+        label: str,
+        variable: tk.StringVar,
+        width: int,
+    ) -> None:
+        wrap = ctk.CTkFrame(parent, fg_color="transparent")
+        wrap.grid(row=row, column=column, padx=3, pady=3)
+        ctk.CTkLabel(wrap, text=label).pack(side="top", anchor="w")
+        ctk.CTkEntry(wrap, textvariable=variable, width=width).pack(side="top")
+
     def _append_validation(self, text: str) -> None:
         self.validation_box.configure(state="normal")
         self.validation_box.insert("end", text + "\n")
@@ -159,27 +220,85 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.validation_box.insert("1.0", text)
         self.validation_box.configure(state="disabled")
 
-    def _choose_mission_file(self) -> None:
-        filename = filedialog.askopenfilename(
-            title="Missionsdatei auswählen",
-            filetypes=[("Mission", "*.json *.yaml *.yml"), ("All files", "*.*")],
-        )
-        if not filename:
-            return
-        self._mission_file = Path(filename)
-        self.file_var.set(str(self._mission_file))
-        self._validate_selected()
-
-    def _validate_selected(self) -> None:
-        if self._mission_file is None:
-            self._set_validation_text("Bitte zuerst eine Missionsdatei laden.")
+    def _add_point(self) -> None:
+        point_payload = {
+            "id": self.point_id_var.get().strip() or None,
+            "name": self.point_name_var.get().strip() or None,
+            "x": self.point_x_var.get().strip(),
+            "y": self.point_y_var.get().strip(),
+            "z": self.point_z_var.get().strip() or 0.0,
+            "yaw": self.point_yaw_var.get().strip(),
+        }
+        if point_payload["id"] is None and point_payload["name"] is None:
+            messagebox.showwarning("Messpunkt", "Bitte mindestens ID oder Name setzen.")
             return
         try:
-            mission = load_measurement_mission(self._mission_file)
+            mission = measurement_mission_from_dict(
+                {"name": "point-check", "points": [point_payload], "repeat": 1}
+            )
         except Exception as exc:
-            details = self._build_validation_error_details(self._mission_file, exc)
+            messagebox.showwarning("Messpunkt ungültig", str(exc))
+            return
+
+        point = mission.points[0]
+        self._mission_points.append(point)
+        self._refresh_points_table()
+        self._append_validation(
+            f"✅ Punkt hinzugefügt: {point.id or point.name} (x={point.x:.2f}, y={point.y:.2f}, z={point.z:.2f}, yaw={point.yaw})"
+        )
+
+    def _remove_selected_point(self) -> None:
+        selected = self.points_table.selection()
+        if not selected:
+            return
+        index = self.points_table.index(selected[0])
+        if index < 0 or index >= len(self._mission_points):
+            return
+        removed = self._mission_points.pop(index)
+        self._refresh_points_table()
+        self._append_validation(f"ℹ️ Punkt entfernt: {removed.id or removed.name}")
+
+    def _refresh_points_table(self) -> None:
+        self.points_table.delete(*self.points_table.get_children())
+        for idx, point in enumerate(self._mission_points):
+            self.points_table.insert(
+                "",
+                "end",
+                values=(
+                    idx,
+                    point.id or "-",
+                    point.name or "-",
+                    f"{point.x:.3f}",
+                    f"{point.y:.3f}",
+                    f"{point.z:.3f}",
+                    "-" if point.yaw is None else f"{point.yaw:.3f}",
+                ),
+            )
+
+    def _validate_selected(self) -> None:
+        if not self._mission_points:
+            self._set_validation_text("Bitte zuerst mindestens einen Messpunkt anlegen.")
+            return
+        try:
+            repeat_raw = self.repeat_var.get().strip()
+            repeat = int(repeat_raw)
+            mission = MeasurementMission(
+                name=self.mission_name_var.get().strip(),
+                points=list(self._mission_points),
+                repeat=repeat,
+                wait_after_arrival_s=0.0,
+            )
+            measurement_mission_from_dict(
+                {
+                    "name": mission.name,
+                    "repeat": mission.repeat,
+                    "wait_after_arrival_s": mission.wait_after_arrival_s,
+                    "points": [point.__dict__ for point in mission.points],
+                }
+            )
+        except Exception as exc:
             self._mission = None
-            self._set_validation_text(details)
+            self._set_validation_text(f"❌ Validierung fehlgeschlagen\nDetails: {exc}")
             return
 
         self._mission = mission
@@ -190,43 +309,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             f"Punkte pro Zyklus: {len(mission.points)} | Wiederholungen: {repeats} | Gesamtpunkte: {total_points}"
         )
 
-    def _build_validation_error_details(self, path: Path, exc: Exception) -> str:
-        msg = str(exc)
-        lines = ["❌ Validierung fehlgeschlagen", f"Datei: {path}"]
-
-        line_no = getattr(exc, "lineno", None)
-        if line_no:
-            lines.append(f"Zeilenfehler: Zeile {line_no}")
-
-        match = re.search(r"points\[(\d+)\]", msg)
-        if match:
-            point_idx = int(match.group(1))
-            approx_line = self._approx_line_for_point(path, point_idx)
-            if approx_line is not None:
-                lines.append(f"Punktfehler: points[{point_idx}] (ca. Zeile {approx_line})")
-            else:
-                lines.append(f"Punktfehler: points[{point_idx}]")
-
-        lines.append(f"Details: {msg}")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _approx_line_for_point(path: Path, point_idx: int) -> int | None:
-        try:
-            text = path.read_text(encoding="utf-8")
-        except Exception:
-            return None
-        candidates: list[int] = []
-        for idx, line in enumerate(text.splitlines(), start=1):
-            if "- id:" in line or '"id"' in line or "- name:" in line or '"name"' in line:
-                candidates.append(idx)
-        if point_idx < len(candidates):
-            return candidates[point_idx]
-        return None
-
     def _start_run(self) -> None:
         if self._mission is None:
-            messagebox.showwarning("Mission", "Bitte zuerst eine gültige Mission laden und validieren.")
+            messagebox.showwarning("Mission", "Bitte zuerst eine gültige Mission anlegen und validieren.")
             return
         if self._run_thread and self._run_thread.is_alive():
             return
