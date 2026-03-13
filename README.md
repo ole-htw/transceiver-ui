@@ -100,6 +100,9 @@ using the built-in cross-correlation tools.
 
 The mission workflow can be configured centrally through environment variables:
 
+Create a local `.env` file (for example by copying `.env.example`) to keep
+these values persistent across terminal sessions.
+
 - `TRANSCEIVER_ROBOT_HOST` (default `ole@192.168.10.10`)
 - `TRANSCEIVER_ROS2_NAMESPACE` (default empty)
 - `TRANSCEIVER_ROS2_ACTION_NAME` (default `/navigate_to_pose`)
