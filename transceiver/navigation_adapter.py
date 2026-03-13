@@ -55,6 +55,7 @@ class NavigationAdapterConfig:
     robot_host: str = "ole@192.168.10.10"
     ros2_namespace: str = ""
     ros2_action_name: str = "/navigate_to_pose"
+    remote_ros_env_cmd: str = ""
     remote_ros_setup: str = ""
     goal_acceptance_timeout_s: float = 8.0
     goal_reached_timeout_s: float = 120.0
@@ -159,12 +160,14 @@ class Ros2CliNavigationTransport:
                 "--feedback",
             ]
         )
+        remote_ros_env_cmd = config.remote_ros_env_cmd.strip()
         remote_setup = config.remote_ros_setup.strip()
-        remote_cmd = (
-            f"source {shlex.quote(remote_setup)} && {ros2_cmd}"
-            if remote_setup
-            else ros2_cmd
-        )
+        if remote_ros_env_cmd:
+            remote_cmd = f"set -euo pipefail; {remote_ros_env_cmd}; {ros2_cmd}"
+        elif remote_setup:
+            remote_cmd = f"set -euo pipefail; source {shlex.quote(remote_setup)}; {ros2_cmd}"
+        else:
+            remote_cmd = ros2_cmd
         return [
             "ssh",
             "-o",
