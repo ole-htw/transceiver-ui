@@ -5,7 +5,7 @@ import math
 import subprocess
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Protocol
 
 NavigationEventType = Literal[
@@ -228,34 +228,41 @@ class NavigationAdapter:
         self,
         point: NavigationPoint,
         *,
-        on_event: Callable[[NavigationEvent], None],
+        timeout_s: float | None = None,
+        on_event: Callable[[NavigationEvent], None] | None = None,
     ) -> TerminalNavigationState:
-        attempts = self.config.retry_attempts + 1
+        run_config = (
+            replace(self.config, goal_reached_timeout_s=timeout_s)
+            if timeout_s is not None
+            else self.config
+        )
+        event_handler = on_event or (lambda _event: None)
+        attempts = run_config.retry_attempts + 1
         for attempt in range(1, attempts + 1):
-            on_event(NavigationEvent("goal_sent", attempt, data={"host": self.config.robot_host}))
+            event_handler(NavigationEvent("goal_sent", attempt, data={"host": run_config.robot_host}))
 
             def _feedback_callback(payload: dict[str, Any]) -> None:
-                on_event(NavigationEvent("feedback", attempt, data=payload))
+                event_handler(NavigationEvent("feedback", attempt, data=payload))
 
             outcome = self.transport.send_goal(
                 point=point,
-                config=self.config,
+                config=run_config,
                 on_feedback=_feedback_callback,
             )
 
             if outcome.accepted:
-                on_event(NavigationEvent("accepted", attempt, message=outcome.message))
+                event_handler(NavigationEvent("accepted", attempt, message=outcome.message))
 
             state = outcome.terminal_state
-            on_event(NavigationEvent(state, attempt, message=outcome.message))
+            event_handler(NavigationEvent(state, attempt, message=outcome.message))
 
-            if state == "timeout" and self.config.cancel_on_timeout:
+            if state == "timeout" and run_config.cancel_on_timeout:
                 self.transport.cancel_current_goal()
-                on_event(NavigationEvent("canceled", attempt, message="Canceled after timeout"))
+                event_handler(NavigationEvent("canceled", attempt, message="Canceled after timeout"))
 
             if state == "succeeded":
                 return state
-            if state not in self.config.retry_on_states or attempt >= attempts:
+            if state not in run_config.retry_on_states or attempt >= attempts:
                 return state
 
         return "aborted"
