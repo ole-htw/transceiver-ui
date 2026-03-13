@@ -134,11 +134,26 @@ def test_build_command_uses_default_ros_command_without_setup() -> None:
     assert cmd[-3] == "bash"
     assert cmd[-2] == "-lc"
     remote_cmd = cmd[-1]
-    assert remote_cmd.startswith("ros2 action send_goal")
+    assert remote_cmd.startswith("set -euo pipefail; ros2 action send_goal")
     assert "source " not in remote_cmd
-    assert not remote_cmd.startswith("set -euo pipefail;")
     assert "'" in remote_cmd
     assert "\"frame_id\":\"map\"" in remote_cmd
+
+
+
+
+def test_build_command_exports_fastdds_profile_env_vars() -> None:
+    config = NavigationAdapterConfig(
+        robot_host="robot@10.0.0.2",
+        fastdds_profiles_file="/etc/nav2/fastdds/nav2.xml",
+    )
+
+    cmd = Ros2CliNavigationTransport._build_command(NavigationPoint(1.0, 2.0), config)
+
+    remote_cmd = cmd[-1]
+    assert "export FASTDDS_DEFAULT_PROFILES_FILE=/etc/nav2/fastdds/nav2.xml" in remote_cmd
+    assert "export FASTRTPS_DEFAULT_PROFILES_FILE=/etc/nav2/fastdds/nav2.xml" in remote_cmd
+    assert "ros2 action send_goal" in remote_cmd
 
 
 def test_build_command_prefers_explicit_remote_ros_env_cmd() -> None:

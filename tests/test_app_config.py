@@ -40,3 +40,11 @@ def test_mission_runtime_config_reads_values_from_dotenv(tmp_path, monkeypatch) 
 
     assert config.robot_host == "robot@10.0.0.2"
     assert config.navigation_retry_attempts == 2
+
+
+def test_mission_runtime_config_reads_fastdds_profile_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("TRANSCEIVER_FASTDDS_PROFILES_FILE", "/etc/nav2/fastdds/nav2.xml")
+
+    config = MissionRuntimeConfig.from_env()
+
+    assert config.fastdds_profiles_file == "/etc/nav2/fastdds/nav2.xml"
