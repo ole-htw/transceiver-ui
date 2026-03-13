@@ -119,6 +119,26 @@ class TestMeasurementMission(unittest.TestCase):
                 }
             )
 
+    def test_accepts_numeric_strings_for_coordinates(self) -> None:
+        mission = measurement_mission_from_dict(
+            {
+                "name": "scan-1",
+                "points": [
+                    {
+                        "id": "p1",
+                        "x": "1.5",
+                        "y": "2,25",
+                        "z": "0",
+                        "yaw": "0.0",
+                    }
+                ],
+            }
+        )
+
+        self.assertAlmostEqual(mission.points[0].x, 1.5)
+        self.assertAlmostEqual(mission.points[0].y, 2.25)
+        self.assertAlmostEqual(mission.points[0].z, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
