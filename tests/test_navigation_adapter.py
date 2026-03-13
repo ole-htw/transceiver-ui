@@ -117,7 +117,7 @@ def test_build_command_uses_bash_lc_and_sources_ros_setup_when_configured() -> N
     assert cmd[-3] == "bash"
     assert cmd[-2] == "-lc"
     remote_cmd = cmd[-1]
-    assert "source /opt/ros/humble/setup.bash && ros2 action send_goal" in remote_cmd
+    assert remote_cmd.startswith("set -euo pipefail; source /opt/ros/humble/setup.bash; ros2 action send_goal")
     assert "/robot1/navigate_to_pose" in remote_cmd
 
 
@@ -136,5 +136,24 @@ def test_build_command_uses_default_ros_command_without_setup() -> None:
     remote_cmd = cmd[-1]
     assert remote_cmd.startswith("ros2 action send_goal")
     assert "source " not in remote_cmd
+    assert not remote_cmd.startswith("set -euo pipefail;")
     assert "'" in remote_cmd
     assert "\"frame_id\":\"map\"" in remote_cmd
+
+
+def test_build_command_prefers_explicit_remote_ros_env_cmd() -> None:
+    config = NavigationAdapterConfig(
+        robot_host="robot@10.0.0.2",
+        remote_ros_env_cmd="source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash",
+        remote_ros_setup="/opt/ros/humble/setup.bash",
+    )
+
+    cmd = Ros2CliNavigationTransport._build_command(NavigationPoint(1.0, 2.0), config)
+
+    assert cmd[-3] == "bash"
+    assert cmd[-2] == "-lc"
+    remote_cmd = cmd[-1]
+    assert remote_cmd.startswith(
+        "set -euo pipefail; source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash; ros2 action send_goal"
+    )
+    assert "source /opt/ros/humble/setup.bash" not in remote_cmd
