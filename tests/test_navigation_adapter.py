@@ -157,3 +157,66 @@ def test_build_command_prefers_explicit_remote_ros_env_cmd() -> None:
         "set -euo pipefail; source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash; ros2 action send_goal"
     )
     assert "source /opt/ros/humble/setup.bash" not in remote_cmd
+
+
+def test_build_command_with_ros_setup_wraps_command_with_pipefail_and_send_goal() -> None:
+    config = NavigationAdapterConfig(
+        robot_host="robot@10.0.0.2",
+        remote_ros_setup="/opt/ros/humble/setup.bash",
+    )
+
+    cmd = Ros2CliNavigationTransport._build_command(NavigationPoint(1.0, 2.0), config)
+
+    remote_cmd = cmd[-1]
+    assert "set -euo pipefail;" in remote_cmd
+    assert "source /opt/ros/humble/setup.bash;" in remote_cmd
+    assert "ros2 action send_goal" in remote_cmd
+
+
+def test_send_goal_formats_remote_command_failure_with_truncated_output(monkeypatch) -> None:
+    class _Stream:
+        def __init__(self, lines: list[str], rest: str = "") -> None:
+            self._lines = lines
+            self._rest = rest
+            self._idx = 0
+
+        def readline(self) -> str:
+            if self._idx >= len(self._lines):
+                return ""
+            line = self._lines[self._idx]
+            self._idx += 1
+            return line
+
+        def read(self) -> str:
+            return self._rest
+
+    class _Process:
+        def __init__(self) -> None:
+            self.stdout = _Stream(
+                ["line-1\n", "line-2\n"],
+                rest="\n".join(f"line-{i}" for i in range(3, 28)),
+            )
+            self.stderr = _Stream([], rest="\n".join(f"err-{i}" for i in range(1, 28)))
+
+        def poll(self):
+            return 42
+
+    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
+
+    transport = Ros2CliNavigationTransport()
+    outcome = transport.send_goal(
+        point=NavigationPoint(1.0, 2.0),
+        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2", remote_ros_setup="/opt/ros/humble/setup.bash"),
+        on_feedback=lambda _feedback: None,
+    )
+
+    assert outcome.terminal_state == "connection_error"
+    assert outcome.message is not None
+    assert outcome.message.startswith("remote command failed: exit_code=42; stdout=")
+    assert "remote_cmd=set -euo pipefail; source /opt/ros/humble/setup.bash; ros2 action send_goal" in outcome.message
+    assert "\nline-1\n" not in f"\n{outcome.message}\n"
+    assert "line-8" in outcome.message
+    assert "line-27" in outcome.message
+    assert "\nerr-1\n" not in f"\n{outcome.message}\n"
+    assert "err-8" in outcome.message
+    assert "err-27" in outcome.message

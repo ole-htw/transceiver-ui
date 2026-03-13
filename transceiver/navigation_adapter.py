@@ -5,6 +5,7 @@ import math
 import shlex
 import subprocess
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Protocol
@@ -109,6 +110,13 @@ class Ros2CliNavigationTransport:
 
     def __init__(self) -> None:
         self._last_process: subprocess.Popen[str] | None = None
+
+    @staticmethod
+    def _tail_text(text: str, *, max_lines: int = 20) -> str:
+        lines = [line for line in text.splitlines() if line.strip()]
+        if not lines:
+            return ""
+        return "\\n".join(lines[-max_lines:])
 
     @staticmethod
     def build_goal_payload(point: NavigationPoint) -> dict[str, Any]:
@@ -216,11 +224,13 @@ class Ros2CliNavigationTransport:
         assert self._last_process.stdout is not None
         accepted = False
         start = time.monotonic()
+        stdout_tail: deque[str] = deque(maxlen=20)
 
         while True:
             line = self._last_process.stdout.readline()
             if line:
                 line = line.strip()
+                stdout_tail.append(line)
                 lower = line.lower()
                 if "goal accepted" in lower:
                     accepted = True
@@ -248,15 +258,29 @@ class Ros2CliNavigationTransport:
                     message="Goal reached timeout exceeded",
                 )
             if poll is not None:
+                remaining_stdout = (
+                    self._last_process.stdout.read() if self._last_process.stdout else ""
+                )
+                for rem_line in remaining_stdout.splitlines():
+                    rem_line = rem_line.strip()
+                    if rem_line:
+                        stdout_tail.append(rem_line)
                 stderr = self._last_process.stderr.read().strip() if self._last_process.stderr else ""
                 if poll == 0:
                     if accepted:
                         return NavigationOutcome("succeeded", accepted=True)
                     return NavigationOutcome("aborted", accepted=False, message=stderr)
+                stderr_tail = self._tail_text(stderr)
+                stdout_summary = "\\n".join(stdout_tail)
+                summary = f"exit_code={poll}"
+                if stdout_summary:
+                    summary = f"{summary}; stdout={stdout_summary}"
                 return NavigationOutcome(
                     "connection_error" if not accepted else "aborted",
                     accepted=accepted,
-                    message=stderr or f"ros2 action exited with code {poll}",
+                    message=(
+                        f"remote command failed: {summary}; remote_cmd={cmd[-1]}; stderr={stderr_tail}"
+                    ),
                 )
 
 
