@@ -58,6 +58,7 @@ class NavigationAdapterConfig:
     ros2_action_name: str = "/navigate_to_pose"
     remote_ros_env_cmd: str = ""
     remote_ros_setup: str = ""
+    fastdds_profiles_file: str = ""
     goal_acceptance_timeout_s: float = 8.0
     goal_reached_timeout_s: float = 120.0
     retry_attempts: int = 0
@@ -170,12 +171,26 @@ class Ros2CliNavigationTransport:
         )
         remote_ros_env_cmd = config.remote_ros_env_cmd.strip()
         remote_setup = config.remote_ros_setup.strip()
+        fastdds_profiles_file = config.fastdds_profiles_file.strip()
+
+        env_exports: list[str] = []
+        if fastdds_profiles_file:
+            quoted_profile = shlex.quote(fastdds_profiles_file)
+            env_exports.extend(
+                [
+                    f"export FASTDDS_DEFAULT_PROFILES_FILE={quoted_profile}",
+                    f"export FASTRTPS_DEFAULT_PROFILES_FILE={quoted_profile}",
+                ]
+            )
+
+        shell_parts: list[str] = ["set -euo pipefail"]
+        shell_parts.extend(env_exports)
         if remote_ros_env_cmd:
-            remote_cmd = f"set -euo pipefail; {remote_ros_env_cmd}; {ros2_cmd}"
+            shell_parts.append(remote_ros_env_cmd)
         elif remote_setup:
-            remote_cmd = f"set -euo pipefail; source {shlex.quote(remote_setup)}; {ros2_cmd}"
-        else:
-            remote_cmd = ros2_cmd
+            shell_parts.append(f"source {shlex.quote(remote_setup)}")
+        shell_parts.append(ros2_cmd)
+        remote_cmd = "; ".join(shell_parts)
         return [
             "ssh",
             "-o",

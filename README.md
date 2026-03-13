@@ -112,3 +112,37 @@ these values persistent across terminal sessions.
 
 SSH based ROS2 execution is configured for non-interactive operation (`BatchMode`,
 no password prompts, host key auto-accept for new hosts).
+
+
+### Fast-DDS runtime policy for Nav2 actions
+
+For stable `/navigate_to_pose` actions across environments, set a shared Fast-DDS XML profile
+on the robot and export it for all ROS 2 processes (Nav2 server/client and CLI tools).
+
+1. Check the active configuration on the remote host:
+
+```bash
+ssh <robot-host> 'bash -lc "echo FASTRTPS_DEFAULT_PROFILES_FILE=$FASTRTPS_DEFAULT_PROFILES_FILE; echo FASTDDS_DEFAULT_PROFILES_FILE=$FASTDDS_DEFAULT_PROFILES_FILE"'
+```
+
+If both variables are empty, Fast-DDS default QoS/memory policy is used.
+
+2. Configure this project to force the profile when the mission workflow dispatches goals:
+
+- `TRANSCEIVER_FASTDDS_PROFILES_FILE` (absolute path to the XML on the remote host)
+
+The app exports **both** `FASTDDS_DEFAULT_PROFILES_FILE` and
+`FASTRTPS_DEFAULT_PROFILES_FILE` before invoking `ros2 action send_goal`, so behavior is
+consistent on systems using either variable name.
+
+3. In the XML profile, ensure DataReaders used by Nav2 action topics (e.g.
+`/navigate_to_pose/_action/*`) have sufficient history/payload allocation (history memory
+policy and payload-related settings) for payloads above 32 bytes.
+
+4. Verify end-to-end with:
+
+```bash
+ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose '{"pose":{"header":{"frame_id":"map"},"pose":{"position":{"x":0.0,"y":0.0,"z":0.0},"orientation":{"x":0.0,"y":0.0,"z":0.0,"w":1.0}}}}' --feedback
+```
+
+The command should stream feedback/result without `RTPS_READER_HISTORY` payload errors.

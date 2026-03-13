@@ -381,6 +381,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 ros2_action_name=self._runtime_config.ros2_action_name,
                 remote_ros_env_cmd=self._runtime_config.remote_ros_env_cmd,
                 remote_ros_setup=self._runtime_config.remote_ros_setup,
+                fastdds_profiles_file=self._runtime_config.fastdds_profiles_file,
                 goal_acceptance_timeout_s=self._runtime_config.goal_acceptance_timeout_s,
                 goal_reached_timeout_s=self._runtime_config.goal_reached_timeout_s,
                 retry_attempts=self._runtime_config.navigation_retry_attempts,
