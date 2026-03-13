@@ -52,6 +52,7 @@ from .helpers.echo_aoa import _find_peaks_simple
 from .helpers.interpolation import _apply_rx_interpolation, apply_tx_upsampling
 from .helpers.number_parser import parse_number_expr
 from .helpers.plot_colors import PLOT_COLORS
+from .mission_workflow_ui import MissionWorkflowWindow
 from .tx_controller import TxController
 
 # --- suggestion helper -------------------------------------------------------
@@ -3193,6 +3194,7 @@ class TransceiverUI(ctk.CTk):
         self._cont_last_end_to_end_ms = 0.0
         self._cont_worker_result_drops = 0
         self._cont_runtime_config: dict[str, object] = {}
+        self._mission_workflow_window: MissionWorkflowWindow | None = None
         self._cont_input_slots: list[shared_memory.SharedMemory] = []
         self._cont_input_slot_size = 0
         self._cont_input_free_slots: deque[int] = deque()
@@ -4396,6 +4398,20 @@ class TransceiverUI(ctk.CTk):
         self.update_trim()
         _apply_input_margins(self)
         _apply_button_cursor(self)
+
+        self.mission_workflow_button = ctk.CTkButton(
+            self,
+            text="Mission Workflow",
+            command=self.open_mission_workflow,
+        )
+        self.mission_workflow_button.place(relx=1.0, x=-18, y=16, anchor="ne")
+
+    def open_mission_workflow(self) -> None:
+        window = self._mission_workflow_window
+        if window is not None and window.winfo_exists():
+            window.focus()
+            return
+        self._mission_workflow_window = MissionWorkflowWindow(self)
 
     def update_waveform_fields(self) -> None:
         """Show or hide waveform specific parameters."""
