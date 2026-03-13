@@ -2,6 +2,27 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+
+def _load_dotenv_defaults(path: Path = Path(".env")) -> None:
+    """Load simple KEY=VALUE entries from a .env file without overriding existing env vars."""
+    if not path.is_file():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        parsed = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, parsed)
 
 
 def _env_float(name: str, default: float) -> float:
@@ -38,6 +59,7 @@ class MissionRuntimeConfig:
 
     @classmethod
     def from_env(cls) -> "MissionRuntimeConfig":
+        _load_dotenv_defaults()
         return cls(
             robot_host=os.getenv("TRANSCEIVER_ROBOT_HOST", cls.robot_host),
             ros2_namespace=os.getenv("TRANSCEIVER_ROS2_NAMESPACE", cls.ros2_namespace),
