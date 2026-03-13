@@ -1,0 +1,21 @@
+name: lab-scan-a
+repeat: 2
+wait_after_arrival_s: 1.5
+points:
+  - id: p01
+    name: start
+    x: 0.0
+    y: 0.0
+    z: 0.0
+    yaw: 0.0
+    notes: Start position close to docking station
+    measurement_profile: baseline
+
+  - id: p02
+    x: 1.2
+    y: -0.4
+    qx: 0.0
+    qy: 0.0
+    qz: 0.70710678
+    qw: 0.70710678
+    measurement_profile: high-resolution
