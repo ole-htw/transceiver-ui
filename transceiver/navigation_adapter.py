@@ -151,7 +151,21 @@ class Ros2CliNavigationTransport:
         return f"/{ns}{action}"
 
     @classmethod
-    def _build_command(cls, point: NavigationPoint, config: NavigationAdapterConfig) -> list[str]:
+    def _build_remote_env_setup(
+        cls, config: NavigationAdapterConfig
+    ) -> tuple[str, str]:
+        remote_ros_env_cmd = config.remote_ros_env_cmd.strip()
+        remote_setup = config.remote_ros_setup.strip()
+        if remote_ros_env_cmd:
+            return remote_ros_env_cmd, "TRANSCEIVER_REMOTE_ROS_ENV_CMD"
+        if remote_setup:
+            return f"source {shlex.quote(remote_setup)}", f"TRANSCEIVER_REMOTE_ROS_SETUP={remote_setup}"
+        return "", "remote shell environment"
+
+    @classmethod
+    def _build_remote_command(cls, point: NavigationPoint, config: NavigationAdapterConfig) -> str:
+        env_setup_cmd, env_source = cls._build_remote_env_setup(config)
+        env_setup = f"{env_setup_cmd}; " if env_setup_cmd else ""
         payload = json.dumps(cls.build_goal_payload(point), separators=(",", ":"))
         resolved_action = cls._resolve_action_name(
             namespace=config.ros2_namespace,
@@ -168,14 +182,21 @@ class Ros2CliNavigationTransport:
                 "--feedback",
             ]
         )
-        remote_ros_env_cmd = config.remote_ros_env_cmd.strip()
-        remote_setup = config.remote_ros_setup.strip()
-        if remote_ros_env_cmd:
-            remote_cmd = f"set -euo pipefail; {remote_ros_env_cmd}; {ros2_cmd}"
-        elif remote_setup:
-            remote_cmd = f"set -euo pipefail; source {shlex.quote(remote_setup)}; {ros2_cmd}"
-        else:
-            remote_cmd = ros2_cmd
+        return (
+            "set -euo pipefail; "
+            f"echo '[transceiver] ROS env source: {env_source}' >&2; "
+            f"{env_setup}"
+            "command -v ros2 >/dev/null 2>&1 || { echo 'TRANSCEIVER_PRECHECK_ERROR: ros2 CLI not found after ROS environment setup' >&2; exit 210; }; "
+            "ros2 interface show nav2_msgs/action/NavigateToPose >/dev/null 2>&1 || { echo 'TRANSCEIVER_PRECHECK_ERROR: nav2_msgs/action/NavigateToPose not resolvable' >&2; exit 211; }; "
+            "[ -n \"${ROS_DOMAIN_ID:-}\" ] || { echo 'TRANSCEIVER_PRECHECK_ERROR: ROS_DOMAIN_ID is not set' >&2; exit 212; }; "
+            "[ -n \"${ROS_NAMESPACE:-}\" ] || { echo 'TRANSCEIVER_PRECHECK_ERROR: ROS_NAMESPACE is not set' >&2; exit 213; }; "
+            "ros2 action list >/dev/null 2>&1 || { echo 'TRANSCEIVER_PRECHECK_ERROR: ros2 action list failed' >&2; exit 214; }; "
+            f"{ros2_cmd}"
+        )
+
+    @classmethod
+    def _build_command(cls, point: NavigationPoint, config: NavigationAdapterConfig) -> list[str]:
+        remote_cmd = cls._build_remote_command(point, config)
         return [
             "ssh",
             "-o",
@@ -275,6 +296,14 @@ class Ros2CliNavigationTransport:
                 summary = f"exit_code={poll}"
                 if stdout_summary:
                     summary = f"{summary}; stdout={stdout_summary}"
+                combined_output = "\n".join(part for part in [stdout_summary, stderr_tail] if part)
+                if "TRANSCEIVER_PRECHECK_ERROR:" in combined_output:
+                    precheck_message = combined_output.split("TRANSCEIVER_PRECHECK_ERROR:", 1)[1].strip()
+                    return NavigationOutcome(
+                        "connection_error",
+                        accepted=False,
+                        message=f"remote ROS environment precheck failed: {precheck_message}",
+                    )
                 return NavigationOutcome(
                     "connection_error" if not accepted else "aborted",
                     accepted=accepted,
