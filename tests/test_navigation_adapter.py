@@ -121,6 +121,35 @@ def test_build_command_uses_bash_lc_and_sources_ros_setup_when_configured() -> N
     assert "/robot1/navigate_to_pose" in remote_cmd
 
 
+
+
+def test_build_command_uses_remote_ros_env_cmd_with_pipefail_prefix() -> None:
+    config = NavigationAdapterConfig(
+        robot_host="robot@10.0.0.2",
+        ros2_namespace="robot1",
+        ros2_action_name="navigate_to_pose",
+        remote_ros_env_cmd="source /opt/ros/humble/setup.bash",
+    )
+
+    cmd = Ros2CliNavigationTransport._build_command(NavigationPoint(1.0, 2.0), config)
+
+    remote_cmd = cmd[-1]
+    assert "set -euo pipefail; source /opt/ros/humble/setup.bash; ros2 action send_goal" in remote_cmd
+    assert "/robot1/navigate_to_pose" in remote_cmd
+
+
+def test_build_command_prefers_remote_ros_env_cmd_over_remote_ros_setup() -> None:
+    config = NavigationAdapterConfig(
+        robot_host="robot@10.0.0.2",
+        remote_ros_env_cmd="source /env/cmd.bash",
+        remote_ros_setup="/opt/ros/humble/setup.bash",
+    )
+
+    cmd = Ros2CliNavigationTransport._build_command(NavigationPoint(1.0, 2.0), config)
+
+    remote_cmd = cmd[-1]
+    assert "set -euo pipefail; source /env/cmd.bash; ros2 action send_goal" in remote_cmd
+    assert "source /opt/ros/humble/setup.bash &&" not in remote_cmd
 def test_build_command_uses_default_ros_command_without_setup() -> None:
     config = NavigationAdapterConfig(
         robot_host="robot@10.0.0.2",
@@ -138,3 +167,45 @@ def test_build_command_uses_default_ros_command_without_setup() -> None:
     assert "source " not in remote_cmd
     assert "'" in remote_cmd
     assert "\"frame_id\":\"map\"" in remote_cmd
+
+
+def test_send_goal_reports_structured_remote_failure_message(monkeypatch) -> None:
+    class _Stdout:
+        def __init__(self) -> None:
+            self._lines = ["goal accepted\n"]
+
+        def readline(self) -> str:
+            return self._lines.pop(0) if self._lines else ""
+
+        def read(self) -> str:
+            return "out-1\nout-2\n"
+
+    class _Stderr:
+        def read(self) -> str:
+            return "err-1\nerr-2\n"
+
+    class _Proc:
+        def __init__(self) -> None:
+            self.stdout = _Stdout()
+            self.stderr = _Stderr()
+
+        def poll(self) -> int | None:
+            if self.stdout._lines:
+                return None
+            return 7
+
+    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Proc())
+
+    transport = Ros2CliNavigationTransport()
+    outcome = transport.send_goal(
+        point=NavigationPoint(0.0, 0.0),
+        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
+        on_feedback=lambda _payload: None,
+    )
+
+    assert outcome.terminal_state == "aborted"
+    assert outcome.message is not None
+    assert "remote command failed:" in outcome.message
+    assert "remote_cmd=ros2 action send_goal" in outcome.message
+    assert "stderr=err-1" in outcome.message
+    assert "stdout=goal accepted" in outcome.message

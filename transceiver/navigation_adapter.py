@@ -5,6 +5,7 @@ import math
 import shlex
 import subprocess
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Protocol
@@ -55,6 +56,7 @@ class NavigationAdapterConfig:
     robot_host: str = "ole@192.168.10.10"
     ros2_namespace: str = ""
     ros2_action_name: str = "/navigate_to_pose"
+    remote_ros_env_cmd: str = ""
     remote_ros_setup: str = ""
     goal_acceptance_timeout_s: float = 8.0
     goal_reached_timeout_s: float = 120.0
@@ -159,12 +161,14 @@ class Ros2CliNavigationTransport:
                 "--feedback",
             ]
         )
+        remote_env_cmd = config.remote_ros_env_cmd.strip()
         remote_setup = config.remote_ros_setup.strip()
-        remote_cmd = (
-            f"source {shlex.quote(remote_setup)} && {ros2_cmd}"
-            if remote_setup
-            else ros2_cmd
-        )
+        if remote_env_cmd:
+            remote_cmd = f"set -euo pipefail; {remote_env_cmd}; {ros2_cmd}"
+        elif remote_setup:
+            remote_cmd = f"source {shlex.quote(remote_setup)} && {ros2_cmd}"
+        else:
+            remote_cmd = ros2_cmd
         return [
             "ssh",
             "-o",
@@ -197,6 +201,12 @@ class Ros2CliNavigationTransport:
         config: NavigationAdapterConfig,
         on_feedback: Callable[[dict[str, Any]], None],
     ) -> NavigationOutcome:
+        def _tail_lines(text: str, *, line_count: int = 20) -> str:
+            lines = [line for line in text.splitlines() if line.strip()]
+            if not lines:
+                return ""
+            return "\\n".join(lines[-line_count:])
+
         cmd = self._build_command(point, config)
         try:
             self._last_process = subprocess.Popen(
@@ -213,11 +223,14 @@ class Ros2CliNavigationTransport:
         assert self._last_process.stdout is not None
         accepted = False
         start = time.monotonic()
+        stdout_tail: deque[str] = deque(maxlen=20)
 
         while True:
             line = self._last_process.stdout.readline()
             if line:
                 line = line.strip()
+                if line:
+                    stdout_tail.append(line)
                 lower = line.lower()
                 if "goal accepted" in lower:
                     accepted = True
@@ -245,15 +258,26 @@ class Ros2CliNavigationTransport:
                     message="Goal reached timeout exceeded",
                 )
             if poll is not None:
-                stderr = self._last_process.stderr.read().strip() if self._last_process.stderr else ""
+                remaining_stdout = self._last_process.stdout.read() if self._last_process.stdout else ""
+                for tail_line in remaining_stdout.splitlines():
+                    if tail_line.strip():
+                        stdout_tail.append(tail_line.strip())
+                stderr_raw = self._last_process.stderr.read() if self._last_process.stderr else ""
+                stderr = _tail_lines(stderr_raw)
+                stdout = "\\n".join(stdout_tail)
                 if poll == 0:
                     if accepted:
                         return NavigationOutcome("succeeded", accepted=True)
                     return NavigationOutcome("aborted", accepted=False, message=stderr)
+                remote_cmd = cmd[-1]
+                error_message = (
+                    f"remote command failed: exit_code={poll}, accepted={accepted}; "
+                    f"remote_cmd={remote_cmd}; stderr={stderr or '-'}; stdout={stdout or '-'}"
+                )
                 return NavigationOutcome(
                     "connection_error" if not accepted else "aborted",
                     accepted=accepted,
-                    message=stderr or f"ros2 action exited with code {poll}",
+                    message=error_message,
                 )
 
 

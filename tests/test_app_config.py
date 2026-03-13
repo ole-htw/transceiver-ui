@@ -26,3 +26,11 @@ def test_mission_runtime_config_reads_values_from_dotenv(tmp_path, monkeypatch) 
 
     assert config.robot_host == "robot@10.0.0.2"
     assert config.navigation_retry_attempts == 2
+
+
+def test_mission_runtime_config_reads_remote_ros_env_cmd_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("TRANSCEIVER_REMOTE_ROS_ENV_CMD", "source /opt/ros/humble/setup.bash")
+
+    config = MissionRuntimeConfig.from_env()
+
+    assert config.remote_ros_env_cmd == "source /opt/ros/humble/setup.bash"
