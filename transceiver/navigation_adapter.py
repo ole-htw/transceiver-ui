@@ -151,8 +151,22 @@ class Ros2CliNavigationTransport:
             return action
         return f"/{ns}{action}"
 
+    @staticmethod
+    def _build_env_source_label(config: NavigationAdapterConfig) -> str:
+        if config.remote_ros_env_cmd.strip():
+            return "TRANSCEIVER_REMOTE_ROS_ENV_CMD"
+        if config.remote_ros_setup.strip():
+            return "TRANSCEIVER_REMOTE_ROS_SETUP"
+        return "none"
+
     @classmethod
     def _build_command(cls, point: NavigationPoint, config: NavigationAdapterConfig) -> list[str]:
+        resolved_namespace = config.ros2_namespace.strip("/")
+        if not resolved_namespace:
+            raise ValueError(
+                "ROS environment precheck failed: ros2 namespace is empty (set ros2_namespace/TRANSCEIVER_ROS2_NAMESPACE)"
+            )
+
         payload = json.dumps(cls.build_goal_payload(point), separators=(",", ":"))
         resolved_action = cls._resolve_action_name(
             namespace=config.ros2_namespace,
@@ -183,12 +197,26 @@ class Ros2CliNavigationTransport:
                 ]
             )
 
+        env_source_label = cls._build_env_source_label(config)
+        profile_source_label = "FASTDDS profile configured" if fastdds_profiles_file else "FASTDDS profile not configured"
+
+        preflight_checks = [
+            "command -v ros2 >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 CLI not found in PATH' >&2; exit 70; }",
+            "ros2 interface show nav2_msgs/action/NavigateToPose >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: nav2_msgs/action/NavigateToPose is not available' >&2; exit 71; }",
+            "test -n \"${ROS_DOMAIN_ID:-}\" || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ROS_DOMAIN_ID is not set' >&2; exit 72; }",
+            "ros2 action list >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 action list failed' >&2; exit 73; }",
+        ]
+
         shell_parts: list[str] = ["set -euo pipefail"]
         shell_parts.extend(env_exports)
         if remote_ros_env_cmd:
             shell_parts.append(remote_ros_env_cmd)
         elif remote_setup:
             shell_parts.append(f"source {shlex.quote(remote_setup)}")
+        shell_parts.append(
+            f"echo {shlex.quote(f'[transceiver] ROS env source={env_source_label}; {profile_source_label}; namespace={resolved_namespace}') }"
+        )
+        shell_parts.extend(preflight_checks)
         shell_parts.append(ros2_cmd)
         remote_cmd = "; ".join(shell_parts)
         return [
@@ -223,7 +251,14 @@ class Ros2CliNavigationTransport:
         config: NavigationAdapterConfig,
         on_feedback: Callable[[dict[str, Any]], None],
     ) -> NavigationOutcome:
-        cmd = self._build_command(point, config)
+        try:
+            cmd = self._build_command(point, config)
+        except ValueError as exc:
+            return NavigationOutcome(
+                terminal_state="connection_error",
+                accepted=False,
+                message=str(exc),
+            )
         try:
             self._last_process = subprocess.Popen(
                 cmd,
@@ -287,9 +322,24 @@ class Ros2CliNavigationTransport:
                     return NavigationOutcome("aborted", accepted=False, message=stderr)
                 stderr_tail = self._tail_text(stderr)
                 stdout_summary = "\\n".join(stdout_tail)
+                preflight_failed = "TRANSCEIVER_ENV_CHECK_FAILED:" in stderr
                 summary = f"exit_code={poll}"
                 if stdout_summary:
                     summary = f"{summary}; stdout={stdout_summary}"
+                if preflight_failed:
+                    reason = self._tail_text(
+                        "\n".join(
+                            line for line in stderr.splitlines() if "TRANSCEIVER_ENV_CHECK_FAILED:" in line
+                        ),
+                        max_lines=1,
+                    )
+                    return NavigationOutcome(
+                        "connection_error",
+                        accepted=False,
+                        message=(
+                            f"ROS environment precheck failed before sending goal: {reason}; remote_cmd={cmd[-1]}"
+                        ),
+                    )
                 return NavigationOutcome(
                     "connection_error" if not accepted else "aborted",
                     accepted=accepted,
