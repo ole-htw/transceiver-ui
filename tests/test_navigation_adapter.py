@@ -90,19 +90,51 @@ def test_timeout_can_trigger_cancel_event() -> None:
     assert "canceled" in events
 
 
-def test_build_command_uses_non_interactive_ssh_and_namespaced_action() -> None:
-    config = NavigationAdapterConfig(
-        robot_host="robot@10.0.0.2",
-        ros2_namespace="robot1",
-        ros2_action_name="navigate_to_pose",
-        goal_acceptance_timeout_s=9.0,
-    )
+def test_build_command_uses_non_interactive_ssh_options() -> None:
+    config = NavigationAdapterConfig(robot_host="robot@10.0.0.2")
 
     cmd = Ros2CliNavigationTransport._build_command(NavigationPoint(1.0, 2.0), config)
 
     assert cmd[0:2] == ["ssh", "-o"]
     assert "BatchMode=yes" in cmd
+    assert "PasswordAuthentication=no" in cmd
+    assert "KbdInteractiveAuthentication=no" in cmd
     assert "NumberOfPasswordPrompts=0" in cmd
     assert "StrictHostKeyChecking=accept-new" in cmd
     assert "robot@10.0.0.2" in cmd
-    assert "/robot1/navigate_to_pose" in cmd
+
+
+def test_build_command_uses_bash_lc_and_sources_ros_setup_when_configured() -> None:
+    config = NavigationAdapterConfig(
+        robot_host="robot@10.0.0.2",
+        ros2_namespace="robot1",
+        ros2_action_name="navigate_to_pose",
+        remote_ros_setup="/opt/ros/humble/setup.bash",
+    )
+
+    cmd = Ros2CliNavigationTransport._build_command(NavigationPoint(1.0, 2.0), config)
+
+    assert cmd[-3] == "bash"
+    assert cmd[-2] == "-lc"
+    remote_cmd = cmd[-1]
+    assert "source /opt/ros/humble/setup.bash && ros2 action send_goal" in remote_cmd
+    assert "/robot1/navigate_to_pose" in remote_cmd
+
+
+def test_build_command_uses_default_ros_command_without_setup() -> None:
+    config = NavigationAdapterConfig(
+        robot_host="robot@10.0.0.2",
+        ros2_namespace="robot1",
+        ros2_action_name="navigate_to_pose",
+        remote_ros_setup="",
+    )
+
+    cmd = Ros2CliNavigationTransport._build_command(NavigationPoint(1.0, 2.0), config)
+
+    assert cmd[-3] == "bash"
+    assert cmd[-2] == "-lc"
+    remote_cmd = cmd[-1]
+    assert remote_cmd.startswith("ros2 action send_goal")
+    assert "source " not in remote_cmd
+    assert "'" in remote_cmd
+    assert "\"frame_id\":\"map\"" in remote_cmd
