@@ -91,7 +91,7 @@ def test_timeout_can_trigger_cancel_event() -> None:
 
 
 def test_build_command_uses_non_interactive_ssh_options() -> None:
-    config = NavigationAdapterConfig(robot_host="robot@10.0.0.2")
+    config = NavigationAdapterConfig(robot_host="robot@10.0.0.2", ros2_namespace="robot1")
 
     cmd = Ros2CliNavigationTransport._build_command(NavigationPoint(1.0, 2.0), config)
 
@@ -117,7 +117,7 @@ def test_build_command_uses_bash_lc_and_sources_ros_setup_when_configured() -> N
     assert cmd[-3] == "bash"
     assert cmd[-2] == "-lc"
     remote_cmd = cmd[-1]
-    assert remote_cmd.startswith("set -euo pipefail; source /opt/ros/humble/setup.bash; ros2 action send_goal")
+    assert remote_cmd.startswith("set -euo pipefail; source /opt/ros/humble/setup.bash; echo '[transceiver] ROS env source=TRANSCEIVER_REMOTE_ROS_SETUP; FASTDDS profile not configured; namespace=robot1'; command -v ros2")
     assert "/robot1/navigate_to_pose" in remote_cmd
 
 
@@ -134,7 +134,7 @@ def test_build_command_uses_default_ros_command_without_setup() -> None:
     assert cmd[-3] == "bash"
     assert cmd[-2] == "-lc"
     remote_cmd = cmd[-1]
-    assert remote_cmd.startswith("set -euo pipefail; ros2 action send_goal")
+    assert remote_cmd.startswith("set -euo pipefail; echo '[transceiver] ROS env source=none; FASTDDS profile not configured; namespace=robot1'; command -v ros2")
     assert "source " not in remote_cmd
     assert "'" in remote_cmd
     assert "\"frame_id\":\"map\"" in remote_cmd
@@ -146,6 +146,7 @@ def test_build_command_exports_fastdds_profile_env_vars() -> None:
     config = NavigationAdapterConfig(
         robot_host="robot@10.0.0.2",
         fastdds_profiles_file="/etc/nav2/fastdds/nav2.xml",
+        ros2_namespace="robot1",
     )
 
     cmd = Ros2CliNavigationTransport._build_command(NavigationPoint(1.0, 2.0), config)
@@ -161,6 +162,7 @@ def test_build_command_prefers_explicit_remote_ros_env_cmd() -> None:
         robot_host="robot@10.0.0.2",
         remote_ros_env_cmd="source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash",
         remote_ros_setup="/opt/ros/humble/setup.bash",
+        ros2_namespace="robot1",
     )
 
     cmd = Ros2CliNavigationTransport._build_command(NavigationPoint(1.0, 2.0), config)
@@ -169,7 +171,7 @@ def test_build_command_prefers_explicit_remote_ros_env_cmd() -> None:
     assert cmd[-2] == "-lc"
     remote_cmd = cmd[-1]
     assert remote_cmd.startswith(
-        "set -euo pipefail; source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash; ros2 action send_goal"
+        "set -euo pipefail; source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash; echo '[transceiver] ROS env source=TRANSCEIVER_REMOTE_ROS_ENV_CMD; FASTDDS profile not configured; namespace=robot1'; command -v ros2"
     )
     assert "source /opt/ros/humble/setup.bash" not in remote_cmd
 
@@ -178,6 +180,7 @@ def test_build_command_with_ros_setup_wraps_command_with_pipefail_and_send_goal(
     config = NavigationAdapterConfig(
         robot_host="robot@10.0.0.2",
         remote_ros_setup="/opt/ros/humble/setup.bash",
+        ros2_namespace="robot1",
     )
 
     cmd = Ros2CliNavigationTransport._build_command(NavigationPoint(1.0, 2.0), config)
@@ -185,6 +188,10 @@ def test_build_command_with_ros_setup_wraps_command_with_pipefail_and_send_goal(
     remote_cmd = cmd[-1]
     assert "set -euo pipefail;" in remote_cmd
     assert "source /opt/ros/humble/setup.bash;" in remote_cmd
+    assert "echo '[transceiver] ROS env source=TRANSCEIVER_REMOTE_ROS_SETUP; FASTDDS profile not configured; namespace=robot1'" in remote_cmd
+    assert "ros2 interface show nav2_msgs/action/NavigateToPose" in remote_cmd
+    assert "test -n \"${ROS_DOMAIN_ID:-}\"" in remote_cmd
+    assert "ros2 action list >/dev/null 2>&1" in remote_cmd
     assert "ros2 action send_goal" in remote_cmd
 
 
@@ -221,17 +228,72 @@ def test_send_goal_formats_remote_command_failure_with_truncated_output(monkeypa
     transport = Ros2CliNavigationTransport()
     outcome = transport.send_goal(
         point=NavigationPoint(1.0, 2.0),
-        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2", remote_ros_setup="/opt/ros/humble/setup.bash"),
+        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2", remote_ros_setup="/opt/ros/humble/setup.bash", ros2_namespace="robot1"),
         on_feedback=lambda _feedback: None,
     )
 
     assert outcome.terminal_state == "connection_error"
     assert outcome.message is not None
     assert outcome.message.startswith("remote command failed: exit_code=42; stdout=")
-    assert "remote_cmd=set -euo pipefail; source /opt/ros/humble/setup.bash; ros2 action send_goal" in outcome.message
+    assert "remote_cmd=set -euo pipefail; source /opt/ros/humble/setup.bash; echo '[transceiver] ROS env source=TRANSCEIVER_REMOTE_ROS_SETUP; FASTDDS profile not configured; namespace=robot1'; command -v ros2" in outcome.message
     assert "\nline-1\n" not in f"\n{outcome.message}\n"
     assert "line-8" in outcome.message
     assert "line-27" in outcome.message
     assert "\nerr-1\n" not in f"\n{outcome.message}\n"
     assert "err-8" in outcome.message
     assert "err-27" in outcome.message
+
+
+def test_build_command_requires_namespace() -> None:
+    config = NavigationAdapterConfig(robot_host="robot@10.0.0.2", ros2_namespace="")
+
+    try:
+        Ros2CliNavigationTransport._build_command(NavigationPoint(1.0, 2.0), config)
+    except ValueError as exc:
+        assert "ros2 namespace is empty" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_send_goal_returns_precheck_error_message(monkeypatch) -> None:
+    class _Stream:
+        def __init__(self, lines: list[str], rest: str = "") -> None:
+            self._lines = lines
+            self._rest = rest
+            self._idx = 0
+
+        def readline(self) -> str:
+            if self._idx >= len(self._lines):
+                return ""
+            line = self._lines[self._idx]
+            self._idx += 1
+            return line
+
+        def read(self) -> str:
+            return self._rest
+
+    class _Process:
+        def __init__(self) -> None:
+            self.stdout = _Stream([], rest="")
+            self.stderr = _Stream([], rest="TRANSCEIVER_ENV_CHECK_FAILED: ROS_DOMAIN_ID is not set")
+
+        def poll(self):
+            return 72
+
+    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
+
+    transport = Ros2CliNavigationTransport()
+    outcome = transport.send_goal(
+        point=NavigationPoint(1.0, 2.0),
+        config=NavigationAdapterConfig(
+            robot_host="robot@10.0.0.2",
+            remote_ros_setup="/opt/ros/humble/setup.bash",
+            ros2_namespace="robot1",
+        ),
+        on_feedback=lambda _feedback: None,
+    )
+
+    assert outcome.terminal_state == "connection_error"
+    assert outcome.message is not None
+    assert outcome.message.startswith("ROS environment precheck failed before sending goal")
+    assert "ROS_DOMAIN_ID is not set" in outcome.message
