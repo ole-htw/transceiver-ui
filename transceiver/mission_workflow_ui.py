@@ -85,10 +85,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._runtime_config = MissionRuntimeConfig.from_env()
 
         self._build_ui()
+        self.after_idle(self._stabilize_initial_geometry)
 
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(4, weight=1)
+        self.rowconfigure(5, weight=1)
 
         workflow = ctk.CTkFrame(self)
         workflow.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
@@ -197,6 +198,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.results_table.configure(yscrollcommand=scroll.set)
 
         self._mission_points: list[MeasurementPoint] = []
+
+    def _stabilize_initial_geometry(self) -> None:
+        """Ensure all control rows are visible right after opening the window."""
+        self.update_idletasks()
+        required_width = max(self.winfo_reqwidth(), 980)
+        required_height = max(self.winfo_reqheight(), 640)
+        self.geometry(f"{required_width}x{required_height}")
 
     @staticmethod
     def _labeled_entry(
