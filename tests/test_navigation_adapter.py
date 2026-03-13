@@ -88,3 +88,21 @@ def test_timeout_can_trigger_cancel_event() -> None:
     assert fake.cancel_calls == 1
     assert "timeout" in events
     assert "canceled" in events
+
+
+def test_build_command_uses_non_interactive_ssh_and_namespaced_action() -> None:
+    config = NavigationAdapterConfig(
+        robot_host="robot@10.0.0.2",
+        ros2_namespace="robot1",
+        ros2_action_name="navigate_to_pose",
+        goal_acceptance_timeout_s=9.0,
+    )
+
+    cmd = Ros2CliNavigationTransport._build_command(NavigationPoint(1.0, 2.0), config)
+
+    assert cmd[0:2] == ["ssh", "-o"]
+    assert "BatchMode=yes" in cmd
+    assert "NumberOfPasswordPrompts=0" in cmd
+    assert "StrictHostKeyChecking=accept-new" in cmd
+    assert "robot@10.0.0.2" in cmd
+    assert "/robot1/navigate_to_pose" in cmd

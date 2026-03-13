@@ -95,3 +95,17 @@ field **Bandwidth [Hz]**.
 The receive view still offers optional oversampling after capture. This RX
 option is unchanged and can improve channel-impulse-response accuracy when
 using the built-in cross-correlation tools.
+
+## Mission workflow runtime configuration
+
+The mission workflow can be configured centrally through environment variables:
+
+- `TRANSCEIVER_ROBOT_HOST` (default `ole@192.168.10.10`)
+- `TRANSCEIVER_ROS2_NAMESPACE` (default empty)
+- `TRANSCEIVER_ROS2_ACTION_NAME` (default `/navigate_to_pose`)
+- `TRANSCEIVER_NAV_GOAL_ACCEPT_TIMEOUT_S` (default `8.0`)
+- `TRANSCEIVER_NAV_GOAL_REACHED_TIMEOUT_S` (default `120.0`)
+- `TRANSCEIVER_NAV_RETRY_ATTEMPTS` (default `0`)
+
+SSH based ROS2 execution is configured for non-interactive operation (`BatchMode`,
+no password prompts, host key auto-accept for new hosts).

@@ -12,6 +12,7 @@ from typing import Any
 
 import customtkinter as ctk
 
+from .app_config import MissionRuntimeConfig
 from .measurement_mission import MeasurementMission, load_measurement_mission
 from .measurement_run_executor import (
     JsonRunLogStore,
@@ -19,18 +20,34 @@ from .measurement_run_executor import (
     MeasurementRunExecutorConfig,
     PointExecutionContext,
 )
+from .navigation_adapter import NavigationAdapter, NavigationAdapterConfig, NavigationEvent
+
 
 
 class _UiNavigator:
-    def __init__(self, on_status) -> None:
+    def __init__(self, *, adapter: NavigationAdapter, on_status, on_operator_message) -> None:
+        self._adapter = adapter
         self._on_status = on_status
+        self._on_operator_message = on_operator_message
 
     def navigate_to_point(self, point, *, timeout_s: float):  # type: ignore[no-untyped-def]
-        del timeout_s
         self._on_status("navigation", "running")
-        time.sleep(0.35)
-        self._on_status("navigation", "succeeded")
-        return "succeeded"
+
+        def _on_event(event: NavigationEvent) -> None:
+            if event.type in {"connection_error", "aborted", "timeout"}:
+                self._on_operator_message(
+                    f"Navigation {event.type} (Versuch {event.attempt}): {event.message or 'ohne Details'}"
+                )
+            if event.type == "succeeded":
+                self._on_status("navigation", "succeeded")
+
+        state = self._adapter.navigate_to_point(point, timeout_s=timeout_s, on_event=_on_event)
+        if state != "succeeded":
+            self._on_status("navigation", state)
+        return state
+
+    def cancel_current_goal(self) -> None:
+        self._adapter.cancel_current_goal()
 
 
 class _UiMeasurementService:
@@ -62,6 +79,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._records: list[dict[str, Any]] = []
         self._run_started_at: float | None = None
         self._run_log_dir: Path | None = None
+        self._runtime_config = MissionRuntimeConfig.from_env()
 
         self._build_ui()
 
@@ -219,17 +237,41 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         self._run_log_dir = Path("signals") / "mission-runs" / ts
         store = JsonRunLogStore(self._run_log_dir)
+        interrupted = store.mark_interrupted_runs()
+        if interrupted:
+            self._append_validation(
+                f"⚠️ {interrupted} verwaiste Run(s) wurden als interrupted markiert."
+            )
 
         def _persist(payload: dict[str, Any]) -> None:
             self.after(0, self._on_record, payload)
 
+        nav_adapter = NavigationAdapter(
+            config=NavigationAdapterConfig(
+                robot_host=self._runtime_config.robot_host,
+                ros2_namespace=self._runtime_config.ros2_namespace,
+                ros2_action_name=self._runtime_config.ros2_action_name,
+                goal_acceptance_timeout_s=self._runtime_config.goal_acceptance_timeout_s,
+                goal_reached_timeout_s=self._runtime_config.goal_reached_timeout_s,
+                retry_attempts=self._runtime_config.navigation_retry_attempts,
+            )
+        )
+
         self._executor = MeasurementRunExecutor(
             mission=self._mission,
-            navigator=_UiNavigator(self._on_stage_update),
+            navigator=_UiNavigator(
+                adapter=nav_adapter,
+                on_status=self._on_stage_update,
+                on_operator_message=self._append_validation,
+            ),
             measurement_service=_UiMeasurementService(self._on_stage_update),
             persist_result=_persist,
             run_log_store=store,
-            config=MeasurementRunExecutorConfig(on_point_error="continue"),
+            config=MeasurementRunExecutorConfig(
+                on_point_error="continue",
+                goal_reached_timeout_s=self._runtime_config.goal_reached_timeout_s,
+                navigation_retry_attempts=self._runtime_config.navigation_retry_attempts,
+            ),
         )
 
         self._set_run_buttons(running=True, paused=False)
@@ -266,6 +308,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._executor.stop()
         except RuntimeError as exc:
             messagebox.showwarning("Stop", str(exc))
+            return
+        self._append_validation("Stop angefordert: laufendes Goal wird abgebrochen.")
 
     def _set_run_buttons(self, *, running: bool, paused: bool) -> None:
         self.start_btn.configure(state="disabled" if running else "normal")
@@ -327,6 +371,10 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
     def _on_run_finished(self, state: str) -> None:
         self._set_run_buttons(running=False, paused=False)
         self._append_validation(f"Run beendet: {state}")
+        if self._records:
+            last_error = self._records[-1].get("error")
+            if last_error:
+                self._append_validation(f"Operator-Hinweis: {last_error}")
         self._update_live_label()
 
     def _export_logs(self) -> None:

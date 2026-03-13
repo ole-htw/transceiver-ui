@@ -25,6 +25,9 @@ class MissionNavigator(Protocol):
     ) -> TerminalNavigationState:
         ...
 
+    def cancel_current_goal(self) -> None:
+        ...
+
 
 class MeasurementTrigger(Protocol):
     def __call__(self, point: MeasurementPoint) -> dict[str, Any]:
@@ -71,6 +74,23 @@ class JsonRunLogStore:
     def __init__(self, directory: str | Path) -> None:
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
+
+    def mark_interrupted_runs(self) -> int:
+        interrupted = 0
+        for summary_path in self.directory.parent.glob("*/run-summary.json"):
+            try:
+                payload = json.loads(summary_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if payload.get("executor_state") in {"running", "paused", "stopping"}:
+                payload["executor_state"] = "interrupted"
+                payload["abort_reason"] = payload.get("abort_reason") or "app_restart"
+                summary_path.write_text(
+                    json.dumps(payload, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                interrupted += 1
+        return interrupted
 
     def write_point_log(self, payload: dict[str, Any]) -> None:
         point = payload["point"]
@@ -151,6 +171,7 @@ class MeasurementRunExecutor:
         self._state_lock = threading.RLock()
         self._pause_cond = threading.Condition(self._state_lock)
         self.records: list[PointExecutionRecord] = []
+        self._cancel_requested = False
 
     @property
     def state(self) -> ExecutorState:
@@ -165,6 +186,7 @@ class MeasurementRunExecutor:
             self._state = "running"
 
         self.records = []
+        self._cancel_requested = False
         repeats = self.mission.repeat or 1
         for cycle in range(repeats):
             for point_index, point in enumerate(self.mission.points):
@@ -239,8 +261,13 @@ class MeasurementRunExecutor:
         with self._state_lock:
             if self._state not in {"running", "paused"}:
                 raise RuntimeError(f"Cannot stop from state '{self._state}'")
+            self._cancel_requested = True
             self._state = "stopping"
             self._pause_cond.notify_all()
+        try:
+            self.navigator.cancel_current_goal()
+        except Exception:
+            pass
 
     def _finalize_stop(self) -> ExecutorState:
         with self._state_lock:
@@ -266,6 +293,9 @@ class MeasurementRunExecutor:
         global_index = cycle * len(self.mission.points) + point_index
 
         for attempt in range(1, attempts + 1):
+            if self.state == "stopping":
+                nav_state = "canceled"
+                break
             nav_state = self.navigator.navigate_to_point(
                 self._to_navigation_point(point),
                 timeout_s=self.config.goal_reached_timeout_s,
@@ -274,15 +304,19 @@ class MeasurementRunExecutor:
                 break
 
         if nav_state != "succeeded":
+            error = "run_stopped" if self._cancel_requested and nav_state == "canceled" else f"navigation_failed:{nav_state}"
+            status: PointExecutionStatus = "skipped" if self._cancel_requested and nav_state == "canceled" else "failed"
+            measurement_status = "skipped"
+            
             record = PointExecutionRecord(
                 index=global_index,
                 point_id=point.id,
                 point_name=point.name,
-                status="failed",
+                status=status,
                 navigation_state=nav_state,
                 navigation_attempts=attempts,
                 measurement_result=None,
-                error=f"navigation_failed:{nav_state}",
+                error=error,
             )
             self._persist_point_log(
                 point=point,
@@ -292,7 +326,7 @@ class MeasurementRunExecutor:
                 navigation_attempts=attempts,
                 point_started_at=point_started_at,
                 measurement_result=None,
-                measurement_status="skipped",
+                measurement_status=measurement_status,
                 error=record.error,
                 navigation_duration_s=max(0.0, time.time() - point_started_at),
             )
