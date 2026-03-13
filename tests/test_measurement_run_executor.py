@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -63,6 +65,8 @@ def test_executes_points_strictly_in_order_and_persists_context() -> None:
     assert all(item[3] == 42.0 for item in nav.calls)
     assert len(persisted) == 2
     assert persisted[0]["point"]["id"] == "p1"
+    assert persisted[0]["navigation"]["duration_s"] >= 0
+    assert persisted[0]["measurement"]["status"] == "succeeded"
     assert persisted[1]["point"]["id"] == "p2"
 
 
@@ -149,3 +153,86 @@ def test_invalid_transitions_raise() -> None:
         executor.resume()
     with pytest.raises(RuntimeError):
         executor.stop()
+
+
+def test_measurement_service_trigger_receives_point_context() -> None:
+    nav = FakeNavigator(["succeeded"])
+    observed: dict[str, object] = {}
+
+    class Service:
+        def trigger(self, point_context):
+            observed["mission_name"] = point_context.mission_name
+            observed["global_index"] = point_context.global_index
+            observed["point_id"] = point_context.point.id
+            return {"measurement_id": "m-1", "file_ref": "signals/rx/m-1.bin"}
+
+    persisted: list[dict] = []
+    executor = MeasurementRunExecutor(
+        mission=MeasurementMission(name="ctx", points=[_mission().points[0]], repeat=1),
+        navigator=nav,
+        measurement_service=Service(),
+        persist_result=persisted.append,
+    )
+
+    final_state = executor.start()
+
+    assert final_state == "completed"
+    assert observed == {"mission_name": "ctx", "global_index": 0, "point_id": "p1"}
+    assert persisted[0]["measurement"]["id"] == "m-1"
+    assert persisted[0]["measurement"]["file_ref"] == "signals/rx/m-1.bin"
+
+
+def test_writes_point_logs_and_run_summary(tmp_path: Path) -> None:
+    from transceiver.measurement_run_executor import JsonRunLogStore
+
+    nav = FakeNavigator(["succeeded", "timeout"])
+    run_log_store = JsonRunLogStore(tmp_path)
+
+    executor = MeasurementRunExecutor(
+        mission=_mission(),
+        navigator=nav,
+        trigger_measurement=lambda _point: {"measurement_id": "ok-1"},
+        persist_result=lambda _payload: None,
+        run_log_store=run_log_store,
+        config=MeasurementRunExecutorConfig(on_point_error="continue"),
+    )
+
+    final_state = executor.start()
+
+    assert final_state == "completed"
+    point_logs = sorted(tmp_path.glob("point-*.json"))
+    assert len(point_logs) == 2
+
+    first_payload = json.loads(point_logs[0].read_text(encoding="utf-8"))
+    assert first_payload["timestamps"]["start"] <= first_payload["timestamps"]["end"]
+    assert first_payload["measurement"]["status"] == "succeeded"
+
+    second_payload = json.loads(point_logs[1].read_text(encoding="utf-8"))
+    assert second_payload["measurement"]["status"] == "skipped"
+    assert second_payload["error"] == "navigation_failed:timeout"
+
+    summary_payload = json.loads((tmp_path / "run-summary.json").read_text(encoding="utf-8"))
+    assert summary_payload["total_points"] == 2
+    assert summary_payload["succeeded_points"] == 1
+    assert summary_payload["failed_points"] == 1
+
+
+def test_persist_run_summary_includes_abort_reason() -> None:
+    nav = FakeNavigator(["timeout"])
+    summaries: list[dict] = []
+
+    executor = MeasurementRunExecutor(
+        mission=MeasurementMission(name="summary", points=[_mission().points[0]], repeat=1),
+        navigator=nav,
+        trigger_measurement=lambda _point: {"ok": True},
+        persist_result=lambda _payload: None,
+        persist_run_summary=summaries.append,
+        config=MeasurementRunExecutorConfig(on_point_error="stop"),
+    )
+
+    final_state = executor.start()
+
+    assert final_state == "failed"
+    assert len(summaries) == 1
+    assert summaries[0]["executor_state"] == "failed"
+    assert summaries[0]["abort_reason"] == "navigation_failed:timeout"
