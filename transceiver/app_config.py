@@ -52,6 +52,7 @@ class MissionRuntimeConfig:
     robot_host: str = "ole@192.168.10.10"
     ros2_namespace: str = ""
     ros2_action_name: str = "/navigate_to_pose"
+    remote_ros_env_cmd: str = ""
     remote_ros_setup: str = ""
     goal_acceptance_timeout_s: float = 8.0
     goal_reached_timeout_s: float = 120.0
@@ -64,6 +65,7 @@ class MissionRuntimeConfig:
             robot_host=os.getenv("TRANSCEIVER_ROBOT_HOST", cls.robot_host),
             ros2_namespace=os.getenv("TRANSCEIVER_ROS2_NAMESPACE", cls.ros2_namespace),
             ros2_action_name=os.getenv("TRANSCEIVER_ROS2_ACTION_NAME", cls.ros2_action_name),
+            remote_ros_env_cmd=os.getenv("TRANSCEIVER_REMOTE_ROS_ENV_CMD", cls.remote_ros_env_cmd),
             remote_ros_setup=os.getenv("TRANSCEIVER_REMOTE_ROS_SETUP", cls.remote_ros_setup),
             goal_acceptance_timeout_s=_env_float(
                 "TRANSCEIVER_NAV_GOAL_ACCEPT_TIMEOUT_S",

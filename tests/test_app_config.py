@@ -11,6 +11,20 @@ def test_mission_runtime_config_reads_remote_ros_setup_from_env(monkeypatch) -> 
     assert config.remote_ros_setup == "/opt/ros/humble/setup.bash"
 
 
+def test_mission_runtime_config_reads_remote_ros_env_cmd_from_env(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "TRANSCEIVER_REMOTE_ROS_ENV_CMD",
+        "source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash",
+    )
+
+    config = MissionRuntimeConfig.from_env()
+
+    assert (
+        config.remote_ros_env_cmd
+        == "source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash"
+    )
+
+
 def test_mission_runtime_config_reads_values_from_dotenv(tmp_path, monkeypatch) -> None:
     dotenv_file = tmp_path / ".env"
     dotenv_file.write_text(

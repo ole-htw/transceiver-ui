@@ -366,6 +366,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 robot_host=self._runtime_config.robot_host,
                 ros2_namespace=self._runtime_config.ros2_namespace,
                 ros2_action_name=self._runtime_config.ros2_action_name,
+                remote_ros_env_cmd=self._runtime_config.remote_ros_env_cmd,
                 remote_ros_setup=self._runtime_config.remote_ros_setup,
                 goal_acceptance_timeout_s=self._runtime_config.goal_acceptance_timeout_s,
                 goal_reached_timeout_s=self._runtime_config.goal_reached_timeout_s,
