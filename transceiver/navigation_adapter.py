@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import shlex
 import subprocess
 import time
 from collections.abc import Callable
@@ -54,6 +55,7 @@ class NavigationAdapterConfig:
     robot_host: str = "ole@192.168.10.10"
     ros2_namespace: str = ""
     ros2_action_name: str = "/navigate_to_pose"
+    remote_ros_setup: str = ""
     goal_acceptance_timeout_s: float = 8.0
     goal_reached_timeout_s: float = 120.0
     retry_attempts: int = 0
@@ -146,15 +148,23 @@ class Ros2CliNavigationTransport:
             namespace=config.ros2_namespace,
             action_name=config.ros2_action_name,
         )
-        remote_cmd = [
-            "ros2",
-            "action",
-            "send_goal",
-            resolved_action,
-            cls.action_type,
-            payload,
-            "--feedback",
-        ]
+        ros2_cmd = " ".join(
+            [
+                "ros2",
+                "action",
+                "send_goal",
+                shlex.quote(resolved_action),
+                shlex.quote(cls.action_type),
+                shlex.quote(payload),
+                "--feedback",
+            ]
+        )
+        remote_setup = config.remote_ros_setup.strip()
+        remote_cmd = (
+            f"source {shlex.quote(remote_setup)} && {ros2_cmd}"
+            if remote_setup
+            else ros2_cmd
+        )
         return [
             "ssh",
             "-o",
@@ -170,7 +180,9 @@ class Ros2CliNavigationTransport:
             "-o",
             f"ConnectTimeout={int(max(1.0, config.goal_acceptance_timeout_s))}",
             config.robot_host,
-            *remote_cmd,
+            "bash",
+            "-lc",
+            remote_cmd,
         ]
 
     def cancel_current_goal(self) -> None:
