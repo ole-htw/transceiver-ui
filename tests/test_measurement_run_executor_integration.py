@@ -142,7 +142,7 @@ def test_timeout_retry_and_stop_policy() -> None:
     assert final_state == "failed"
     assert len(navigator.calls) == 2
     assert executor.records[0].status == "failed"
-    assert executor.records[0].error == "navigation_failed:timeout"
+    assert executor.records[0].error == "navigation_failed.timeout"
 
 
 def test_stop_and_resume_mid_run() -> None:
@@ -174,6 +174,6 @@ def test_stop_and_resume_mid_run() -> None:
     gate.set()
     thread.join(timeout=2)
 
-    assert executor.state == "completed"
+    assert executor.state == "cancelled"
     assert navigator.cancel_calls == 1
     assert 1 <= len(executor.records) < 3

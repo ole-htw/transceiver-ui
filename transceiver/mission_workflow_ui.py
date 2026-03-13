@@ -22,6 +22,30 @@ from .measurement_run_executor import (
 from .navigation_adapter import NavigationAdapter, NavigationAdapterConfig, NavigationEvent
 
 
+def _map_executor_state_to_ui_text(state: str, completion_substatus: str | None = None) -> str:
+    mapping = {
+        "completed": "Abgeschlossen",
+        "interrupted": "Unterbrochen",
+        "failed": "Fehlgeschlagen",
+        "cancelled": "Abgebrochen",
+    }
+    base = mapping.get(state, state)
+    if state == "completed" and completion_substatus:
+        return f"{base} ({completion_substatus})"
+    return base
+
+
+def _operator_error_code(event_type: str, detail: str) -> str:
+    normalized = detail.lower()
+    if event_type == "connection_error" and "dds payload" in normalized:
+        return "navigation_failed.connection_error.dds_payload_mismatch"
+    if event_type == "connection_error":
+        return "navigation_failed.connection_error"
+    if event_type == "timeout":
+        return "navigation_failed.timeout"
+    if event_type == "aborted":
+        return "navigation_failed.aborted"
+    return f"navigation_failed.{event_type}"
 
 class _UiNavigator:
     def __init__(self, *, adapter: NavigationAdapter, on_status, on_operator_message) -> None:
@@ -35,12 +59,13 @@ class _UiNavigator:
         def _on_event(event: NavigationEvent) -> None:
             if event.type in {"connection_error", "aborted", "timeout"}:
                 detail = event.message or 'ohne Details'
+                error_code = _operator_error_code(event.type, detail)
                 if event.type == "connection_error":
                     detail = (
                         f"{detail} | ROS-Umgebung prüfen (TRANSCEIVER_REMOTE_ROS_ENV_CMD / TRANSCEIVER_REMOTE_ROS_SETUP)"
                     )
                 self._on_operator_message(
-                    f"Navigation {event.type} (Versuch {event.attempt}): {detail}"
+                    f"Navigation {event.type} (Versuch {event.attempt}) [{error_code}]: {detail}"
                 )
             if event.type == "succeeded":
                 self._on_status("navigation", "succeeded")
@@ -501,7 +526,20 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _on_run_finished(self, state: str) -> None:
         self._set_run_buttons(running=False, paused=False)
-        self._append_validation(f"Run beendet: {state}")
+        completion_substatus = None
+        if self._run_log_dir is not None:
+            summary_path = self._run_log_dir / "run-summary.json"
+            if summary_path.exists():
+                try:
+                    import json
+
+                    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                    completion_substatus = summary.get("completion_substatus")
+                except Exception:
+                    completion_substatus = None
+        self._append_validation(
+            f"Run beendet: {_map_executor_state_to_ui_text(state, completion_substatus)}"
+        )
         if self._records:
             last_error = self._records[-1].get("error")
             if last_error:

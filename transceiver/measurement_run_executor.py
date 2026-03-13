@@ -11,7 +11,16 @@ from typing import Any, Literal, Protocol
 from transceiver.measurement_mission import MeasurementMission, MeasurementPoint
 from transceiver.navigation_adapter import NavigationPoint, TerminalNavigationState
 
-ExecutorState = Literal["idle", "running", "paused", "stopping", "completed", "failed"]
+ExecutorState = Literal[
+    "idle",
+    "running",
+    "paused",
+    "stopping",
+    "completed",
+    "failed",
+    "cancelled",
+    "interrupted",
+]
 OnPointError = Literal["continue", "stop"]
 PointExecutionStatus = Literal["succeeded", "failed", "skipped"]
 
@@ -180,8 +189,10 @@ class MeasurementRunExecutor:
 
     def start(self) -> ExecutorState:
         abort_reason: str | None = None
+        completion_substatus: str | None = None
+        expected_points = len(self.mission.points) * (self.mission.repeat or 1)
         with self._state_lock:
-            if self._state not in {"idle", "completed", "failed"}:
+            if self._state not in {"idle", "completed", "failed", "cancelled", "interrupted"}:
                 raise RuntimeError(f"Cannot start from state '{self._state}'")
             self._state = "running"
 
@@ -191,14 +202,24 @@ class MeasurementRunExecutor:
         for cycle in range(repeats):
             for point_index, point in enumerate(self.mission.points):
                 if not self._wait_until_resumed_or_stopped():
-                    abort_reason = "stopped"
-                    self._write_run_summary(abort_reason=abort_reason)
-                    return self._finalize_stop()
+                    abort_reason = "run_cancelled.manual_stop"
+                    final_state = self._finalize_stop()
+                    self._write_run_summary(
+                        abort_reason=abort_reason,
+                        completion_substatus=completion_substatus,
+                        expected_points=expected_points,
+                    )
+                    return final_state
 
                 if self.state == "stopping":
-                    abort_reason = "stopped"
-                    self._write_run_summary(abort_reason=abort_reason)
-                    return self._finalize_stop()
+                    abort_reason = "run_cancelled.manual_stop"
+                    final_state = self._finalize_stop()
+                    self._write_run_summary(
+                        abort_reason=abort_reason,
+                        completion_substatus=completion_substatus,
+                        expected_points=expected_points,
+                    )
+                    return final_state
 
                 record = self._execute_point(
                     point=point,
@@ -211,7 +232,11 @@ class MeasurementRunExecutor:
                     with self._state_lock:
                         self._state = "failed"
                     abort_reason = record.error
-                    self._write_run_summary(abort_reason=abort_reason)
+                    self._write_run_summary(
+                        abort_reason=abort_reason,
+                        completion_substatus=completion_substatus,
+                        expected_points=expected_points,
+                    )
                     return self.state
 
                 if self.mission.wait_after_arrival_s > 0 and self.state == "running":
@@ -219,11 +244,24 @@ class MeasurementRunExecutor:
 
         with self._state_lock:
             if self._state == "stopping":
-                abort_reason = "stopped"
-                self._write_run_summary(abort_reason=abort_reason)
-                return self._finalize_stop()
-            self._state = "completed"
-        self._write_run_summary(abort_reason=abort_reason)
+                if len(self.records) >= expected_points:
+                    self._state = "completed"
+                    completion_substatus = "completed_with_abort_request"
+                    abort_reason = "run_cancelled.manual_stop_after_completion"
+                else:
+                    abort_reason = "run_cancelled.manual_stop"
+                    self._state = "cancelled"
+            elif self._cancel_requested:
+                self._state = "completed"
+                completion_substatus = "completed_with_abort_request"
+                abort_reason = "run_cancelled.manual_stop_after_completion"
+            else:
+                self._state = "completed"
+        self._write_run_summary(
+            abort_reason=abort_reason,
+            completion_substatus=completion_substatus,
+            expected_points=expected_points,
+        )
         return self.state
 
     @staticmethod
@@ -271,7 +309,7 @@ class MeasurementRunExecutor:
 
     def _finalize_stop(self) -> ExecutorState:
         with self._state_lock:
-            self._state = "completed"
+            self._state = "cancelled"
             return self._state
 
     def _wait_until_resumed_or_stopped(self) -> bool:
@@ -303,8 +341,15 @@ class MeasurementRunExecutor:
             if nav_state == "succeeded":
                 break
 
+        if self._cancel_requested and nav_state == "succeeded":
+            nav_state = "canceled"
+
         if nav_state != "succeeded":
-            error = "run_stopped" if self._cancel_requested and nav_state == "canceled" else f"navigation_failed:{nav_state}"
+            error = (
+                "run_cancelled.manual_stop"
+                if self._cancel_requested and nav_state == "canceled"
+                else f"navigation_failed.{nav_state}"
+            )
             status: PointExecutionStatus = "skipped" if self._cancel_requested and nav_state == "canceled" else "failed"
             measurement_status = "skipped"
             
@@ -333,6 +378,31 @@ class MeasurementRunExecutor:
             return record
 
         navigation_done_at = time.time()
+        if self._cancel_requested:
+            record = PointExecutionRecord(
+                index=global_index,
+                point_id=point.id,
+                point_name=point.name,
+                status="skipped",
+                navigation_state="canceled",
+                navigation_attempts=attempt,
+                measurement_result=None,
+                error="run_cancelled.manual_stop",
+            )
+            self._persist_point_log(
+                point=point,
+                cycle=cycle,
+                global_index=global_index,
+                navigation_state="canceled",
+                navigation_attempts=attempt,
+                point_started_at=point_started_at,
+                measurement_result=None,
+                measurement_status="skipped",
+                error=record.error,
+                navigation_duration_s=max(0.0, navigation_done_at - point_started_at),
+            )
+            return record
+
         try:
             measurement_result = self.measurement_service.trigger(
                 PointExecutionContext(
@@ -452,17 +522,32 @@ class MeasurementRunExecutor:
         if self.run_log_store is not None:
             self.run_log_store.write_point_log(payload)
 
-    def _write_run_summary(self, *, abort_reason: str | None) -> None:
+    def _write_run_summary(
+        self,
+        *,
+        abort_reason: str | None,
+        completion_substatus: str | None,
+        expected_points: int,
+    ) -> None:
         total = len(self.records)
         succeeded = sum(1 for record in self.records if record.status == "succeeded")
         failed = sum(1 for record in self.records if record.status == "failed")
+        skipped = sum(1 for record in self.records if record.status == "skipped")
+        points_per_cycle = len(self.mission.points)
+        completed_cycles = 0
+        if points_per_cycle > 0 and self.state == "completed":
+            completed_cycles = min(total // points_per_cycle, self.mission.repeat or 1)
         summary = {
             "mission": self.mission.name,
             "executor_state": self.state,
             "total_points": total,
+            "expected_points": expected_points,
             "succeeded_points": succeeded,
             "failed_points": failed,
+            "skipped_points": skipped,
+            "completed_cycles": completed_cycles,
             "abort_reason": abort_reason,
+            "completion_substatus": completion_substatus,
         }
         if self.persist_run_summary is not None:
             self.persist_run_summary(summary)

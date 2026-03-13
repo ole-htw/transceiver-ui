@@ -141,9 +141,74 @@ def test_state_transitions_start_pause_resume_stop() -> None:
     executor.stop()
     thread.join(timeout=2)
 
-    assert executor.state == "completed"
+    assert executor.state == "cancelled"
     assert nav.cancel_calls == 1
 
+
+
+
+def test_manual_stop_during_navigation_results_in_cancelled_state() -> None:
+    class BlockingNavigator(FakeNavigator):
+        def __init__(self) -> None:
+            super().__init__(["canceled"])
+            self._released = threading.Event()
+
+        def navigate_to_point(self, point, *, timeout_s: float):
+            self.calls.append((point.x, point.y, point.qz, timeout_s))
+            self._released.wait(timeout=1.0)
+            return "canceled"
+
+        def cancel_current_goal(self) -> None:
+            super().cancel_current_goal()
+            self._released.set()
+
+    nav = BlockingNavigator()
+    summaries: list[dict] = []
+    executor = MeasurementRunExecutor(
+        mission=_mission(),
+        navigator=nav,
+        trigger_measurement=lambda _point: {"ok": True},
+        persist_result=lambda _payload: None,
+        persist_run_summary=summaries.append,
+    )
+
+    thread = threading.Thread(target=executor.start)
+    thread.start()
+    time.sleep(0.05)
+    executor.stop()
+    thread.join(timeout=2)
+
+    assert executor.state == "cancelled"
+    assert summaries[0]["executor_state"] == "cancelled"
+    assert summaries[0]["abort_reason"] == "run_cancelled.manual_stop"
+    assert summaries[0]["completed_cycles"] == 0
+
+
+def test_manual_stop_after_last_point_uses_completed_with_abort_substatus() -> None:
+    class DelayedMeasurementService:
+        def trigger(self, point_context):
+            time.sleep(0.2)
+            return {"measurement_id": point_context.global_index}
+
+    nav = FakeNavigator(["succeeded"])
+    summaries: list[dict] = []
+    executor = MeasurementRunExecutor(
+        mission=MeasurementMission(name="single", points=[_mission().points[0]], repeat=1),
+        navigator=nav,
+        measurement_service=DelayedMeasurementService(),
+        persist_result=lambda _payload: None,
+        persist_run_summary=summaries.append,
+    )
+
+    thread = threading.Thread(target=executor.start)
+    thread.start()
+    time.sleep(0.05)
+    executor.stop()
+    thread.join(timeout=2)
+
+    assert executor.state == "completed"
+    assert summaries[0]["completion_substatus"] == "completed_with_abort_request"
+    assert summaries[0]["abort_reason"] == "run_cancelled.manual_stop_after_completion"
 
 def test_invalid_transitions_raise() -> None:
     executor = MeasurementRunExecutor(
@@ -213,12 +278,14 @@ def test_writes_point_logs_and_run_summary(tmp_path: Path) -> None:
 
     second_payload = json.loads(point_logs[1].read_text(encoding="utf-8"))
     assert second_payload["measurement"]["status"] == "skipped"
-    assert second_payload["error"] == "navigation_failed:timeout"
+    assert second_payload["error"] == "navigation_failed.timeout"
 
     summary_payload = json.loads((tmp_path / "run-summary.json").read_text(encoding="utf-8"))
     assert summary_payload["total_points"] == 2
     assert summary_payload["succeeded_points"] == 1
     assert summary_payload["failed_points"] == 1
+    assert summary_payload["skipped_points"] == 0
+    assert summary_payload["completed_cycles"] == 1
 
 
 def test_persist_run_summary_includes_abort_reason() -> None:
@@ -239,7 +306,7 @@ def test_persist_run_summary_includes_abort_reason() -> None:
     assert final_state == "failed"
     assert len(summaries) == 1
     assert summaries[0]["executor_state"] == "failed"
-    assert summaries[0]["abort_reason"] == "navigation_failed:timeout"
+    assert summaries[0]["abort_reason"] == "navigation_failed.timeout"
 
 
 def test_marks_orphaned_runs_as_interrupted(tmp_path: Path) -> None:
