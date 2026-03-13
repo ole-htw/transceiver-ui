@@ -6398,9 +6398,14 @@ class TransceiverUI(ctk.CTk):
 
     # ----- Preset handling --------------------------------------------------
     def _get_current_params(self) -> dict:
+        upsampling_target_rate = (
+            self.upsampling_target_rate_entry.get()
+            or self.upsampling_target_rate_var.get()
+        )
         return {
             "waveform": self.wave_var.get(),
             "fs": self.fs_entry.get(),
+            "generate_fs": self.fs_entry.get(),
             "f": self.f_entry.get(),
             "f1": self.f1_entry.get(),
             "q": self.q_entry.get(),
@@ -6413,8 +6418,8 @@ class TransceiverUI(ctk.CTk):
             "zeros": self.zeros_var.get(),
             "zeros_enabled": self.zeros_enable.get(),
             "upsampling_enabled": bool(self.upsampling_enable.get()),
-            "upsampling_target_rate": self.upsampling_target_rate_entry.get()
-            or self.upsampling_target_rate_var.get(),
+            "upsampling_target_rate": upsampling_target_rate,
+            "target_fs": upsampling_target_rate,
             "amplitude": self.amp_entry.get(),
             "ofdm_nfft": self.ofdm_nfft_entry.get(),
             "ofdm_cp": self.ofdm_cp_entry.get(),
@@ -6477,8 +6482,11 @@ class TransceiverUI(ctk.CTk):
         try:
             self.wave_var.set(params.get("waveform", "sinus"))
             self.update_waveform_fields()
+            fs_value = params.get("fs")
+            if fs_value is None:
+                fs_value = params.get("generate_fs", "")
             self.fs_entry.delete(0, tk.END)
-            self.fs_entry.insert(0, params.get("fs", ""))
+            self.fs_entry.insert(0, fs_value)
             self.f_entry.delete(0, tk.END)
             self.f_entry.insert(0, params.get("f", ""))
             self.f1_entry.delete(0, tk.END)
@@ -6558,6 +6566,8 @@ class TransceiverUI(ctk.CTk):
                 upsampling_target_rate_value = params.get("upsampling_target_fs")
             if upsampling_target_rate_value is None:
                 upsampling_target_rate_value = params.get("upsampling_rate")
+            if upsampling_target_rate_value is None:
+                upsampling_target_rate_value = params.get("target_fs")
             upsampling_target_rate = str(upsampling_target_rate_value or "")
             self.upsampling_target_rate_var.set(upsampling_target_rate)
             self.upsampling_target_rate_entry.delete(0, tk.END)
