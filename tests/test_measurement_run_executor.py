@@ -9,6 +9,7 @@ import pytest
 
 from transceiver.measurement_mission import MeasurementMission, MeasurementPoint
 from transceiver.measurement_run_executor import (
+    JsonRunLogStore,
     MeasurementRunExecutor,
     MeasurementRunExecutorConfig,
 )
@@ -18,6 +19,7 @@ class FakeNavigator:
     def __init__(self, responses: list[str]) -> None:
         self.responses = responses
         self.calls: list[tuple[float, float, float, float]] = []
+        self.cancel_calls = 0
         self._idx = 0
 
     def navigate_to_point(self, point, *, timeout_s: float):
@@ -25,6 +27,9 @@ class FakeNavigator:
         response = self.responses[min(self._idx, len(self.responses) - 1)]
         self._idx += 1
         return response
+
+    def cancel_current_goal(self) -> None:
+        self.cancel_calls += 1
 
 
 def _mission() -> MeasurementMission:
@@ -137,6 +142,7 @@ def test_state_transitions_start_pause_resume_stop() -> None:
     thread.join(timeout=2)
 
     assert executor.state == "completed"
+    assert nav.cancel_calls == 1
 
 
 def test_invalid_transitions_raise() -> None:
@@ -183,8 +189,6 @@ def test_measurement_service_trigger_receives_point_context() -> None:
 
 
 def test_writes_point_logs_and_run_summary(tmp_path: Path) -> None:
-    from transceiver.measurement_run_executor import JsonRunLogStore
-
     nav = FakeNavigator(["succeeded", "timeout"])
     run_log_store = JsonRunLogStore(tmp_path)
 
@@ -236,3 +240,21 @@ def test_persist_run_summary_includes_abort_reason() -> None:
     assert len(summaries) == 1
     assert summaries[0]["executor_state"] == "failed"
     assert summaries[0]["abort_reason"] == "navigation_failed:timeout"
+
+
+def test_marks_orphaned_runs_as_interrupted(tmp_path: Path) -> None:
+    run_dir = tmp_path / "20240101-000000"
+    run_dir.mkdir(parents=True)
+    summary_path = run_dir / "run-summary.json"
+    summary_path.write_text(
+        json.dumps({"executor_state": "running", "abort_reason": None}),
+        encoding="utf-8",
+    )
+
+    store = JsonRunLogStore(tmp_path / "20240101-000001")
+    changed = store.mark_interrupted_runs()
+
+    assert changed == 1
+    payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert payload["executor_state"] == "interrupted"
+    assert payload["abort_reason"] == "app_restart"

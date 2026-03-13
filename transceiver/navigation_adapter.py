@@ -52,6 +52,8 @@ class NavigationPoint:
 @dataclass(frozen=True)
 class NavigationAdapterConfig:
     robot_host: str = "ole@192.168.10.10"
+    ros2_namespace: str = ""
+    ros2_action_name: str = "/navigate_to_pose"
     goal_acceptance_timeout_s: float = 8.0
     goal_reached_timeout_s: float = 120.0
     retry_attempts: int = 0
@@ -100,7 +102,6 @@ class Ros2CliNavigationTransport:
     a CLI payload at the transport boundary.
     """
 
-    action_name = "/navigate_to_pose"
     action_type = "nav2_msgs/action/NavigateToPose"
 
     def __init__(self) -> None:
@@ -128,19 +129,49 @@ class Ros2CliNavigationTransport:
             }
         }
 
+    @staticmethod
+    def _resolve_action_name(*, namespace: str, action_name: str) -> str:
+        ns = namespace.strip("/")
+        action = action_name.strip()
+        if not action.startswith("/"):
+            action = f"/{action}"
+        if not ns:
+            return action
+        return f"/{ns}{action}"
+
     @classmethod
-    def _build_command(cls, point: NavigationPoint, robot_host: str) -> list[str]:
+    def _build_command(cls, point: NavigationPoint, config: NavigationAdapterConfig) -> list[str]:
         payload = json.dumps(cls.build_goal_payload(point), separators=(",", ":"))
+        resolved_action = cls._resolve_action_name(
+            namespace=config.ros2_namespace,
+            action_name=config.ros2_action_name,
+        )
         remote_cmd = [
             "ros2",
             "action",
             "send_goal",
-            cls.action_name,
+            resolved_action,
             cls.action_type,
             payload,
             "--feedback",
         ]
-        return ["ssh", robot_host, *remote_cmd]
+        return [
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "PasswordAuthentication=no",
+            "-o",
+            "KbdInteractiveAuthentication=no",
+            "-o",
+            "NumberOfPasswordPrompts=0",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            f"ConnectTimeout={int(max(1.0, config.goal_acceptance_timeout_s))}",
+            config.robot_host,
+            *remote_cmd,
+        ]
 
     def cancel_current_goal(self) -> None:
         process = self._last_process
@@ -154,7 +185,7 @@ class Ros2CliNavigationTransport:
         config: NavigationAdapterConfig,
         on_feedback: Callable[[dict[str, Any]], None],
     ) -> NavigationOutcome:
-        cmd = self._build_command(point, config.robot_host)
+        cmd = self._build_command(point, config)
         try:
             self._last_process = subprocess.Popen(
                 cmd,
@@ -223,6 +254,10 @@ class NavigationAdapter:
     ) -> None:
         self.transport: NavigationTransport = transport or Ros2CliNavigationTransport()
         self.config = config or NavigationAdapterConfig()
+
+
+    def cancel_current_goal(self) -> None:
+        self.transport.cancel_current_goal()
 
     def navigate_to_point(
         self,
