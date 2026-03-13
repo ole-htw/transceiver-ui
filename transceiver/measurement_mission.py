@@ -32,9 +32,23 @@ class MeasurementMission:
 
 
 def _require_finite_number(value: Any, field_name: str) -> float:
-    if not isinstance(value, (int, float)):
+    if isinstance(value, bool):
         raise ValueError(f"'{field_name}' must be a numeric value")
-    number = float(value)
+
+    parsed: Any = value
+    if isinstance(value, str):
+        normalized = value.strip().replace(",", ".")
+        if not normalized:
+            raise ValueError(f"'{field_name}' must be a numeric value")
+        try:
+            parsed = float(normalized)
+        except ValueError as exc:
+            raise ValueError(f"'{field_name}' must be a numeric value") from exc
+
+    if not isinstance(parsed, (int, float)):
+        raise ValueError(f"'{field_name}' must be a numeric value")
+
+    number = float(parsed)
     if not math.isfinite(number):
         raise ValueError(f"'{field_name}' must be finite")
     return number
