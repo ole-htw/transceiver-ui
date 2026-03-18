@@ -194,6 +194,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         }.items():
             self.points_table.heading(key, text=title)
             self.points_table.column(key, stretch=True, width=95)
+        self.points_table.bind("<<TreeviewSelect>>", self._on_points_table_select)
 
         self.validation_box = ctk.CTkTextbox(self, height=110)
         self.validation_box.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 6))
@@ -210,18 +211,18 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         ctk.CTkLabel(map_frame, textvariable=self.map_status_var, anchor="w").grid(
             row=1, column=0, sticky="ew", padx=8, pady=(0, 6)
         )
-        self.map_preview_label = tk.Label(
+        self.map_preview_canvas = tk.Canvas(
             map_frame,
-            text="Karte nicht konfiguriert.",
-            anchor="center",
-            justify="center",
             bg="#1d1f23",
-            fg="#e6e6e6",
-            height=12,
+            highlightthickness=0,
+            height=260,
         )
-        self.map_preview_label.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self.map_preview_canvas.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
         self._map_image_original: tk.PhotoImage | None = None
         self._map_image_preview: tk.PhotoImage | None = None
+        self._map_canvas_image_id: int | None = None
+        self._map_marker_ids: list[int] = []
+        self._selected_point_index: int | None = None
 
         controls = ctk.CTkFrame(self)
         controls.grid(row=5, column=0, sticky="ew", padx=10, pady=(0, 6))
@@ -325,12 +326,14 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
     def _refresh_map_section(self) -> None:
         self._map_image_original = None
         self._map_image_preview = None
+        self._map_canvas_image_id = None
+        self._map_marker_ids = []
 
         mission = self._mission
         map_config = mission.map_config if mission is not None else None
         if map_config is None:
             self.map_status_var.set("Karte nicht konfiguriert (map_config fehlt).")
-            self.map_preview_label.configure(image="", text="Kein Kartenbild konfiguriert.")
+            self._render_map_placeholder("Kein Kartenbild konfiguriert.")
             return
 
         image_path = Path(map_config.image).expanduser()
@@ -339,17 +342,14 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
         if not image_path.exists():
             self.map_status_var.set(f"Kartenbild nicht gefunden: {image_path}")
-            self.map_preview_label.configure(
-                image="",
-                text="Kartenbild fehlt.\nBitte map_config.image prüfen.",
-            )
+            self._render_map_placeholder("Kartenbild fehlt.\nBitte map_config.image prüfen.")
             return
 
         try:
             photo = tk.PhotoImage(file=str(image_path))
         except Exception:
             self.map_status_var.set(f"Kartenbild ungültig oder nicht lesbar: {image_path}")
-            self.map_preview_label.configure(image="", text="Kartenbild konnte nicht geladen werden.")
+            self._render_map_placeholder("Kartenbild konnte nicht geladen werden.")
             return
 
         max_width = 760
@@ -366,7 +366,105 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.map_status_var.set(
             f"Karte geladen: {image_path.name} ({photo.width()}x{photo.height()} px)"
         )
-        self.map_preview_label.configure(image=preview, text="")
+        self._draw_map_preview()
+
+    def _render_map_placeholder(self, text: str) -> None:
+        self.map_preview_canvas.delete("all")
+        self.map_preview_canvas.create_text(
+            20,
+            20,
+            text=text,
+            fill="#e6e6e6",
+            anchor="nw",
+            justify="left",
+        )
+
+    def _draw_map_preview(self) -> None:
+        preview = self._map_image_preview
+        if preview is None:
+            return
+        self.map_preview_canvas.delete("all")
+        self.map_preview_canvas.configure(
+            width=preview.width(),
+            height=preview.height(),
+        )
+        self._map_canvas_image_id = self.map_preview_canvas.create_image(0, 0, anchor="nw", image=preview)
+        self._draw_mission_markers()
+
+    def _draw_mission_markers(self) -> None:
+        self._map_marker_ids = []
+        mission = self._mission
+        preview = self._map_image_preview
+        original = self._map_image_original
+        if mission is None or mission.map_config is None or preview is None or original is None:
+            return
+
+        scale_x = preview.width() / original.width()
+        scale_y = preview.height() / original.height()
+
+        for index, point in enumerate(self._mission_points):
+            pixel_coordinates = self._world_to_preview_pixel(
+                x=point.x,
+                y=point.y,
+                image_height=original.height(),
+                scale_x=scale_x,
+                scale_y=scale_y,
+            )
+            if pixel_coordinates is None:
+                continue
+            px, py = pixel_coordinates
+            marker_id = self.map_preview_canvas.create_oval(
+                px - 4,
+                py - 4,
+                px + 4,
+                py + 4,
+                fill="#00d26a",
+                outline="#0d1016",
+                width=1,
+            )
+            self._map_marker_ids.append(marker_id)
+            if index == self._selected_point_index:
+                self._highlight_marker(marker_id)
+
+    def _world_to_preview_pixel(
+        self,
+        *,
+        x: float,
+        y: float,
+        image_height: int,
+        scale_x: float,
+        scale_y: float,
+    ) -> tuple[float, float] | None:
+        mission = self._mission
+        if mission is None or mission.map_config is None:
+            return None
+
+        origin_x, origin_y, _origin_yaw = mission.map_config.origin
+        resolution = mission.map_config.resolution
+        if resolution <= 0:
+            return None
+
+        map_pixel_x = (x - origin_x) / resolution
+        map_pixel_y = float(image_height) - ((y - origin_y) / resolution)
+        return (map_pixel_x * scale_x, map_pixel_y * scale_y)
+
+    def _on_points_table_select(self, _event: tk.Event) -> None:
+        selected = self.points_table.selection()
+        if not selected:
+            self._selected_point_index = None
+            self._draw_map_preview()
+            return
+        selected_index = self.points_table.index(selected[0])
+        self._selected_point_index = selected_index if selected_index >= 0 else None
+        self._draw_map_preview()
+
+    def _highlight_marker(self, marker_id: int) -> None:
+        self.map_preview_canvas.itemconfigure(
+            marker_id,
+            fill="#ffd54f",
+            outline="#ff8f00",
+            width=2,
+        )
 
     def _generate_unique_point_id(self) -> str:
         used_ids = {point.id for point in self._mission_points if point.id}
@@ -489,6 +587,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                     "-" if point.yaw is None else f"{point.yaw:.3f}",
                 ),
             )
+        self._draw_map_preview()
         self._refresh_start_point_options()
 
     def _refresh_start_point_options(self) -> None:
