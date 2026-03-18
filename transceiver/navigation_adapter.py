@@ -162,10 +162,6 @@ class Ros2CliNavigationTransport:
     @classmethod
     def _build_command(cls, point: NavigationPoint, config: NavigationAdapterConfig) -> list[str]:
         resolved_namespace = config.ros2_namespace.strip("/")
-        if not resolved_namespace:
-            raise ValueError(
-                "ROS environment precheck failed: ros2 namespace is empty (set ros2_namespace/TRANSCEIVER_ROS2_NAMESPACE)"
-            )
 
         payload = json.dumps(cls.build_goal_payload(point), separators=(",", ":"))
         resolved_action = cls._resolve_action_name(

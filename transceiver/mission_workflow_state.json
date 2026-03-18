@@ -1,0 +1,14 @@
+{
+  "name": "mission-ui",
+  "repeat": 1,
+  "points": [
+    {
+      "id": "0",
+      "name": null,
+      "x": 2.3,
+      "y": 0.0,
+      "z": 0.0,
+      "yaw": 1.0
+    }
+  ]
+}
