@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import shlex
+import signal
 import subprocess
 import time
 from collections import deque
@@ -237,8 +238,27 @@ class Ros2CliNavigationTransport:
 
     def cancel_current_goal(self) -> None:
         process = self._last_process
-        if process and process.poll() is None:
+        if process is None or process.poll() is not None:
+            return
+
+        try:
+            process.send_signal(signal.SIGINT)
+            process.wait(timeout=1.5)
+            return
+        except Exception:
+            pass
+
+        try:
             process.terminate()
+            process.wait(timeout=1.0)
+            return
+        except Exception:
+            pass
+
+        try:
+            process.kill()
+        except Exception:
+            pass
 
     def send_goal(
         self,

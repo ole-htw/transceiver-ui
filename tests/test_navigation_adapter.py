@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import signal
 
 from transceiver.navigation_adapter import (
     NavigationAdapter,
@@ -297,3 +298,72 @@ def test_send_goal_returns_precheck_error_message(monkeypatch) -> None:
     assert outcome.message is not None
     assert outcome.message.startswith("ROS environment precheck failed before sending goal")
     assert "ROS_DOMAIN_ID is not set" in outcome.message
+
+
+def test_cancel_current_goal_prefers_sigint_before_force_stopping() -> None:
+    class _Process:
+        def __init__(self) -> None:
+            self.sent_signals: list[int] = []
+            self.terminate_calls = 0
+            self.kill_calls = 0
+
+        def poll(self):
+            return None
+
+        def send_signal(self, sig: int) -> None:
+            self.sent_signals.append(sig)
+
+        def wait(self, timeout: float) -> int:
+            return 0
+
+        def terminate(self) -> None:
+            self.terminate_calls += 1
+
+        def kill(self) -> None:
+            self.kill_calls += 1
+
+    transport = Ros2CliNavigationTransport()
+    process = _Process()
+    transport._last_process = process
+
+    transport.cancel_current_goal()
+
+    assert process.sent_signals == [signal.SIGINT]
+    assert process.terminate_calls == 0
+    assert process.kill_calls == 0
+
+
+def test_cancel_current_goal_falls_back_to_terminate_and_kill() -> None:
+    class _Process:
+        def __init__(self) -> None:
+            self.sent_signals: list[int] = []
+            self.terminate_calls = 0
+            self.kill_calls = 0
+            self.wait_calls = 0
+
+        def poll(self):
+            return None
+
+        def send_signal(self, sig: int) -> None:
+            self.sent_signals.append(sig)
+            raise TimeoutError("sigint failed")
+
+        def wait(self, timeout: float) -> int:
+            self.wait_calls += 1
+            raise TimeoutError("still running")
+
+        def terminate(self) -> None:
+            self.terminate_calls += 1
+
+        def kill(self) -> None:
+            self.kill_calls += 1
+
+    transport = Ros2CliNavigationTransport()
+    process = _Process()
+    transport._last_process = process
+
+    transport.cancel_current_goal()
+
+    assert process.sent_signals == [signal.SIGINT]
+    assert process.terminate_calls == 1
+    assert process.kill_calls == 1
