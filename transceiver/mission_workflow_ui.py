@@ -154,9 +154,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
         points_editor = ctk.CTkFrame(self)
         points_editor.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
-        for col in range(8):
+        for col in range(10):
             points_editor.columnconfigure(col, weight=0)
-        points_editor.columnconfigure(7, weight=1)
+        points_editor.columnconfigure(9, weight=1)
 
         ctk.CTkLabel(points_editor, text="2) Messpunkt anlegen").grid(row=0, column=0, padx=8, pady=8)
         self.point_name_var = tk.StringVar(value="")
@@ -171,7 +171,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._labeled_entry(points_editor, row=0, column=4, label="Z", variable=self.point_z_var, width=90)
         self._labeled_entry(points_editor, row=0, column=5, label="Yaw", variable=self.point_yaw_var, width=90)
         ctk.CTkButton(points_editor, text="Punkt hinzufügen", command=self._add_point).grid(row=0, column=6, padx=(8, 3))
-        ctk.CTkButton(points_editor, text="Auswahl entfernen", command=self._remove_selected_point).grid(row=0, column=7, padx=(3, 8), sticky="w")
+        ctk.CTkButton(points_editor, text="Auswahl entfernen", command=self._remove_selected_point).grid(row=0, column=7, padx=3)
+        ctk.CTkButton(points_editor, text="▲", width=36, command=self._move_selected_point_up).grid(row=0, column=8, padx=3)
+        ctk.CTkButton(points_editor, text="▼", width=36, command=self._move_selected_point_down).grid(row=0, column=9, padx=(3, 8), sticky="w")
 
         points_table_frame = ctk.CTkFrame(self)
         points_table_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 6))
@@ -318,6 +320,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
         point = mission.points[0]
         self._mission_points.append(point)
+        self._sync_validated_mission_points()
         self._refresh_points_table()
         self._persist_workflow_state()
         self._append_validation(
@@ -332,9 +335,59 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if index < 0 or index >= len(self._mission_points):
             return
         removed = self._mission_points.pop(index)
+        self._sync_validated_mission_points()
         self._refresh_points_table()
         self._persist_workflow_state()
         self._append_validation(f"ℹ️ Punkt entfernt: {removed.id or removed.name}")
+
+    def _move_selected_point_up(self) -> None:
+        selected = self.points_table.selection()
+        if not selected:
+            return
+        index = self.points_table.index(selected[0])
+        if index <= 0 or index >= len(self._mission_points):
+            return
+        self._mission_points[index - 1], self._mission_points[index] = (
+            self._mission_points[index],
+            self._mission_points[index - 1],
+        )
+        self._sync_validated_mission_points()
+        self._refresh_points_table()
+        self._persist_workflow_state()
+        moved_index = index - 1
+        table_children = self.points_table.get_children()
+        moved_item = table_children[moved_index]
+        self.points_table.selection_set(moved_item)
+        self.points_table.focus(moved_item)
+        self.points_table.see(moved_item)
+        self._append_validation("ℹ️ Punkt nach oben verschoben.")
+
+    def _move_selected_point_down(self) -> None:
+        selected = self.points_table.selection()
+        if not selected:
+            return
+        index = self.points_table.index(selected[0])
+        if index < 0 or index >= len(self._mission_points) - 1:
+            return
+        self._mission_points[index], self._mission_points[index + 1] = (
+            self._mission_points[index + 1],
+            self._mission_points[index],
+        )
+        self._sync_validated_mission_points()
+        self._refresh_points_table()
+        self._persist_workflow_state()
+        moved_index = index + 1
+        table_children = self.points_table.get_children()
+        moved_item = table_children[moved_index]
+        self.points_table.selection_set(moved_item)
+        self.points_table.focus(moved_item)
+        self.points_table.see(moved_item)
+        self._append_validation("ℹ️ Punkt nach unten verschoben.")
+
+    def _sync_validated_mission_points(self) -> None:
+        if self._mission is None:
+            return
+        self._mission.points = list(self._mission_points)
 
     def _refresh_points_table(self) -> None:
         self.points_table.delete(*self.points_table.get_children())
