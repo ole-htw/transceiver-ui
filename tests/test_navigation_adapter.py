@@ -249,15 +249,18 @@ def test_send_goal_formats_remote_command_failure_with_truncated_output(monkeypa
     assert "err-27" in outcome.message
 
 
-def test_build_command_requires_namespace() -> None:
-    config = NavigationAdapterConfig(robot_host="robot@10.0.0.2", ros2_namespace="")
+def test_build_command_allows_empty_namespace() -> None:
+    config = NavigationAdapterConfig(
+        robot_host="robot@10.0.0.2",
+        ros2_namespace="",
+        ros2_action_name="navigate_to_pose",
+    )
 
-    try:
-        Ros2CliNavigationTransport._build_command(NavigationPoint(1.0, 2.0), config)
-    except ValueError as exc:
-        assert "ros2 namespace is empty" in str(exc)
-    else:
-        raise AssertionError("expected ValueError")
+    cmd = Ros2CliNavigationTransport._build_command(NavigationPoint(1.0, 2.0), config)
+
+    remote_cmd = cmd[-1]
+    assert "namespace='; command -v ros2" in remote_cmd
+    assert "ros2 action send_goal /navigate_to_pose" in remote_cmd
 
 
 def test_send_goal_returns_precheck_error_message(monkeypatch) -> None:
