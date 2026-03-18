@@ -8,6 +8,7 @@ def test_save_and_load_json_dict_roundtrip(tmp_path) -> None:
     payload = {
         "name": "scan-1",
         "repeat": 2,
+        "start_point_index": 0,
         "points": [{"id": "p1", "x": 0.0, "y": 1.0, "z": 0.0, "yaw": 0.0}],
     }
 
@@ -31,6 +32,7 @@ def test_save_and_load_json_dict_preserves_point_order(tmp_path) -> None:
     payload = {
         "name": "scan-ordered",
         "repeat": 1,
+        "start_point_index": 1,
         "points": [
             {"id": "p003", "x": 3.0, "y": 3.0, "z": 0.0, "yaw": 0.0},
             {"id": "p001", "x": 1.0, "y": 1.0, "z": 0.0, "yaw": 0.0},
@@ -49,6 +51,7 @@ def test_save_and_load_json_dict_preserves_auto_generated_ids(tmp_path) -> None:
     payload = {
         "name": "scan-auto-ids",
         "repeat": 2,
+        "start_point_index": 2,
         "points": [
             {"id": "p001", "x": 0.0, "y": 0.0, "z": 0.0, "yaw": 0.0},
             {"id": "p002", "x": 1.0, "y": 1.0, "z": 0.0, "yaw": 0.0},

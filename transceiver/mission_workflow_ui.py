@@ -201,23 +201,34 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
         controls = ctk.CTkFrame(self)
         controls.grid(row=4, column=0, sticky="ew", padx=10, pady=(0, 6))
-        for col in range(8):
+        for col in range(9):
             controls.columnconfigure(col, weight=0)
-        controls.columnconfigure(7, weight=1)
+        controls.columnconfigure(8, weight=1)
 
         ctk.CTkLabel(controls, text="4) Laufsteuerung").grid(row=0, column=0, padx=8, pady=8)
         self.start_btn = ctk.CTkButton(controls, text="Start", command=self._start_run)
         self.start_btn.grid(row=0, column=1, padx=3)
+        ctk.CTkLabel(controls, text="Start ab Punkt").grid(row=0, column=2, padx=(10, 2))
+        self.start_point_var = tk.StringVar(value="1")
+        self.start_point_combo = ctk.CTkComboBox(
+            controls,
+            width=150,
+            values=["1"],
+            variable=self.start_point_var,
+            state="readonly",
+            command=lambda _value: self._persist_workflow_state(),
+        )
+        self.start_point_combo.grid(row=0, column=3, padx=(0, 8))
         self.pause_btn = ctk.CTkButton(controls, text="Pause", command=self._pause_run, state="disabled")
-        self.pause_btn.grid(row=0, column=2, padx=3)
+        self.pause_btn.grid(row=0, column=4, padx=3)
         self.resume_btn = ctk.CTkButton(controls, text="Fortsetzen", command=self._resume_run, state="disabled")
-        self.resume_btn.grid(row=0, column=3, padx=3)
+        self.resume_btn.grid(row=0, column=5, padx=3)
         self.stop_btn = ctk.CTkButton(controls, text="Stop", command=self._stop_run, state="disabled")
-        self.stop_btn.grid(row=0, column=4, padx=3)
-        ctk.CTkButton(controls, text="Run-Logs exportieren", command=self._export_logs).grid(row=0, column=5, padx=(10, 3))
+        self.stop_btn.grid(row=0, column=6, padx=3)
+        ctk.CTkButton(controls, text="Run-Logs exportieren", command=self._export_logs).grid(row=0, column=7, padx=(10, 3))
 
         self.live_var = tk.StringVar(value="Punkt: - | Navigation: idle | Messung: idle | Verbleibend: -")
-        ctk.CTkLabel(controls, textvariable=self.live_var, anchor="w").grid(row=0, column=7, sticky="ew", padx=8)
+        ctk.CTkLabel(controls, textvariable=self.live_var, anchor="w").grid(row=0, column=8, sticky="ew", padx=8)
 
         table_frame = ctk.CTkFrame(self)
         table_frame.grid(row=5, column=0, sticky="nsew", padx=10, pady=(0, 10))
@@ -247,6 +258,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._mission_points: list[MeasurementPoint] = []
         self.mission_name_var.trace_add("write", lambda *_args: self._persist_workflow_state())
         self.repeat_var.trace_add("write", lambda *_args: self._persist_workflow_state())
+        self._refresh_start_point_options()
 
     def _stabilize_initial_geometry(self) -> None:
         """Ensure all control rows are visible right after opening the window."""
@@ -406,6 +418,34 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                     "-" if point.yaw is None else f"{point.yaw:.3f}",
                 ),
             )
+        self._refresh_start_point_options()
+
+    def _refresh_start_point_options(self) -> None:
+        labels = [self._format_start_point_label(index, point) for index, point in enumerate(self._mission_points)]
+        if not labels:
+            labels = ["1"]
+        self.start_point_combo.configure(values=labels)
+        current_value = self.start_point_var.get()
+        if current_value in labels:
+            return
+        self.start_point_var.set(labels[0])
+
+    @staticmethod
+    def _format_start_point_label(index: int, point: MeasurementPoint) -> str:
+        display_name = point.name or point.id or f"Punkt {index + 1}"
+        return f"{index + 1}: {display_name}"
+
+    def _selected_start_point_index(self) -> int:
+        selected = self.start_point_var.get().strip()
+        match = re.match(r"^(\d+)", selected)
+        if not match:
+            return 0
+        parsed_index = int(match.group(1)) - 1
+        if parsed_index < 0:
+            return 0
+        if self._mission_points and parsed_index >= len(self._mission_points):
+            return 0
+        return parsed_index
 
     @staticmethod
     def _serialize_point(point: MeasurementPoint) -> dict[str, Any]:
@@ -483,6 +523,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "name": self.mission_name_var.get().strip(),
             "repeat": repeat,
             "points": [self._serialize_point(point) for point in self._mission_points],
+            "start_point_index": self._selected_start_point_index(),
         }
 
     def _persist_workflow_state(self) -> None:
@@ -514,6 +555,14 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._mission_points = list(mission.points)
         self._mission = mission
         self._refresh_points_table()
+        persisted_start_point = payload.get("start_point_index")
+        if isinstance(persisted_start_point, int) and 0 <= persisted_start_point < len(self._mission_points):
+            self.start_point_var.set(
+                self._format_start_point_label(
+                    persisted_start_point,
+                    self._mission_points[persisted_start_point],
+                )
+            )
         repeats = mission.repeat or 1
         total_points = len(mission.points) * repeats
         self._set_validation_text(
@@ -527,6 +576,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             return
         if self._run_thread and self._run_thread.is_alive():
             return
+        start_point_index = self._selected_start_point_index()
 
         self.results_table.delete(*self.results_table.get_children())
         self._records = []
@@ -571,6 +621,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 on_point_error="continue",
                 goal_reached_timeout_s=self._runtime_config.goal_reached_timeout_s,
                 navigation_retry_attempts=self._runtime_config.navigation_retry_attempts,
+                start_point_index=start_point_index,
             ),
         )
 
