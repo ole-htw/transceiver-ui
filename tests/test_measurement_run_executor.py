@@ -332,6 +332,7 @@ def test_writes_point_logs_and_run_summary(tmp_path: Path) -> None:
 
     summary_payload = json.loads((tmp_path / "run-summary.json").read_text(encoding="utf-8"))
     assert summary_payload["total_points"] == 2
+    assert summary_payload["start_point_index"] == 0
     assert summary_payload["succeeded_points"] == 1
     assert summary_payload["failed_points"] == 1
     assert summary_payload["skipped_points"] == 0
@@ -375,3 +376,40 @@ def test_marks_orphaned_runs_as_interrupted(tmp_path: Path) -> None:
     payload = json.loads(summary_path.read_text(encoding="utf-8"))
     assert payload["executor_state"] == "interrupted"
     assert payload["abort_reason"] == "app_restart"
+
+
+def test_start_point_index_skips_points_before_selected_start() -> None:
+    nav = FakeNavigator(["succeeded", "succeeded"])
+    measured: list[str] = []
+    persisted: list[dict] = []
+    summaries: list[dict] = []
+
+    executor = MeasurementRunExecutor(
+        mission=_mission(),
+        navigator=nav,
+        trigger_measurement=lambda point: measured.append(point.id or "") or {"ok": True},
+        persist_result=persisted.append,
+        persist_run_summary=summaries.append,
+        config=MeasurementRunExecutorConfig(start_point_index=1),
+    )
+
+    final_state = executor.start()
+
+    assert final_state == "completed"
+    assert measured == ["p2"]
+    assert [record.point_id for record in executor.records] == ["p2"]
+    assert [entry[0:2] for entry in nav.calls] == [(3.0, 4.0)]
+    assert persisted[0]["global_index"] == 1
+    assert summaries[0]["expected_points"] == 1
+    assert summaries[0]["start_point_index"] == 1
+
+
+def test_invalid_start_point_index_raises() -> None:
+    with pytest.raises(ValueError):
+        MeasurementRunExecutor(
+            mission=_mission(),
+            navigator=FakeNavigator(["succeeded"]),
+            trigger_measurement=lambda _point: {"ok": True},
+            persist_result=lambda _payload: None,
+            config=MeasurementRunExecutorConfig(start_point_index=2),
+        )

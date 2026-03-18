@@ -127,6 +127,7 @@ class MeasurementRunExecutorConfig:
     goal_reached_timeout_s: float = 120.0
     navigation_retry_attempts: int = 0
     on_point_error: OnPointError = "continue"
+    start_point_index: int = 0
 
 
 @dataclass(frozen=True)
@@ -175,6 +176,7 @@ class MeasurementRunExecutor:
         self.persist_run_summary = persist_run_summary
         self.run_log_store = run_log_store
         self.config = config or MeasurementRunExecutorConfig()
+        self._validate_start_point_index()
 
         self._state: ExecutorState = "idle"
         self._state_lock = threading.RLock()
@@ -191,7 +193,9 @@ class MeasurementRunExecutor:
     def start(self) -> ExecutorState:
         abort_reason: str | None = None
         completion_substatus: str | None = None
-        expected_points = len(self.mission.points) * (self.mission.repeat or 1)
+        points_per_cycle = len(self.mission.points)
+        repeats = self.mission.repeat or 1
+        expected_points = points_per_cycle * repeats - self.config.start_point_index
         with self._state_lock:
             if self._state not in {"idle", "completed", "failed", "cancelled", "interrupted"}:
                 raise RuntimeError(f"Cannot start from state '{self._state}'")
@@ -200,9 +204,10 @@ class MeasurementRunExecutor:
         self.records = []
         self._cancel_requested = False
         self._cancel_confirmed = False
-        repeats = self.mission.repeat or 1
         for cycle in range(repeats):
             for point_index, point in enumerate(self.mission.points):
+                if cycle == 0 and point_index < self.config.start_point_index:
+                    continue
                 if not self._wait_until_resumed_or_stopped():
                     abort_reason = "run_cancelled.manual_stop"
                     final_state = self._finalize_stop()
@@ -547,6 +552,7 @@ class MeasurementRunExecutor:
             "executor_state": self.state,
             "total_points": total,
             "expected_points": expected_points,
+            "start_point_index": self.config.start_point_index,
             "succeeded_points": succeeded,
             "failed_points": failed,
             "skipped_points": skipped,
@@ -558,6 +564,14 @@ class MeasurementRunExecutor:
             self.persist_run_summary(summary)
         if self.run_log_store is not None:
             self.run_log_store.write_run_summary(summary)
+
+    def _validate_start_point_index(self) -> None:
+        if self.config.start_point_index < 0:
+            raise ValueError("start_point_index must be >= 0")
+        if self.mission.points and self.config.start_point_index >= len(self.mission.points):
+            raise ValueError(
+                "start_point_index must be smaller than number of mission points"
+            )
 
     @staticmethod
     def _to_navigation_point(point: MeasurementPoint) -> NavigationPoint:
