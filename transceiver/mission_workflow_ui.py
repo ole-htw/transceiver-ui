@@ -277,7 +277,10 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
     def _set_validation_text(self, text: str) -> None:
         self.validation_box.configure(state="normal")
         self.validation_box.delete("1.0", "end")
+        if not text.endswith("\n"):
+            text = f"{text}\n"
         self.validation_box.insert("1.0", text)
+        self.validation_box.see("end")
         self.validation_box.configure(state="disabled")
 
     def _add_point(self) -> None:
