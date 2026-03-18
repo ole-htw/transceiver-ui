@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import time
 import zipfile
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 import json
@@ -387,7 +388,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
     def _sync_validated_mission_points(self) -> None:
         if self._mission is None:
             return
-        self._mission.points = list(self._mission_points)
+        self._mission = replace(self._mission, points=list(self._mission_points))
 
     def _refresh_points_table(self) -> None:
         self.points_table.delete(*self.points_table.get_children())
