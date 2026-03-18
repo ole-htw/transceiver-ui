@@ -65,3 +65,44 @@ def test_rejects_unsupported_extension(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="Unsupported mission file extension"):
         load_measurement_mission(mission_path)
+
+
+def test_loads_map_config_from_relative_yaml_file(tmp_path) -> None:
+    pytest.importorskip("yaml")
+    maps_dir = tmp_path / "maps"
+    maps_dir.mkdir()
+
+    mission_path = tmp_path / "mission.yaml"
+    mission_path.write_text(
+        """
+name: yaml-mission
+points:
+  - id: p1
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+map_config: maps/site_a.yaml
+""".strip(),
+        encoding="utf-8",
+    )
+
+    map_config_path = maps_dir / "site_a.yaml"
+    map_config_path.write_text(
+        """
+image: maps/site_a.pgm
+resolution: 0.05
+origin: [0.0, 0.0, 0.0]
+frame_id: map
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196
+""".strip(),
+        encoding="utf-8",
+    )
+
+    mission = load_measurement_mission(mission_path)
+
+    assert mission.map_config is not None
+    assert mission.map_config.image == "maps/site_a.pgm"
+    assert mission.map_config.resolution == 0.05
+    assert mission.map_config.origin == (0.0, 0.0, 0.0)
