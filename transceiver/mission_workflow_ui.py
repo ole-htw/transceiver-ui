@@ -5,6 +5,7 @@ import time
 import zipfile
 from dataclasses import replace
 from datetime import datetime
+import math
 from pathlib import Path
 import json
 import re
@@ -136,7 +137,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(5, weight=1)
+        self.rowconfigure(6, weight=1)
 
         workflow = ctk.CTkFrame(self)
         workflow.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
@@ -199,13 +200,36 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.validation_box.insert("1.0", "3) Validierungsergebnis erscheint hier.\n")
         self.validation_box.configure(state="disabled")
 
+        map_frame = ctk.CTkFrame(self)
+        map_frame.grid(row=4, column=0, sticky="nsew", padx=10, pady=(0, 6))
+        map_frame.columnconfigure(0, weight=1)
+        map_frame.rowconfigure(2, weight=1)
+
+        ctk.CTkLabel(map_frame, text="4) Karte").grid(row=0, column=0, sticky="w", padx=8, pady=(8, 2))
+        self.map_status_var = tk.StringVar(value="Karte nicht konfiguriert.")
+        ctk.CTkLabel(map_frame, textvariable=self.map_status_var, anchor="w").grid(
+            row=1, column=0, sticky="ew", padx=8, pady=(0, 6)
+        )
+        self.map_preview_label = tk.Label(
+            map_frame,
+            text="Karte nicht konfiguriert.",
+            anchor="center",
+            justify="center",
+            bg="#1d1f23",
+            fg="#e6e6e6",
+            height=12,
+        )
+        self.map_preview_label.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self._map_image_original: tk.PhotoImage | None = None
+        self._map_image_preview: tk.PhotoImage | None = None
+
         controls = ctk.CTkFrame(self)
-        controls.grid(row=4, column=0, sticky="ew", padx=10, pady=(0, 6))
+        controls.grid(row=5, column=0, sticky="ew", padx=10, pady=(0, 6))
         for col in range(9):
             controls.columnconfigure(col, weight=0)
         controls.columnconfigure(8, weight=1)
 
-        ctk.CTkLabel(controls, text="4) Laufsteuerung").grid(row=0, column=0, padx=8, pady=8)
+        ctk.CTkLabel(controls, text="5) Laufsteuerung").grid(row=0, column=0, padx=8, pady=8)
         self.start_btn = ctk.CTkButton(controls, text="Start", command=self._start_run)
         self.start_btn.grid(row=0, column=1, padx=3)
         ctk.CTkLabel(controls, text="Start ab Punkt").grid(row=0, column=2, padx=(10, 2))
@@ -231,7 +255,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         ctk.CTkLabel(controls, textvariable=self.live_var, anchor="w").grid(row=0, column=8, sticky="ew", padx=8)
 
         table_frame = ctk.CTkFrame(self)
-        table_frame.grid(row=5, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        table_frame.grid(row=6, column=0, sticky="nsew", padx=10, pady=(0, 10))
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
@@ -259,6 +283,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.mission_name_var.trace_add("write", lambda *_args: self._persist_workflow_state())
         self.repeat_var.trace_add("write", lambda *_args: self._persist_workflow_state())
         self._refresh_start_point_options()
+        self._refresh_map_section()
 
     def _stabilize_initial_geometry(self) -> None:
         """Ensure all control rows are visible right after opening the window."""
@@ -296,6 +321,52 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.validation_box.insert("1.0", text)
         self.validation_box.see("end")
         self.validation_box.configure(state="disabled")
+
+    def _refresh_map_section(self) -> None:
+        self._map_image_original = None
+        self._map_image_preview = None
+
+        mission = self._mission
+        map_config = mission.map_config if mission is not None else None
+        if map_config is None:
+            self.map_status_var.set("Karte nicht konfiguriert (map_config fehlt).")
+            self.map_preview_label.configure(image="", text="Kein Kartenbild konfiguriert.")
+            return
+
+        image_path = Path(map_config.image).expanduser()
+        if not image_path.is_absolute():
+            image_path = (Path.cwd() / image_path).resolve()
+
+        if not image_path.exists():
+            self.map_status_var.set(f"Kartenbild nicht gefunden: {image_path}")
+            self.map_preview_label.configure(
+                image="",
+                text="Kartenbild fehlt.\nBitte map_config.image prüfen.",
+            )
+            return
+
+        try:
+            photo = tk.PhotoImage(file=str(image_path))
+        except Exception:
+            self.map_status_var.set(f"Kartenbild ungültig oder nicht lesbar: {image_path}")
+            self.map_preview_label.configure(image="", text="Kartenbild konnte nicht geladen werden.")
+            return
+
+        max_width = 760
+        max_height = 240
+        downsample_factor = max(
+            1,
+            math.ceil(photo.width() / max_width),
+            math.ceil(photo.height() / max_height),
+        )
+        preview = photo.subsample(downsample_factor, downsample_factor) if downsample_factor > 1 else photo
+
+        self._map_image_original = photo
+        self._map_image_preview = preview
+        self.map_status_var.set(
+            f"Karte geladen: {image_path.name} ({photo.width()}x{photo.height()} px)"
+        )
+        self.map_preview_label.configure(image=preview, text="")
 
     def _generate_unique_point_id(self) -> str:
         used_ids = {point.id for point in self._mission_points if point.id}
@@ -500,11 +571,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             )
         except Exception as exc:
             self._mission = None
+            self._refresh_map_section()
             self._set_validation_text(f"❌ Validierung fehlgeschlagen\nDetails: {exc}")
             return
 
         self._mission = mission
         self._persist_workflow_state()
+        self._refresh_map_section()
         repeats = mission.repeat or 1
         total_points = len(mission.points) * repeats
         self._set_validation_text(
@@ -555,6 +628,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._mission_points = list(mission.points)
         self._mission = mission
         self._refresh_points_table()
+        self._refresh_map_section()
         persisted_start_point = payload.get("start_point_index")
         if isinstance(persisted_start_point, int) and 0 <= persisted_start_point < len(self._mission_points):
             self.start_point_var.set(
