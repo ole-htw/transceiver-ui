@@ -156,6 +156,68 @@ class TestMeasurementMission(unittest.TestCase):
             ["legacy-10", "legacy-02", "legacy-99"],
         )
 
+    def test_accepts_optional_map_config(self) -> None:
+        mission = measurement_mission_from_dict(
+            {
+                "name": "scan-with-map",
+                "points": [{"id": "p1", "x": 0.0, "y": 0.0, "yaw": 0.0}],
+                "map_config": {
+                    "image": "maps/site_a.yaml",
+                    "resolution": 0.05,
+                    "origin": [0.0, 0.0, 0.0],
+                    "frame_id": "map",
+                    "negate": 0,
+                    "occupied_thresh": 0.65,
+                    "free_thresh": 0.196,
+                },
+            }
+        )
+
+        self.assertIsNotNone(mission.map_config)
+        self.assertEqual(mission.map_config.image, "maps/site_a.yaml")
+        self.assertAlmostEqual(mission.map_config.resolution, 0.05)
+        self.assertEqual(mission.map_config.origin, (0.0, 0.0, 0.0))
+        self.assertEqual(mission.map_config.frame_id, "map")
+        self.assertEqual(mission.map_config.negate, 0)
+        self.assertAlmostEqual(mission.map_config.occupied_thresh or 0, 0.65)
+        self.assertAlmostEqual(mission.map_config.free_thresh or 0, 0.196)
+
+    def test_rejects_invalid_map_config(self) -> None:
+        with self.assertRaises(ValueError):
+            measurement_mission_from_dict(
+                {
+                    "name": "bad-map-image",
+                    "points": [{"id": "p1", "x": 0.0, "y": 0.0, "yaw": 0.0}],
+                    "map_config": {"image": " ", "resolution": 0.05, "origin": [0, 0, 0]},
+                }
+            )
+
+        with self.assertRaises(ValueError):
+            measurement_mission_from_dict(
+                {
+                    "name": "bad-map-resolution",
+                    "points": [{"id": "p1", "x": 0.0, "y": 0.0, "yaw": 0.0}],
+                    "map_config": {
+                        "image": "maps/site_a.yaml",
+                        "resolution": 0.0,
+                        "origin": [0, 0, 0],
+                    },
+                }
+            )
+
+        with self.assertRaises(ValueError):
+            measurement_mission_from_dict(
+                {
+                    "name": "bad-map-origin",
+                    "points": [{"id": "p1", "x": 0.0, "y": 0.0, "yaw": 0.0}],
+                    "map_config": {
+                        "image": "maps/site_a.yaml",
+                        "resolution": 0.05,
+                        "origin": [0, 0],
+                    },
+                }
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

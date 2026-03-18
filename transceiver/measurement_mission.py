@@ -29,6 +29,18 @@ class MeasurementMission:
     points: list[MeasurementPoint]
     repeat: int | None = None
     wait_after_arrival_s: float = 0.0
+    map_config: MapConfig | None = None
+
+
+@dataclass(frozen=True)
+class MapConfig:
+    image: str
+    resolution: float
+    origin: tuple[float, float, float]
+    frame_id: str | None = None
+    negate: int | None = None
+    occupied_thresh: float | None = None
+    free_thresh: float | None = None
 
 
 def _require_finite_number(value: Any, field_name: str) -> float:
@@ -128,6 +140,55 @@ def _parse_point(payload: dict[str, Any], index: int) -> MeasurementPoint:
     )
 
 
+def _parse_map_config(payload: Any) -> MapConfig:
+    if not isinstance(payload, dict):
+        raise ValueError("'map_config' must be an object when provided")
+
+    image = _require_string(payload.get("image"), "map_config.image")
+    resolution = _require_finite_number(payload.get("resolution"), "map_config.resolution")
+    if resolution <= 0:
+        raise ValueError("'map_config.resolution' must be > 0")
+
+    origin_raw = payload.get("origin")
+    if not isinstance(origin_raw, list) or len(origin_raw) != 3:
+        raise ValueError("'map_config.origin' must be a list with exactly 3 numbers")
+
+    origin: tuple[float, float, float] = (
+        _require_finite_number(origin_raw[0], "map_config.origin[0]"),
+        _require_finite_number(origin_raw[1], "map_config.origin[1]"),
+        _require_finite_number(origin_raw[2], "map_config.origin[2]"),
+    )
+
+    frame_id = payload.get("frame_id")
+    if frame_id is not None:
+        frame_id = _require_string(frame_id, "map_config.frame_id")
+
+    negate = payload.get("negate")
+    if negate is not None:
+        if isinstance(negate, bool) or not isinstance(negate, int):
+            raise ValueError("'map_config.negate' must be an integer when provided")
+
+    occupied_thresh = payload.get("occupied_thresh")
+    if occupied_thresh is not None:
+        occupied_thresh = _require_finite_number(
+            occupied_thresh, "map_config.occupied_thresh"
+        )
+
+    free_thresh = payload.get("free_thresh")
+    if free_thresh is not None:
+        free_thresh = _require_finite_number(free_thresh, "map_config.free_thresh")
+
+    return MapConfig(
+        image=image,
+        resolution=resolution,
+        origin=origin,
+        frame_id=frame_id,
+        negate=negate,
+        occupied_thresh=occupied_thresh,
+        free_thresh=free_thresh,
+    )
+
+
 def measurement_mission_from_dict(payload: dict[str, Any]) -> MeasurementMission:
     if not isinstance(payload, dict):
         raise ValueError("Mission payload must be a JSON/YAML object")
@@ -162,11 +223,16 @@ def measurement_mission_from_dict(payload: dict[str, Any]) -> MeasurementMission
     if wait_after_arrival_s < 0.0:
         raise ValueError("'wait_after_arrival_s' must be >= 0")
 
+    map_config: MapConfig | None = None
+    if "map_config" in payload and payload.get("map_config") is not None:
+        map_config = _parse_map_config(payload.get("map_config"))
+
     return MeasurementMission(
         name=name,
         points=parsed_points,
         repeat=repeat,
         wait_after_arrival_s=wait_after_arrival_s,
+        map_config=map_config,
     )
 
 
