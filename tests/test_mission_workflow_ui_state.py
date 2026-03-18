@@ -24,3 +24,39 @@ def test_load_json_dict_rejects_non_object_payload(tmp_path) -> None:
     loaded = _load_json_dict(state_file)
 
     assert loaded == {}
+
+
+def test_save_and_load_json_dict_preserves_point_order(tmp_path) -> None:
+    state_file = tmp_path / "mission-workflow-state.json"
+    payload = {
+        "name": "scan-ordered",
+        "repeat": 1,
+        "points": [
+            {"id": "p003", "x": 3.0, "y": 3.0, "z": 0.0, "yaw": 0.0},
+            {"id": "p001", "x": 1.0, "y": 1.0, "z": 0.0, "yaw": 0.0},
+            {"id": "p002", "x": 2.0, "y": 2.0, "z": 0.0, "yaw": 0.0},
+        ],
+    }
+
+    _save_json_dict(state_file, payload)
+    loaded = _load_json_dict(state_file)
+
+    assert [point["id"] for point in loaded["points"]] == ["p003", "p001", "p002"]
+
+
+def test_save_and_load_json_dict_preserves_auto_generated_ids(tmp_path) -> None:
+    state_file = tmp_path / "mission-workflow-state.json"
+    payload = {
+        "name": "scan-auto-ids",
+        "repeat": 2,
+        "points": [
+            {"id": "p001", "x": 0.0, "y": 0.0, "z": 0.0, "yaw": 0.0},
+            {"id": "p002", "x": 1.0, "y": 1.0, "z": 0.0, "yaw": 0.0},
+            {"id": "p003", "x": 2.0, "y": 2.0, "z": 0.0, "yaw": 0.0},
+        ],
+    }
+
+    _save_json_dict(state_file, payload)
+    loaded = _load_json_dict(state_file)
+
+    assert [point["id"] for point in loaded["points"]] == ["p001", "p002", "p003"]

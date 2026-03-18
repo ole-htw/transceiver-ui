@@ -139,6 +139,23 @@ class TestMeasurementMission(unittest.TestCase):
         self.assertAlmostEqual(mission.points[0].y, 2.25)
         self.assertAlmostEqual(mission.points[0].z, 0.0)
 
+    def test_preserves_explicit_ids_and_order_for_import_compatibility(self) -> None:
+        mission = measurement_mission_from_dict(
+            {
+                "name": "scan-import",
+                "points": [
+                    {"id": "legacy-10", "x": 10.0, "y": 0.0, "yaw": 0.0},
+                    {"id": "legacy-02", "x": 2.0, "y": 0.0, "yaw": 0.0},
+                    {"id": "legacy-99", "x": 99.0, "y": 0.0, "yaw": 0.0},
+                ],
+            }
+        )
+
+        self.assertEqual(
+            [point.id for point in mission.points],
+            ["legacy-10", "legacy-02", "legacy-99"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
