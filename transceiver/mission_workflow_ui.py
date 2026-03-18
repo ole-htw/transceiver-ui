@@ -5,6 +5,7 @@ import time
 import zipfile
 from datetime import datetime
 from pathlib import Path
+import json
 from tkinter import filedialog, messagebox, ttk
 import tkinter as tk
 from typing import Any
@@ -20,6 +21,23 @@ from .measurement_run_executor import (
     PointExecutionContext,
 )
 from .navigation_adapter import NavigationAdapter, NavigationAdapterConfig, NavigationEvent
+
+MISSION_WORKFLOW_STATE_FILE = Path(__file__).with_name("mission_workflow_state.json")
+
+
+def _load_json_dict(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _save_json_dict(path: Path, payload: dict[str, Any]) -> None:
+    try:
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        return
 
 
 def _map_executor_state_to_ui_text(state: str, completion_substatus: str | None = None) -> str:
@@ -108,8 +126,10 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._run_started_at: float | None = None
         self._run_log_dir: Path | None = None
         self._runtime_config = MissionRuntimeConfig.from_env()
+        self._workflow_state_file = MISSION_WORKFLOW_STATE_FILE
 
         self._build_ui()
+        self._restore_workflow_state()
         self.after_idle(self._stabilize_initial_geometry)
 
     def _build_ui(self) -> None:
@@ -223,6 +243,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.results_table.configure(yscrollcommand=scroll.set)
 
         self._mission_points: list[MeasurementPoint] = []
+        self.mission_name_var.trace_add("write", lambda *_args: self._persist_workflow_state())
+        self.repeat_var.trace_add("write", lambda *_args: self._persist_workflow_state())
 
     def _stabilize_initial_geometry(self) -> None:
         """Ensure all control rows are visible right after opening the window."""
@@ -281,6 +303,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         point = mission.points[0]
         self._mission_points.append(point)
         self._refresh_points_table()
+        self._persist_workflow_state()
         self._append_validation(
             f"✅ Punkt hinzugefügt: {point.id or point.name} (x={point.x:.2f}, y={point.y:.2f}, z={point.z:.2f}, yaw={point.yaw})"
         )
@@ -294,6 +317,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             return
         removed = self._mission_points.pop(index)
         self._refresh_points_table()
+        self._persist_workflow_state()
         self._append_validation(f"ℹ️ Punkt entfernt: {removed.id or removed.name}")
 
     def _refresh_points_table(self) -> None:
@@ -370,10 +394,60 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             return
 
         self._mission = mission
+        self._persist_workflow_state()
         repeats = mission.repeat or 1
         total_points = len(mission.points) * repeats
         self._set_validation_text(
             f"✅ Mission valide: {mission.name}\n"
+            f"Punkte pro Zyklus: {len(mission.points)} | Wiederholungen: {repeats} | Gesamtpunkte: {total_points}"
+        )
+
+    def _build_workflow_state_payload(self) -> dict[str, Any]:
+        repeat_raw = self.repeat_var.get().strip()
+        repeat: int | str
+        try:
+            repeat = int(repeat_raw)
+        except ValueError:
+            repeat = repeat_raw
+        return {
+            "name": self.mission_name_var.get().strip(),
+            "repeat": repeat,
+            "points": [self._serialize_point(point) for point in self._mission_points],
+        }
+
+    def _persist_workflow_state(self) -> None:
+        payload = self._build_workflow_state_payload()
+        _save_json_dict(self._workflow_state_file, payload)
+
+    def _restore_workflow_state(self) -> None:
+        payload = _load_json_dict(self._workflow_state_file)
+        if not payload:
+            return
+
+        try:
+            mission = measurement_mission_from_dict(
+                {
+                    "name": str(payload.get("name") or "mission-ui"),
+                    "repeat": payload.get("repeat", 1),
+                    "wait_after_arrival_s": 0.0,
+                    "points": payload.get("points", []),
+                }
+            )
+        except Exception:
+            self._append_validation(
+                "⚠️ Persistierter Workflow konnte nicht geladen werden (ungültige Daten)."
+            )
+            return
+
+        self.mission_name_var.set(mission.name)
+        self.repeat_var.set(str(mission.repeat or 1))
+        self._mission_points = list(mission.points)
+        self._mission = mission
+        self._refresh_points_table()
+        repeats = mission.repeat or 1
+        total_points = len(mission.points) * repeats
+        self._set_validation_text(
+            f"✅ Persistierter Workflow geladen: {mission.name}\n"
             f"Punkte pro Zyklus: {len(mission.points)} | Wiederholungen: {repeats} | Gesamtpunkte: {total_points}"
         )
 
