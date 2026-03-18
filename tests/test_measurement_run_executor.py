@@ -21,15 +21,19 @@ class FakeNavigator:
         self.calls: list[tuple[float, float, float, float]] = []
         self.cancel_calls = 0
         self._idx = 0
+        self.cancel_requested = False
 
     def navigate_to_point(self, point, *, timeout_s: float):
         self.calls.append((point.x, point.y, point.qz, timeout_s))
         response = self.responses[min(self._idx, len(self.responses) - 1)]
         self._idx += 1
+        if self.cancel_requested and response == "succeeded":
+            return "connection_error"
         return response
 
     def cancel_current_goal(self) -> None:
         self.cancel_calls += 1
+        self.cancel_requested = True
 
 
 def _mission() -> MeasurementMission:
@@ -115,12 +119,21 @@ def test_navigation_failure_retries_then_stop_mission() -> None:
 
 
 def test_state_transitions_start_pause_resume_stop() -> None:
-    class SlowNavigator(FakeNavigator):
-        def navigate_to_point(self, point, *, timeout_s: float):
-            time.sleep(0.15)
-            return super().navigate_to_point(point, timeout_s=timeout_s)
+    class CancelAwareNavigator(FakeNavigator):
+        def __init__(self) -> None:
+            super().__init__(["canceled", "canceled"])
+            self._released = threading.Event()
 
-    nav = SlowNavigator(["succeeded", "succeeded"])
+        def navigate_to_point(self, point, *, timeout_s: float):
+            self.calls.append((point.x, point.y, point.qz, timeout_s))
+            self._released.wait(timeout=1.0)
+            return "canceled"
+
+        def cancel_current_goal(self) -> None:
+            super().cancel_current_goal()
+            self._released.set()
+
+    nav = CancelAwareNavigator()
     executor = MeasurementRunExecutor(
         mission=_mission(),
         navigator=nav,
@@ -209,6 +222,43 @@ def test_manual_stop_after_last_point_uses_completed_with_abort_substatus() -> N
     assert executor.state == "completed"
     assert summaries[0]["completion_substatus"] == "completed_with_abort_request"
     assert summaries[0]["abort_reason"] == "run_cancelled.manual_stop_after_completion"
+
+
+def test_manual_stop_without_cancel_confirmation_marks_failed() -> None:
+    class NoCancelConfirmationNavigator(FakeNavigator):
+        def __init__(self) -> None:
+            super().__init__(["connection_error"])
+            self._released = threading.Event()
+
+        def navigate_to_point(self, point, *, timeout_s: float):
+            self.calls.append((point.x, point.y, point.qz, timeout_s))
+            self._released.wait(timeout=1.0)
+            return "connection_error"
+
+        def cancel_current_goal(self) -> None:
+            super().cancel_current_goal()
+            self._released.set()
+
+    nav = NoCancelConfirmationNavigator()
+    summaries: list[dict] = []
+    executor = MeasurementRunExecutor(
+        mission=MeasurementMission(name="single", points=[_mission().points[0]], repeat=1),
+        navigator=nav,
+        trigger_measurement=lambda _point: {"ok": True},
+        persist_result=lambda _payload: None,
+        persist_run_summary=summaries.append,
+        config=MeasurementRunExecutorConfig(on_point_error="stop"),
+    )
+
+    thread = threading.Thread(target=executor.start)
+    thread.start()
+    time.sleep(0.05)
+    executor.stop()
+    thread.join(timeout=2)
+
+    assert executor.state == "failed"
+    assert nav.cancel_calls == 1
+    assert summaries[0]["abort_reason"] == "navigation_failed.connection_error"
 
 def test_invalid_transitions_raise() -> None:
     executor = MeasurementRunExecutor(

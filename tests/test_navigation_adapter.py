@@ -19,12 +19,16 @@ class _FakeTransport:
     def __post_init__(self) -> None:
         self.send_calls = 0
         self.cancel_calls = 0
+        self.server_cancel_confirmed = False
 
     def send_goal(self, *, point, config, on_feedback):
         self.send_calls += 1
         on_feedback({"remaining_distance": 1.23})
         idx = min(self.send_calls - 1, len(self.outcomes) - 1)
-        return self.outcomes[idx]
+        outcome = self.outcomes[idx]
+        if self.cancel_calls and self.server_cancel_confirmed and outcome.terminal_state != "canceled":
+            return NavigationOutcome("canceled", accepted=True, message="server cancel confirmed")
+        return outcome
 
     def cancel_current_goal(self) -> None:
         self.cancel_calls += 1
@@ -367,3 +371,101 @@ def test_cancel_current_goal_falls_back_to_terminate_and_kill() -> None:
     assert process.sent_signals == [signal.SIGINT]
     assert process.terminate_calls == 1
     assert process.kill_calls == 1
+
+
+def test_cancel_current_goal_uses_server_side_cancel_before_signals(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class _Process:
+        def __init__(self) -> None:
+            self.sent_signals: list[int] = []
+
+        def poll(self):
+            return None
+
+        def send_signal(self, sig: int) -> None:
+            self.sent_signals.append(sig)
+            calls.append(("signal", sig))
+
+        def wait(self, timeout: float) -> int:
+            raise TimeoutError("still running")
+
+        def terminate(self) -> None:
+            calls.append(("terminate", None))
+
+        def kill(self) -> None:
+            calls.append(("kill", None))
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(("server_cancel", cmd))
+        class _Done:
+            returncode = 0
+        return _Done()
+
+    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.run", _fake_run)
+
+    transport = Ros2CliNavigationTransport()
+    process = _Process()
+    transport._last_process = process
+    transport._last_config = NavigationAdapterConfig(
+        robot_host="robot@10.0.0.2",
+        ros2_namespace="robot1",
+        remote_ros_setup="/opt/ros/humble/setup.bash",
+    )
+    transport._last_goal_id = "00000000-0000-0000-0000-000000000001"
+
+    transport.cancel_current_goal()
+
+    assert calls[0][0] == "server_cancel"
+    cancel_cmd = " ".join(str(part) for part in calls[0][1])
+    assert "--goal-id" in cancel_cmd
+    assert "00000000-0000-0000-0000-000000000001" in cancel_cmd
+    assert process.sent_signals == [signal.SIGINT]
+
+
+def test_send_goal_maps_dead_transport_to_connection_error_even_after_accept(monkeypatch) -> None:
+    class _Stream:
+        def __init__(self, lines: list[str], rest: str = "") -> None:
+            self._lines = lines
+            self._rest = rest
+            self._idx = 0
+
+        def readline(self) -> str:
+            if self._idx >= len(self._lines):
+                return ""
+            line = self._lines[self._idx]
+            self._idx += 1
+            return line
+
+        def read(self) -> str:
+            return self._rest
+
+    class _Process:
+        def __init__(self) -> None:
+            self.stdout = _Stream(
+                [
+                    "Goal accepted with ID: 00000000-0000-0000-0000-000000000001\n",
+                    "feedback: moving\n",
+                ]
+            )
+            self.stderr = _Stream([], rest="ssh channel lost")
+
+        def poll(self):
+            return 255
+
+    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
+
+    transport = Ros2CliNavigationTransport()
+    outcome = transport.send_goal(
+        point=NavigationPoint(1.0, 2.0),
+        config=NavigationAdapterConfig(
+            robot_host="robot@10.0.0.2",
+            remote_ros_setup="/opt/ros/humble/setup.bash",
+            ros2_namespace="robot1",
+        ),
+        on_feedback=lambda _feedback: None,
+    )
+
+    assert outcome.accepted is True
+    assert outcome.terminal_state == "connection_error"
+    assert transport._last_goal_id == "00000000-0000-0000-0000-000000000001"

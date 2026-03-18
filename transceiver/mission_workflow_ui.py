@@ -555,7 +555,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         except RuntimeError as exc:
             messagebox.showwarning("Stop", str(exc))
             return
-        self._append_validation("Stop angefordert: laufendes Goal wird abgebrochen.")
+        self._append_validation(
+            "Stop angefordert: warte auf serverseitige Cancel-Bestätigung für das laufende Goal."
+        )
 
     def _set_run_buttons(self, *, running: bool, paused: bool) -> None:
         self.start_btn.configure(state="disabled" if running else "normal")
