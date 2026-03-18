@@ -192,7 +192,7 @@ class TestMeasurementMission(unittest.TestCase):
                 }
             )
 
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "map_config\\.resolution must be > 0"):
             measurement_mission_from_dict(
                 {
                     "name": "bad-map-resolution",

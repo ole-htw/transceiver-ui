@@ -147,7 +147,7 @@ def _parse_map_config(payload: Any) -> MapConfig:
     image = _require_string(payload.get("image"), "map_config.image")
     resolution = _require_finite_number(payload.get("resolution"), "map_config.resolution")
     if resolution <= 0:
-        raise ValueError("'map_config.resolution' must be > 0")
+        raise ValueError("map_config.resolution must be > 0")
 
     origin_raw = payload.get("origin")
     if not isinstance(origin_raw, list) or len(origin_raw) != 3:
@@ -166,7 +166,7 @@ def _parse_map_config(payload: Any) -> MapConfig:
     negate = payload.get("negate")
     if negate is not None:
         if isinstance(negate, bool) or not isinstance(negate, int):
-            raise ValueError("'map_config.negate' must be an integer when provided")
+            raise ValueError("map_config.negate must be an integer when provided")
 
     occupied_thresh = payload.get("occupied_thresh")
     if occupied_thresh is not None:
@@ -225,7 +225,15 @@ def measurement_mission_from_dict(payload: dict[str, Any]) -> MeasurementMission
 
     map_config: MapConfig | None = None
     if "map_config" in payload and payload.get("map_config") is not None:
-        map_config = _parse_map_config(payload.get("map_config"))
+        map_config_raw = payload.get("map_config")
+        if isinstance(map_config_raw, (str, Path)):
+            map_config_payload = _load_json_or_yaml_file(
+                Path(map_config_raw),
+                descriptor="map_config",
+            )
+            map_config = _parse_map_config(map_config_payload)
+        else:
+            map_config = _parse_map_config(map_config_raw)
 
     return MeasurementMission(
         name=name,
@@ -236,23 +244,38 @@ def measurement_mission_from_dict(payload: dict[str, Any]) -> MeasurementMission
     )
 
 
-def load_measurement_mission(path: str | Path) -> MeasurementMission:
-    mission_path = Path(path)
-    raw_text = mission_path.read_text(encoding="utf-8")
+def _load_json_or_yaml_file(path: Path, *, descriptor: str) -> Any:
+    raw_text = path.read_text(encoding="utf-8")
 
-    suffix = mission_path.suffix.lower()
+    suffix = path.suffix.lower()
     if suffix == ".json":
-        payload = json.loads(raw_text)
-    elif suffix in {".yaml", ".yml"}:
+        return json.loads(raw_text)
+    if suffix in {".yaml", ".yml"}:
         try:
             import yaml  # type: ignore
         except ImportError as exc:
             raise ValueError(
-                "YAML mission files require PyYAML. "
+                f"YAML {descriptor} files require PyYAML. "
                 "Install with `pip install pyyaml` or use JSON."
             ) from exc
-        payload = yaml.safe_load(raw_text)
-    else:
-        raise ValueError("Unsupported mission file extension. Use .json, .yaml or .yml")
+        return yaml.safe_load(raw_text)
+
+    raise ValueError(f"Unsupported {descriptor} file extension. Use .json, .yaml or .yml")
+
+
+def load_measurement_mission(path: str | Path) -> MeasurementMission:
+    mission_path = Path(path)
+    payload = _load_json_or_yaml_file(mission_path, descriptor="mission")
+
+    if not isinstance(payload, dict):
+        raise ValueError("Mission payload must be a JSON/YAML object")
+
+    map_config_ref = payload.get("map_config")
+    if isinstance(map_config_ref, str):
+        map_config_path = Path(map_config_ref)
+        if not map_config_path.is_absolute():
+            map_config_path = mission_path.parent / map_config_path
+        map_config_payload = _load_json_or_yaml_file(map_config_path, descriptor="map_config")
+        payload = {**payload, "map_config": map_config_payload}
 
     return measurement_mission_from_dict(payload)
