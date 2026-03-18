@@ -6,6 +6,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 import json
+import re
 from tkinter import filedialog, messagebox, ttk
 import tkinter as tk
 from typing import Any
@@ -153,26 +154,24 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
         points_editor = ctk.CTkFrame(self)
         points_editor.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
-        for col in range(9):
+        for col in range(8):
             points_editor.columnconfigure(col, weight=0)
-        points_editor.columnconfigure(8, weight=1)
+        points_editor.columnconfigure(7, weight=1)
 
         ctk.CTkLabel(points_editor, text="2) Messpunkt anlegen").grid(row=0, column=0, padx=8, pady=8)
-        self.point_id_var = tk.StringVar(value="")
         self.point_name_var = tk.StringVar(value="")
         self.point_x_var = tk.StringVar(value="0.0")
         self.point_y_var = tk.StringVar(value="0.0")
         self.point_z_var = tk.StringVar(value="0.0")
         self.point_yaw_var = tk.StringVar(value="0.0")
 
-        self._labeled_entry(points_editor, row=0, column=1, label="ID", variable=self.point_id_var, width=80)
-        self._labeled_entry(points_editor, row=0, column=2, label="Name", variable=self.point_name_var, width=120)
-        self._labeled_entry(points_editor, row=0, column=3, label="X", variable=self.point_x_var, width=90)
-        self._labeled_entry(points_editor, row=0, column=4, label="Y", variable=self.point_y_var, width=90)
-        self._labeled_entry(points_editor, row=0, column=5, label="Z", variable=self.point_z_var, width=90)
-        self._labeled_entry(points_editor, row=0, column=6, label="Yaw", variable=self.point_yaw_var, width=90)
-        ctk.CTkButton(points_editor, text="Punkt hinzufügen", command=self._add_point).grid(row=0, column=7, padx=(8, 3))
-        ctk.CTkButton(points_editor, text="Auswahl entfernen", command=self._remove_selected_point).grid(row=0, column=8, padx=(3, 8), sticky="w")
+        self._labeled_entry(points_editor, row=0, column=1, label="Name", variable=self.point_name_var, width=120)
+        self._labeled_entry(points_editor, row=0, column=2, label="X", variable=self.point_x_var, width=90)
+        self._labeled_entry(points_editor, row=0, column=3, label="Y", variable=self.point_y_var, width=90)
+        self._labeled_entry(points_editor, row=0, column=4, label="Z", variable=self.point_z_var, width=90)
+        self._labeled_entry(points_editor, row=0, column=5, label="Yaw", variable=self.point_yaw_var, width=90)
+        ctk.CTkButton(points_editor, text="Punkt hinzufügen", command=self._add_point).grid(row=0, column=6, padx=(8, 3))
+        ctk.CTkButton(points_editor, text="Auswahl entfernen", command=self._remove_selected_point).grid(row=0, column=7, padx=(3, 8), sticky="w")
 
         points_table_frame = ctk.CTkFrame(self)
         points_table_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 6))
@@ -283,18 +282,32 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.validation_box.see("end")
         self.validation_box.configure(state="disabled")
 
+    def _generate_unique_point_id(self) -> str:
+        used_ids = {point.id for point in self._mission_points if point.id}
+        highest_suffix = 0
+        id_pattern = re.compile(r"^p(\d+)$")
+
+        for point_id in used_ids:
+            match = id_pattern.match(point_id)
+            if match:
+                highest_suffix = max(highest_suffix, int(match.group(1)))
+
+        candidate_index = highest_suffix + 1
+        while True:
+            point_id = f"p{candidate_index:03d}"
+            if point_id not in used_ids:
+                return point_id
+            candidate_index += 1
+
     def _add_point(self) -> None:
         point_payload = {
-            "id": self.point_id_var.get().strip() or None,
+            "id": self._generate_unique_point_id(),
             "name": self.point_name_var.get().strip() or None,
             "x": self.point_x_var.get().strip(),
             "y": self.point_y_var.get().strip(),
             "z": self.point_z_var.get().strip() or 0.0,
             "yaw": self.point_yaw_var.get().strip(),
         }
-        if point_payload["id"] is None and point_payload["name"] is None:
-            messagebox.showwarning("Messpunkt", "Bitte mindestens ID oder Name setzen.")
-            return
         try:
             mission = measurement_mission_from_dict(
                 {"name": "point-check", "points": [point_payload], "repeat": 1}
