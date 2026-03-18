@@ -181,6 +181,7 @@ class MeasurementRunExecutor:
         self._pause_cond = threading.Condition(self._state_lock)
         self.records: list[PointExecutionRecord] = []
         self._cancel_requested = False
+        self._cancel_confirmed = False
 
     @property
     def state(self) -> ExecutorState:
@@ -198,6 +199,7 @@ class MeasurementRunExecutor:
 
         self.records = []
         self._cancel_requested = False
+        self._cancel_confirmed = False
         repeats = self.mission.repeat or 1
         for cycle in range(repeats):
             for point_index, point in enumerate(self.mission.points):
@@ -249,8 +251,12 @@ class MeasurementRunExecutor:
                     completion_substatus = "completed_with_abort_request"
                     abort_reason = "run_cancelled.manual_stop_after_completion"
                 else:
-                    abort_reason = "run_cancelled.manual_stop"
-                    self._state = "cancelled"
+                    if self._cancel_confirmed:
+                        abort_reason = "run_cancelled.manual_stop"
+                        self._state = "cancelled"
+                    else:
+                        abort_reason = "run_cancelled.manual_stop_not_confirmed"
+                        self._state = "failed"
             elif self._cancel_requested:
                 self._state = "completed"
                 completion_substatus = "completed_with_abort_request"
@@ -309,7 +315,7 @@ class MeasurementRunExecutor:
 
     def _finalize_stop(self) -> ExecutorState:
         with self._state_lock:
-            self._state = "cancelled"
+            self._state = "cancelled" if self._cancel_confirmed else "failed"
             return self._state
 
     def _wait_until_resumed_or_stopped(self) -> bool:
@@ -331,9 +337,6 @@ class MeasurementRunExecutor:
         global_index = cycle * len(self.mission.points) + point_index
 
         for attempt in range(1, attempts + 1):
-            if self.state == "stopping":
-                nav_state = "canceled"
-                break
             nav_state = self.navigator.navigate_to_point(
                 self._to_navigation_point(point),
                 timeout_s=self.config.goal_reached_timeout_s,
@@ -343,6 +346,8 @@ class MeasurementRunExecutor:
 
         if self._cancel_requested and nav_state == "succeeded":
             nav_state = "canceled"
+        if self._cancel_requested and nav_state == "canceled":
+            self._cancel_confirmed = True
 
         if nav_state != "succeeded":
             error = (
