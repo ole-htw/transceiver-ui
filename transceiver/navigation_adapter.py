@@ -16,6 +16,7 @@ NavigationEventType = Literal[
     "goal_sent",
     "accepted",
     "feedback",
+    "position",
     "succeeded",
     "aborted",
     "canceled",
@@ -118,6 +119,19 @@ class Ros2CliNavigationTransport:
         self._goal_id_pattern = re.compile(
             r"(?:goal(?:[_\s-]?id)?|id)\s*[:=]\s*([0-9a-fA-F-]{36})"
         )
+        self._position_line_pattern = re.compile(
+            r"position\s*[:=]?\s*(?:\{)?[^{}]*\bx\s*[:=]\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)"
+            r".*?\by\s*[:=]\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)",
+            re.IGNORECASE,
+        )
+        self._yaw_pattern = re.compile(
+            r"\byaw\s*[:=]\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)",
+            re.IGNORECASE,
+        )
+        self._frame_id_pattern = re.compile(
+            r"\bframe_id\s*[:=]\s*['\"]?([A-Za-z0-9_./-]+)['\"]?",
+            re.IGNORECASE,
+        )
 
     @staticmethod
     def _tail_text(text: str, *, max_lines: int = 20) -> str:
@@ -125,6 +139,21 @@ class Ros2CliNavigationTransport:
         if not lines:
             return ""
         return "\\n".join(lines[-max_lines:])
+
+    def _extract_position_payload(self, line: str) -> dict[str, Any] | None:
+        match = self._position_line_pattern.search(line)
+        if not match:
+            return None
+        try:
+            x = float(match.group(1))
+            y = float(match.group(2))
+        except (TypeError, ValueError):
+            return None
+        yaw_match = self._yaw_pattern.search(line)
+        yaw = float(yaw_match.group(1)) if yaw_match else None
+        frame_match = self._frame_id_pattern.search(line)
+        frame_id = frame_match.group(1) if frame_match else "map"
+        return {"x": x, "y": y, "yaw": yaw, "frame_id": frame_id}
 
     @staticmethod
     def build_goal_payload(point: NavigationPoint) -> dict[str, Any]:
@@ -395,7 +424,12 @@ class Ros2CliNavigationTransport:
                 if "goal accepted" in lower:
                     accepted = True
                 elif "feedback" in lower:
-                    on_feedback({"raw": line})
+                    on_feedback(
+                        {
+                            "raw": line,
+                            "position": self._extract_position_payload(line),
+                        }
+                    )
                 elif "succeeded" in lower:
                     return NavigationOutcome("succeeded", accepted=accepted)
                 elif "aborted" in lower:
@@ -492,6 +526,9 @@ class NavigationAdapter:
 
             def _feedback_callback(payload: dict[str, Any]) -> None:
                 event_handler(NavigationEvent("feedback", attempt, data=payload))
+                position = payload.get("position")
+                if isinstance(position, dict):
+                    event_handler(NavigationEvent("position", attempt, data=position))
 
             outcome = self.transport.send_goal(
                 point=point,
