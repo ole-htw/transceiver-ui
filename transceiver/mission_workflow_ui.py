@@ -261,6 +261,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._map_image_preview: tk.PhotoImage | None = None
         self._map_canvas_image_id: int | None = None
         self._map_marker_ids: list[int] = []
+        self._map_image_size: tuple[int, int] | None = None
         self._live_position: dict[str, Any] | None = None
         self._selected_point_index: int | None = None
 
@@ -292,7 +293,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.stop_btn.grid(row=0, column=6, padx=3)
         ctk.CTkButton(controls, text="Run-Logs exportieren", command=self._export_logs).grid(row=0, column=7, padx=(10, 3))
 
-        self.live_var = tk.StringVar(value="Punkt: - | Navigation: idle | Messung: idle | Verbleibend: -")
+        self.live_var = tk.StringVar(value="Punkt: - | Navigation: idle | Messung: idle | Verbleibend: - | Live-Status: Karte nicht geladen")
         ctk.CTkLabel(controls, textvariable=self.live_var, anchor="w").grid(row=0, column=8, sticky="ew", padx=8)
 
         table_frame = ctk.CTkFrame(self)
@@ -368,6 +369,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._map_image_preview = None
         self._map_canvas_image_id = None
         self._map_marker_ids = []
+        self._map_image_size = None
         self._live_position = None
 
         mission = self._mission
@@ -404,6 +406,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
         self._map_image_original = photo
         self._map_image_preview = preview
+        self._map_image_size = (photo.width(), photo.height())
         self.map_status_var.set(
             f"Karte geladen: {image_path.name} ({photo.width()}x{photo.height()} px)"
         )
@@ -490,6 +493,49 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         map_pixel_y = float(image_height) - ((y - origin_y) / resolution)
         return (map_pixel_x * scale_x, map_pixel_y * scale_y)
 
+    def _world_to_map_pixel(self, *, x: float, y: float, image_height: int) -> tuple[float, float] | None:
+        mission = self._mission
+        if mission is None or mission.map_config is None:
+            return None
+        resolution = mission.map_config.resolution
+        if resolution <= 0:
+            return None
+        origin_x, origin_y, _origin_yaw = mission.map_config.origin
+        map_pixel_x = (x - origin_x) / resolution
+        map_pixel_y = float(image_height) - ((y - origin_y) / resolution)
+        return (map_pixel_x, map_pixel_y)
+
+    @staticmethod
+    def _is_pixel_inside_map(pixel_x: float, pixel_y: float, *, width: int, height: int) -> bool:
+        return 0.0 <= pixel_x <= float(width) and 0.0 <= pixel_y <= float(height)
+
+    def _current_live_status_text(self) -> str:
+        if self._map_image_size is None:
+            return "Karte nicht geladen"
+
+        position = self._live_position
+        if not isinstance(position, dict):
+            return "Keine Live-Pose verfügbar"
+        if position.get("frame_id") not in {None, "", "map"}:
+            return "Keine Live-Pose verfügbar"
+
+        x_value = position.get("x")
+        y_value = position.get("y")
+        if not isinstance(x_value, (int, float)) or not isinstance(y_value, (int, float)):
+            return "Keine Live-Pose verfügbar"
+
+        width, height = self._map_image_size
+        map_pixel = self._world_to_map_pixel(
+            x=float(x_value),
+            y=float(y_value),
+            image_height=height,
+        )
+        if map_pixel is None:
+            return "Karte nicht geladen"
+        if not self._is_pixel_inside_map(map_pixel[0], map_pixel[1], width=width, height=height):
+            return "Koordinaten außerhalb der Karte"
+        return "Live-Pose verfügbar"
+
     def _on_points_table_select(self, _event: tk.Event) -> None:
         selected = self.points_table.selection()
         if not selected:
@@ -522,15 +568,21 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
         scale_x = preview.width() / original.width()
         scale_y = preview.height() / original.height()
-        pixel_coordinates = self._world_to_preview_pixel(
+        map_pixel = self._world_to_map_pixel(
             x=float(x_value),
             y=float(y_value),
             image_height=original.height(),
-            scale_x=scale_x,
-            scale_y=scale_y,
         )
-        if pixel_coordinates is None:
+        if map_pixel is None:
             return
+        if not self._is_pixel_inside_map(
+            map_pixel[0],
+            map_pixel[1],
+            width=original.width(),
+            height=original.height(),
+        ):
+            return
+        pixel_coordinates = (map_pixel[0] * scale_x, map_pixel[1] * scale_y)
         px, py = pixel_coordinates
         radius = 6
         self.map_preview_canvas.create_oval(
@@ -778,10 +830,33 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._refresh_map_section()
         repeats = mission.repeat or 1
         total_points = len(mission.points) * repeats
-        self._set_validation_text(
+        validation_lines = [
             f"✅ Mission valide: {mission.name}\n"
             f"Punkte pro Zyklus: {len(mission.points)} | Wiederholungen: {repeats} | Gesamtpunkte: {total_points}"
-        )
+        ]
+
+        if self._map_image_size is None:
+            validation_lines.append(
+                "ℹ️ Karte nicht geladen: Live-Pose und Karten-Grenzprüfung sind derzeit nicht verfügbar."
+            )
+        else:
+            width, height = self._map_image_size
+            outside_points: list[str] = []
+            for index, point in enumerate(mission.points, start=1):
+                map_pixel = self._world_to_map_pixel(x=point.x, y=point.y, image_height=height)
+                if map_pixel is None:
+                    continue
+                if not self._is_pixel_inside_map(map_pixel[0], map_pixel[1], width=width, height=height):
+                    point_label = point.name or point.id or f"Punkt {index}"
+                    outside_points.append(point_label)
+            if outside_points:
+                joined = ", ".join(outside_points[:5])
+                suffix = " …" if len(outside_points) > 5 else ""
+                validation_lines.append(
+                    f"⚠️ Koordinaten außerhalb der Karte: {joined}{suffix}. Bitte Punkte korrigieren."
+                )
+
+        self._set_validation_text("\n".join(validation_lines))
 
     def _build_workflow_state_payload(self) -> dict[str, Any]:
         repeat_raw = self.repeat_var.get().strip()
@@ -960,6 +1035,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         position = event.get("position")
         self._live_position = position if isinstance(position, dict) else None
         self._draw_map_preview()
+        self._update_live_label()
 
     def _update_live_label(self, *, stage: str | None = None, status: str | None = None) -> None:
         total = len(self._mission.points) * (self._mission.repeat or 1) if self._mission else 0
@@ -987,7 +1063,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.live_var.set(
             f"Punktindex: {current_idx}/{max(total - 1, 0)} | "
             f"Navigation: {nav_status} | Messung: {meas_status} | "
-            f"Verbleibend: {remaining} | ETA: {eta}"
+            f"Verbleibend: {remaining} | ETA: {eta} | "
+            f"Live-Status: {self._current_live_status_text()}"
         )
 
     def _on_record(self, payload: dict[str, Any]) -> None:
