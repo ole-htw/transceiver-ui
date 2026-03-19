@@ -74,10 +74,41 @@ class _UiNavigator:
         self._on_status = on_status
         self._on_operator_message = on_operator_message
 
-    def navigate_to_point(self, point, *, timeout_s: float):  # type: ignore[no-untyped-def]
+    def navigate_to_point(  # type: ignore[no-untyped-def]
+        self,
+        point,
+        *,
+        timeout_s: float,
+        on_navigation_event=None,
+    ):
         self._on_status("navigation", "running")
+        latest_position_lock = threading.Lock()
+        latest_position: dict[str, Any] | None = None
+        polling_active = threading.Event()
+        polling_active.set()
+
+        def _emit_position_update() -> None:
+            if on_navigation_event is None:
+                return
+            with latest_position_lock:
+                position_copy = dict(latest_position) if isinstance(latest_position, dict) else None
+            on_navigation_event(
+                {
+                    "type": "position_update",
+                    "position": position_copy,
+                }
+            )
+
+        def _position_polling_loop() -> None:
+            while polling_active.is_set():
+                _emit_position_update()
+                time.sleep(0.5)
+
+        polling_thread = threading.Thread(target=_position_polling_loop, daemon=True)
+        polling_thread.start()
 
         def _on_event(event: NavigationEvent) -> None:
+            nonlocal latest_position
             if event.type in {"connection_error", "aborted", "timeout"}:
                 detail = event.message or 'ohne Details'
                 error_code = _operator_error_code(event.type, detail)
@@ -90,8 +121,16 @@ class _UiNavigator:
                 )
             if event.type == "succeeded":
                 self._on_status("navigation", "succeeded")
+            if event.type in {"feedback", "position"}:
+                payload = event.data if isinstance(event.data, dict) else {}
+                position = payload if event.type == "position" else payload.get("position")
+                with latest_position_lock:
+                    latest_position = position if isinstance(position, dict) else None
 
         state = self._adapter.navigate_to_point(point, timeout_s=timeout_s, on_event=_on_event)
+        polling_active.clear()
+        polling_thread.join(timeout=1.0)
+        _emit_position_update()
         if state != "succeeded":
             self._on_status("navigation", state)
         return state
@@ -222,6 +261,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._map_image_preview: tk.PhotoImage | None = None
         self._map_canvas_image_id: int | None = None
         self._map_marker_ids: list[int] = []
+        self._live_position: dict[str, Any] | None = None
         self._selected_point_index: int | None = None
 
         controls = ctk.CTkFrame(self)
@@ -328,6 +368,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._map_image_preview = None
         self._map_canvas_image_id = None
         self._map_marker_ids = []
+        self._live_position = None
 
         mission = self._mission
         map_config = mission.map_config if mission is not None else None
@@ -390,6 +431,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         )
         self._map_canvas_image_id = self.map_preview_canvas.create_image(0, 0, anchor="nw", image=preview)
         self._draw_mission_markers()
+        self._draw_live_marker()
 
     def _draw_mission_markers(self) -> None:
         self._map_marker_ids = []
@@ -457,6 +499,63 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         selected_index = self.points_table.index(selected[0])
         self._selected_point_index = selected_index if selected_index >= 0 else None
         self._draw_map_preview()
+
+    def _draw_live_marker(self) -> None:
+        mission = self._mission
+        preview = self._map_image_preview
+        original = self._map_image_original
+        position = self._live_position
+        if (
+            mission is None
+            or mission.map_config is None
+            or preview is None
+            or original is None
+            or position is None
+        ):
+            return
+        if position.get("frame_id") not in {None, "", "map"}:
+            return
+        x_value = position.get("x")
+        y_value = position.get("y")
+        if not isinstance(x_value, (int, float)) or not isinstance(y_value, (int, float)):
+            return
+
+        scale_x = preview.width() / original.width()
+        scale_y = preview.height() / original.height()
+        pixel_coordinates = self._world_to_preview_pixel(
+            x=float(x_value),
+            y=float(y_value),
+            image_height=original.height(),
+            scale_x=scale_x,
+            scale_y=scale_y,
+        )
+        if pixel_coordinates is None:
+            return
+        px, py = pixel_coordinates
+        radius = 6
+        self.map_preview_canvas.create_oval(
+            px - radius,
+            py - radius,
+            px + radius,
+            py + radius,
+            fill="#ff4d6d",
+            outline="#ffffff",
+            width=1,
+        )
+        yaw_value = position.get("yaw")
+        if isinstance(yaw_value, (int, float)):
+            heading_length = 14
+            end_x = px + math.cos(float(yaw_value)) * heading_length
+            end_y = py - math.sin(float(yaw_value)) * heading_length
+            self.map_preview_canvas.create_line(
+                px,
+                py,
+                end_x,
+                end_y,
+                fill="#ffccd5",
+                width=2,
+                arrow=tk.LAST,
+            )
 
     def _highlight_marker(self, marker_id: int) -> None:
         self.map_preview_canvas.itemconfigure(
@@ -790,6 +889,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             measurement_service=_UiMeasurementService(self._on_stage_update),
             persist_result=_persist,
             run_log_store=store,
+            on_runtime_event=self._on_executor_runtime_event,
             config=MeasurementRunExecutorConfig(
                 on_point_error="continue",
                 goal_reached_timeout_s=self._runtime_config.goal_reached_timeout_s,
@@ -845,6 +945,21 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _on_stage_update(self, stage: str, status: str) -> None:
         self.after(0, lambda: self._update_live_label(stage=stage, status=status))
+
+    def _on_executor_runtime_event(self, payload: dict[str, Any]) -> None:
+        self.after(0, lambda: self._handle_executor_runtime_event(payload))
+
+    def _handle_executor_runtime_event(self, payload: dict[str, Any]) -> None:
+        if payload.get("type") != "navigation":
+            return
+        event = payload.get("event")
+        if not isinstance(event, dict):
+            return
+        if event.get("type") != "position_update":
+            return
+        position = event.get("position")
+        self._live_position = position if isinstance(position, dict) else None
+        self._draw_map_preview()
 
     def _update_live_label(self, *, stage: str | None = None, status: str | None = None) -> None:
         total = len(self._mission.points) * (self._mission.repeat or 1) if self._mission else 0

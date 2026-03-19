@@ -31,6 +31,7 @@ class MissionNavigator(Protocol):
         point: NavigationPoint,
         *,
         timeout_s: float,
+        on_navigation_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> TerminalNavigationState:
         ...
 
@@ -164,6 +165,7 @@ class MeasurementRunExecutor:
         persist_result: ResultStore,
         persist_run_summary: RunSummaryStore | None = None,
         run_log_store: JsonRunLogStore | None = None,
+        on_runtime_event: Callable[[dict[str, Any]], None] | None = None,
         config: MeasurementRunExecutorConfig | None = None,
     ) -> None:
         self.mission = mission
@@ -175,6 +177,7 @@ class MeasurementRunExecutor:
         self.persist_result = persist_result
         self.persist_run_summary = persist_run_summary
         self.run_log_store = run_log_store
+        self.on_runtime_event = on_runtime_event
         self.config = config or MeasurementRunExecutorConfig()
         self._validate_start_point_index()
 
@@ -341,10 +344,23 @@ class MeasurementRunExecutor:
         point_started_at = time.time()
         global_index = cycle * len(self.mission.points) + point_index
 
+        def _emit_navigation_event(event_payload: dict[str, Any]) -> None:
+            self._emit_runtime_event(
+                {
+                    "type": "navigation",
+                    "cycle": cycle,
+                    "point_index": point_index,
+                    "global_index": global_index,
+                    "event": event_payload,
+                    "timestamp": time.time(),
+                }
+            )
+
         for attempt in range(1, attempts + 1):
             nav_state = self.navigator.navigate_to_point(
                 self._to_navigation_point(point),
                 timeout_s=self.config.goal_reached_timeout_s,
+                on_navigation_event=_emit_navigation_event,
             )
             if nav_state == "succeeded":
                 break
@@ -471,6 +487,14 @@ class MeasurementRunExecutor:
             measurement_result=measurement_result,
             error=None,
         )
+
+    def _emit_runtime_event(self, payload: dict[str, Any]) -> None:
+        if self.on_runtime_event is None:
+            return
+        try:
+            self.on_runtime_event(payload)
+        except Exception:
+            return
 
     def _persist_point_log(
         self,
