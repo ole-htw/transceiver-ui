@@ -70,6 +70,29 @@ Use `examples/measurement-mission.yaml` as a reference mission definition.
 Programmatic parsing/validation lives in `transceiver/measurement_mission.py`
 (`measurement_mission_from_dict` and `load_measurement_mission`).
 
+## Map & Live Position
+
+Zusätzlich zur Missionsdefinition kann eine Mission ein optionales
+`map_config`-Objekt enthalten, um Karte und Live-Position in der UI zu
+visualisieren.
+
+Schema von `map_config`:
+
+- `image` (required): Pfad zur Kartenbild-Datei (z. B. `.pgm`)
+- `resolution` (required): Kartenauflösung in Metern pro Pixel
+- `origin` (required): Ursprung der Karte als `[x, y, yaw]` im Karten-Frame
+
+Eine vollständige Dummy-Beispieldatei findest du unter
+`examples/measurement-mission-with-map.yaml`.
+
+Um von der Dummy-Konfiguration auf die reale Karte zu wechseln, ersetze in
+dieser Datei den Wert von `map_config.image` (aktuell
+`maps/DUMMY_MAP_PLACEHOLDER.pgm`) durch den Pfad zu deiner tatsächlichen
+Map-Datei.
+
+Wichtig: Für die Positionsdarstellung wird der Koordinatenbezug
+`frame_id: map` erwartet.
+
 ## Running the UI
 
 Activate your Python environment with the dependencies installed and run
