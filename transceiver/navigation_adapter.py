@@ -119,9 +119,17 @@ class Ros2CliNavigationTransport:
         self._goal_id_pattern = re.compile(
             r"(?:goal(?:[_\s-]?id)?|id)\s*[:=]\s*([0-9a-fA-F-]{36})"
         )
-        self._position_line_pattern = re.compile(
-            r"position\s*[:=]?\s*(?:\{)?[^{}]*\bx\s*[:=]\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)"
+        self._position_block_pattern = re.compile(
+            r"\bposition\b[\s:=\-\{\[]*.*?\bx\s*[:=]\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)"
             r".*?\by\s*[:=]\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)",
+            re.IGNORECASE | re.DOTALL,
+        )
+        self._x_pattern = re.compile(
+            r"\bx\s*[:=]\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)",
+            re.IGNORECASE,
+        )
+        self._y_pattern = re.compile(
+            r"\by\s*[:=]\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)",
             re.IGNORECASE,
         )
         self._yaw_pattern = re.compile(
@@ -140,20 +148,51 @@ class Ros2CliNavigationTransport:
             return ""
         return "\\n".join(lines[-max_lines:])
 
-    def _extract_position_payload(self, line: str) -> dict[str, Any] | None:
-        match = self._position_line_pattern.search(line)
-        if not match:
-            return None
+    def _extract_position_payload(self, feedback_block: str) -> dict[str, Any] | None:
+        match = self._position_block_pattern.search(feedback_block)
+        if match:
+            x_raw = match.group(1)
+            y_raw = match.group(2)
+        else:
+            x_match = self._x_pattern.search(feedback_block)
+            y_match = self._y_pattern.search(feedback_block)
+            if not x_match or not y_match:
+                return None
+            x_raw = x_match.group(1)
+            y_raw = y_match.group(1)
         try:
-            x = float(match.group(1))
-            y = float(match.group(2))
+            x = float(x_raw)
+            y = float(y_raw)
         except (TypeError, ValueError):
             return None
-        yaw_match = self._yaw_pattern.search(line)
+        yaw_match = self._yaw_pattern.search(feedback_block)
         yaw = float(yaw_match.group(1)) if yaw_match else None
-        frame_match = self._frame_id_pattern.search(line)
+        frame_match = self._frame_id_pattern.search(feedback_block)
         frame_id = frame_match.group(1) if frame_match else "map"
         return {"x": x, "y": y, "yaw": yaw, "frame_id": frame_id}
+
+    @staticmethod
+    def _is_feedback_continuation_line(raw_line: str) -> bool:
+        stripped = raw_line.strip()
+        if not stripped:
+            return False
+        if raw_line[:1].isspace():
+            return True
+        lowered = stripped.lower()
+        return any(
+            token in lowered
+            for token in (
+                "position",
+                "frame_id",
+                "yaw",
+                "x:",
+                "y:",
+                "x=",
+                "y=",
+                "header",
+                "pose",
+            )
+        )
 
     @staticmethod
     def build_goal_payload(point: NavigationPoint) -> dict[str, Any]:
@@ -411,47 +450,66 @@ class Ros2CliNavigationTransport:
         accepted = False
         start = time.monotonic()
         stdout_tail: deque[str] = deque(maxlen=20)
+        feedback_buffer: list[str] = []
+
+        def _emit_feedback(feedback_lines: list[str]) -> None:
+            if not feedback_lines:
+                return
+            feedback_block = "\n".join(feedback_lines)
+            position = self._extract_position_payload(feedback_block)
+            payload: dict[str, Any] = {"raw": feedback_block, "position": position}
+            if position is None:
+                payload["parse_error"] = "Failed to extract x/y from feedback block"
+                payload["raw_feedback_excerpt"] = self._tail_text(feedback_block, max_lines=6)
+            on_feedback(payload)
 
         while True:
-            line = self._last_process.stdout.readline()
-            if line:
-                line = line.strip()
+            raw_line = self._last_process.stdout.readline()
+            if raw_line:
+                line = raw_line.strip()
                 stdout_tail.append(line)
                 lower = line.lower()
+                if feedback_buffer:
+                    if self._is_feedback_continuation_line(raw_line):
+                        feedback_buffer.append(line)
+                        continue
+                    _emit_feedback(feedback_buffer)
+                    feedback_buffer.clear()
                 maybe_goal_match = self._goal_id_pattern.search(lower)
                 if maybe_goal_match:
                     self._last_goal_id = maybe_goal_match.group(1)
                 if "goal accepted" in lower:
                     accepted = True
                 elif "feedback" in lower:
-                    on_feedback(
-                        {
-                            "raw": line,
-                            "position": self._extract_position_payload(line),
-                        }
-                    )
+                    feedback_buffer.append(line)
                 elif "succeeded" in lower:
+                    _emit_feedback(feedback_buffer)
                     return NavigationOutcome("succeeded", accepted=accepted)
                 elif "aborted" in lower:
+                    _emit_feedback(feedback_buffer)
                     return NavigationOutcome("aborted", accepted=accepted, message=line)
                 elif "canceled" in lower or "cancelled" in lower:
+                    _emit_feedback(feedback_buffer)
                     return NavigationOutcome("canceled", accepted=accepted, message=line)
 
             poll = self._last_process.poll()
             elapsed = time.monotonic() - start
             if not accepted and elapsed > config.goal_acceptance_timeout_s:
+                _emit_feedback(feedback_buffer)
                 return NavigationOutcome(
                     "timeout",
                     accepted=False,
                     message="Goal acceptance timeout exceeded",
                 )
             if accepted and elapsed > config.goal_reached_timeout_s:
+                _emit_feedback(feedback_buffer)
                 return NavigationOutcome(
                     "timeout",
                     accepted=True,
                     message="Goal reached timeout exceeded",
                 )
             if poll is not None:
+                _emit_feedback(feedback_buffer)
                 remaining_stdout = (
                     self._last_process.stdout.read() if self._last_process.stdout else ""
                 )
