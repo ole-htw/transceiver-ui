@@ -445,7 +445,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._draw_map_preview()
 
     @staticmethod
-    def _resize_photo_to_fill(photo: tk.PhotoImage, *, target_width: int, target_height: int) -> tk.PhotoImage:
+    def _resize_photo_to_fit(photo: tk.PhotoImage, *, target_width: int, target_height: int) -> tk.PhotoImage:
         if target_width <= 1 or target_height <= 1:
             return photo
 
@@ -454,29 +454,33 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if width <= 0 or height <= 0:
             return photo
 
-        scale = max(target_width / width, target_height / height)
+        # Keep the full map visible (no clipping) while still using as much
+        # available canvas area as possible.
+        scale = min(target_width / width, target_height / height)
         if abs(scale - 1.0) < 0.01:
             return photo
 
-        ratio = Fraction(scale).limit_denominator(16)
+        ratio = Fraction(scale).limit_denominator(32)
         preview = photo.zoom(ratio.numerator, ratio.numerator).subsample(ratio.denominator, ratio.denominator)
-        if preview.width() >= target_width and preview.height() >= target_height:
+        preview_width = max(1, preview.width())
+        preview_height = max(1, preview.height())
+
+        if preview_width > target_width or preview_height > target_height:
+            fallback_subsample = max(
+                1,
+                math.ceil(preview_width / target_width),
+                math.ceil(preview_height / target_height),
+            )
+            if fallback_subsample > 1:
+                return preview.subsample(fallback_subsample, fallback_subsample)
             return preview
 
-        fallback_zoom = max(
-            1,
-            math.ceil(target_width / max(1, preview.width())),
-            math.ceil(target_height / max(1, preview.height())),
+        max_safe_zoom = min(
+            target_width // preview_width,
+            target_height // preview_height,
         )
-        if fallback_zoom > 1:
-            return preview.zoom(fallback_zoom, fallback_zoom)
-        fallback_subsample = max(
-            1,
-            math.ceil(preview.width() / target_width),
-            math.ceil(preview.height() / target_height),
-        )
-        if fallback_subsample > 1:
-            return preview.subsample(fallback_subsample, fallback_subsample)
+        if max_safe_zoom > 1:
+            return preview.zoom(max_safe_zoom, max_safe_zoom)
         return preview
 
     def _select_map_config_file(self) -> None:
@@ -541,7 +545,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             return
         canvas_width = max(1, self.map_preview_canvas.winfo_width())
         canvas_height = max(1, self.map_preview_canvas.winfo_height())
-        preview = self._resize_photo_to_fill(original, target_width=canvas_width, target_height=canvas_height)
+        preview = self._resize_photo_to_fit(original, target_width=canvas_width, target_height=canvas_height)
         offset_x = (canvas_width - preview.width()) / 2.0
         offset_y = (canvas_height - preview.height()) / 2.0
 
