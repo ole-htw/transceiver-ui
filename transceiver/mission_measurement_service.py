@@ -50,13 +50,25 @@ class MissionRxMeasurementService:
             raise RuntimeError("measurement_failed")
 
         file_ref = str(result.get("output_file") or output_file)
+        review_payload: dict[str, Any] | None = None
         if self._review_measurement is not None:
-            approved = bool(
-                self._review_measurement(
-                    point_context=point_context,
-                    output_file=file_ref,
-                )
+            review_result = self._review_measurement(
+                point_context=point_context,
+                output_file=file_ref,
             )
+            if isinstance(review_result, dict):
+                approved = bool(review_result.get("approved"))
+                if approved:
+                    review_payload = {
+                        "manual_lags": review_result.get("manual_lags"),
+                        "los_idx": review_result.get("los_idx"),
+                        "echo_indices": review_result.get("echo_indices"),
+                        "los_lag": review_result.get("los_lag"),
+                        "echo_lags": review_result.get("echo_lags"),
+                        "echo_delays": review_result.get("echo_delays"),
+                    }
+            else:
+                approved = bool(review_result)
             if not approved:
                 self._on_status("measurement", "failed")
                 if self._on_operator_message is not None:
@@ -66,10 +78,13 @@ class MissionRxMeasurementService:
                 raise RuntimeError("measurement_review_rejected")
 
         self._on_status("measurement", "succeeded")
-        return {
+        payload = {
             "measurement_id": f"{point_context.mission_name}-{point_context.global_index:04d}-{int(timestamp.timestamp())}",
             "file_ref": file_ref,
             "point_id": point_context.point.id,
             "timestamp": timestamp.isoformat(),
             "rx": result,
         }
+        if review_payload is not None:
+            payload["review"] = review_payload
+        return payload

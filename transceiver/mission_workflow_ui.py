@@ -1173,14 +1173,14 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._run_thread = threading.Thread(target=self._run_executor_thread, daemon=True)
         self._run_thread.start()
 
-    def _review_measurement(self, *, point_context, output_file: str) -> bool:  # type: ignore[no-untyped-def]
+    def _review_measurement(self, *, point_context, output_file: str) -> dict[str, object] | bool:  # type: ignore[no-untyped-def]
         point_id = point_context.point.id or point_context.point.name or f"point-{point_context.global_index}"
         point_label = f"Punkt {point_context.global_index} ({point_id})"
         review_fn = getattr(self.master, "review_measurement_for_mission", None)
         if not callable(review_fn):
             self._append_validation("⚠️ Mission-Review nicht verfügbar; Messung wird verworfen.")
             return False
-        return bool(review_fn(point_label=point_label, output_file=output_file))
+        return review_fn(point_label=point_label, output_file=output_file)
 
     def _run_executor_thread(self) -> None:
         assert self._executor is not None

@@ -1544,6 +1544,12 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         self.setModal(True)
         self.resize(980, 560)
         self._confirmed = False
+        self._lags = np.asarray(lags)
+        self._magnitudes = np.asarray(magnitudes)
+        self._manual_lags: dict[str, int | None] = {"los": None, "echo": None}
+        self._selected_los_idx = int(los_idx) if los_idx is not None else None
+        self._base_echo_indices = [int(idx) for idx in echo_indices]
+        self._selected_echo_indices = [int(idx) for idx in echo_indices]
 
         layout = QtWidgets.QVBoxLayout(self)
         header = QtWidgets.QLabel(
@@ -1553,50 +1559,20 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         layout.addWidget(header)
 
         plot_widget = pg.PlotWidget()
-        plot = plot_widget.getPlotItem()
-        _style_pg_preview_axes(plot, PLOT_COLORS["text"])
-        plot.showGrid(x=True, y=True, alpha=0.2)
-        plot.setTitle("Crosscorr. mit Peak-Labels")
-        plot.setLabel("bottom", "Lag")
-        plot.setLabel("left", "Magnitude")
+        self._plot = plot_widget.getPlotItem()
+        _style_pg_preview_axes(self._plot, PLOT_COLORS["text"])
+        self._plot.showGrid(x=True, y=True, alpha=0.2)
+        self._plot.setTitle("Crosscorr. mit Peak-Labels")
+        self._plot.setLabel("bottom", "Lag")
+        self._plot.setLabel("left", "Magnitude")
         layout.addWidget(plot_widget, stretch=1)
 
-        plot.plot(lags, magnitudes, pen=pg.mkPen(PLOT_COLORS["crosscorr"], width=2))
-        label_group = [int(los_idx)] if los_idx is not None else []
-        label_group.extend(int(idx) for idx in echo_indices)
-        peak_labels = _crosscorr_peak_labels(label_group)
-
-        if los_idx is not None:
-            los_idx_int = int(los_idx)
-            plot.plot(
-                [float(lags[los_idx_int])],
-                [float(magnitudes[los_idx_int])],
-                pen=None,
-                symbol="o",
-                symbolSize=9,
-                symbolBrush=pg.mkBrush(PLOT_COLORS["los"]),
-                symbolPen=pg.mkPen(PLOT_COLORS["los"]),
-            )
-            los_label_item = pg.TextItem("LOS", color=PLOT_COLORS["text"], anchor=(0, 1))
-            los_label_item.setPos(float(lags[los_idx_int]), float(magnitudes[los_idx_int]))
-            plot.addItem(los_label_item)
-
-        for peak_idx in echo_indices:
-            idx = int(peak_idx)
-            plot.plot(
-                [float(lags[idx])],
-                [float(magnitudes[idx])],
-                pen=None,
-                symbol="o",
-                symbolSize=8,
-                symbolBrush=pg.mkBrush(PLOT_COLORS["echo"]),
-                symbolPen=pg.mkPen(PLOT_COLORS["echo"]),
-            )
-            label_value = peak_labels.get(idx)
-            label_text = f"Echo {label_value}" if label_value is not None else "Echo"
-            label_item = pg.TextItem(label_text, color=PLOT_COLORS["text"], anchor=(0, 1))
-            label_item.setPos(float(lags[idx]), float(magnitudes[idx]))
-            plot.addItem(label_item)
+        self._stats_label = QtWidgets.QLabel("LOS-Echos: --")
+        self._stats_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
+        self._stats_label.setWordWrap(True)
+        layout.addWidget(self._stats_label)
+        self._render_plot()
+        self._connect_click_handler()
 
         button_row = QtWidgets.QHBoxLayout()
         button_row.addStretch(1)
@@ -1615,6 +1591,139 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
     @property
     def confirmed(self) -> bool:
         return self._confirmed
+
+    @property
+    def manual_lags(self) -> dict[str, int | None]:
+        return dict(self._manual_lags)
+
+    @property
+    def selected_los_idx(self) -> int | None:
+        return self._selected_los_idx
+
+    @property
+    def selected_echo_indices(self) -> list[int]:
+        return list(self._selected_echo_indices)
+
+    @property
+    def echo_delays(self) -> list[int]:
+        los_idx = self._selected_los_idx
+        if los_idx is None:
+            return []
+        delays: list[int] = []
+        for echo_idx in self._selected_echo_indices:
+            delay = _echo_delay_samples(self._lags, los_idx, int(echo_idx))
+            if delay is not None:
+                delays.append(int(delay))
+        return delays
+
+    def _render_plot(self) -> None:
+        self._plot.clear()
+        self._plot.plot(
+            self._lags,
+            self._magnitudes,
+            pen=pg.mkPen(PLOT_COLORS["crosscorr"], width=2),
+        )
+
+        label_group = (
+            [int(self._selected_los_idx), *[int(idx) for idx in self._selected_echo_indices]]
+            if self._selected_los_idx is not None
+            else []
+        )
+        peak_labels = _crosscorr_peak_labels(label_group)
+
+        if self._selected_los_idx is not None:
+            los_idx_int = int(self._selected_los_idx)
+            self._plot.plot(
+                [float(self._lags[los_idx_int])],
+                [float(self._magnitudes[los_idx_int])],
+                pen=None,
+                symbol="o",
+                symbolSize=9,
+                symbolBrush=pg.mkBrush(PLOT_COLORS["los"]),
+                symbolPen=pg.mkPen(PLOT_COLORS["los"]),
+            )
+            los_label_item = pg.TextItem("LOS", color=PLOT_COLORS["text"], anchor=(0, 1))
+            los_label_item.setPos(float(self._lags[los_idx_int]), float(self._magnitudes[los_idx_int]))
+            self._plot.addItem(los_label_item)
+
+        for peak_idx in self._selected_echo_indices:
+            idx = int(peak_idx)
+            self._plot.plot(
+                [float(self._lags[idx])],
+                [float(self._magnitudes[idx])],
+                pen=None,
+                symbol="o",
+                symbolSize=8,
+                symbolBrush=pg.mkBrush(PLOT_COLORS["echo"]),
+                symbolPen=pg.mkPen(PLOT_COLORS["echo"]),
+            )
+            label_value = peak_labels.get(idx)
+            label_text = f"Echo {label_value}" if label_value is not None else "Echo"
+            label_item = pg.TextItem(label_text, color=PLOT_COLORS["text"], anchor=(0, 1))
+            label_item.setPos(float(self._lags[idx]), float(self._magnitudes[idx]))
+            self._plot.addItem(label_item)
+
+        self._update_stats_label()
+
+    def _apply_manual_lag(self, kind: str, lag_value: float) -> None:
+        if kind not in ("los", "echo"):
+            return
+        self._manual_lags[kind] = int(round(lag_value))
+        base_echo_idx = None
+        if self._selected_los_idx is not None and self._base_echo_indices:
+            base_echo_idx = min(
+                self._base_echo_indices,
+                key=lambda idx: abs(float(self._lags[int(idx)]) - float(self._lags[int(self._selected_los_idx)])),
+            )
+        los_idx, echo_idx = _apply_manual_lags(
+            self._lags,
+            self._selected_los_idx,
+            base_echo_idx,
+            self._manual_lags,
+        )
+        self._selected_los_idx = los_idx
+        if los_idx is None:
+            self._selected_echo_indices = []
+        else:
+            reordered = [int(echo_idx)] if echo_idx is not None else []
+            reordered.extend(
+                int(idx)
+                for idx in self._base_echo_indices
+                if echo_idx is None or int(idx) != int(echo_idx)
+            )
+            self._selected_echo_indices = reordered
+        self._render_plot()
+
+    def _update_stats_label(self) -> None:
+        if self._selected_los_idx is None or not self._selected_echo_indices:
+            self._stats_label.setText("LOS-Echos: --")
+            return
+        rows = []
+        for i, delay in enumerate(self.echo_delays, start=1):
+            rows.append(f"Echo {i}: {delay} samp ({delay * 1.5:.1f} m)")
+        self._stats_label.setText("LOS-Echos:\n" + "\n".join(rows) if rows else "LOS-Echos: --")
+
+    def _connect_click_handler(self) -> None:
+        scene = self._plot.scene()
+        if scene is None:
+            return
+
+        def _handle_click(ev) -> None:
+            if ev.button() != QtCore.Qt.LeftButton:
+                return
+            modifiers = ev.modifiers()
+            if not (modifiers & QtCore.Qt.ShiftModifier or modifiers & QtCore.Qt.AltModifier):
+                return
+            pos = self._plot.getViewBox().mapSceneToView(ev.scenePos())
+            if modifiers & QtCore.Qt.ShiftModifier:
+                idx = int(np.abs(self._lags - pos.x()).argmin())
+                self._apply_manual_lag("los", float(self._lags[idx]))
+            if modifiers & QtCore.Qt.AltModifier:
+                idx = int(np.abs(self._lags - pos.x()).argmin())
+                self._apply_manual_lag("echo", float(self._lags[idx]))
+
+        self._plot._review_click_handler = _handle_click
+        scene.sigMouseClicked.connect(_handle_click)
 
 
 def _build_crosscorr_ctx(
@@ -6338,9 +6447,9 @@ class TransceiverUI(ctk.CTk):
         *,
         point_label: str,
         output_file: str,
-    ) -> bool:
+    ) -> dict[str, object]:
         """Open a blocking cross-correlation review dialog for one mission point."""
-        outcome = {"approved": False}
+        outcome: dict[str, object] = {"approved": False}
         done = threading.Event()
 
         def _show_review() -> None:
@@ -6388,7 +6497,23 @@ class TransceiverUI(ctk.CTk):
                     echo_indices=echo_indices,
                 )
                 dialog.exec()
-                outcome["approved"] = bool(dialog.confirmed)
+                approved = bool(dialog.confirmed)
+                outcome["approved"] = approved
+                if approved:
+                    los_idx_final = dialog.selected_los_idx
+                    echo_indices_final = dialog.selected_echo_indices
+                    outcome["manual_lags"] = dialog.manual_lags
+                    outcome["los_idx"] = int(los_idx_final) if los_idx_final is not None else None
+                    outcome["echo_indices"] = [int(idx) for idx in echo_indices_final]
+                    outcome["echo_delays"] = [int(delay) for delay in dialog.echo_delays]
+                    if los_idx_final is not None:
+                        outcome["los_lag"] = int(round(float(lags[int(los_idx_final)])))
+                    else:
+                        outcome["los_lag"] = None
+                    outcome["echo_lags"] = [
+                        int(round(float(lags[int(idx)])))
+                        for idx in echo_indices_final
+                    ]
             except Exception as exc:
                 self._out_queue.put(f"Mission review error: {exc}\n")
                 outcome["approved"] = False
@@ -6397,7 +6522,7 @@ class TransceiverUI(ctk.CTk):
 
         self._ui(_show_review)
         done.wait()
-        return bool(outcome["approved"])
+        return outcome
 
     def _reset_rx_buttons(self) -> None:
         if hasattr(self, "rx_stop"):
