@@ -22,8 +22,8 @@ from .measurement_run_executor import (
     JsonRunLogStore,
     MeasurementRunExecutor,
     MeasurementRunExecutorConfig,
-    PointExecutionContext,
 )
+from .mission_measurement_service import MissionRxMeasurementService
 from .navigation_adapter import NavigationAdapter, NavigationAdapterConfig, NavigationEvent
 
 MISSION_WORKFLOW_STATE_FILE = Path(__file__).with_name("mission_workflow_state.json")
@@ -138,21 +138,6 @@ class _UiNavigator:
 
     def cancel_current_goal(self) -> None:
         self._adapter.cancel_current_goal()
-
-
-class _UiMeasurementService:
-    def __init__(self, on_status) -> None:
-        self._on_status = on_status
-
-    def trigger(self, point_context: PointExecutionContext) -> dict[str, Any]:
-        self._on_status("measurement", "running")
-        time.sleep(0.25)
-        self._on_status("measurement", "succeeded")
-        return {
-            "measurement_id": f"m-{point_context.global_index:04d}",
-            "file_ref": f"signals/rx/point-{point_context.global_index:04d}.bin",
-            "point_id": point_context.point.id,
-        }
 
 
 class MissionWorkflowWindow(ctk.CTkToplevel):
@@ -1167,7 +1152,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 on_status=self._on_stage_update,
                 on_operator_message=self._append_validation,
             ),
-            measurement_service=_UiMeasurementService(self._on_stage_update),
+            measurement_service=MissionRxMeasurementService(
+                app=self.master,
+                on_status=self._on_stage_update,
+                on_operator_message=self._append_validation,
+            ),
             persist_result=_persist,
             run_log_store=store,
             on_runtime_event=self._on_executor_runtime_event,
