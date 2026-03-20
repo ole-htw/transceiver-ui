@@ -16,7 +16,7 @@ from typing import Any
 import customtkinter as ctk
 
 from .app_config import MissionRuntimeConfig
-from .measurement_mission import MeasurementMission, MeasurementPoint, measurement_mission_from_dict
+from .measurement_mission import MapConfig, MeasurementMission, MeasurementPoint, measurement_mission_from_dict
 from .measurement_run_executor import (
     JsonRunLogStore,
     MeasurementRunExecutor,
@@ -169,6 +169,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._run_log_dir: Path | None = None
         self._runtime_config = MissionRuntimeConfig.from_env()
         self._workflow_state_file = MISSION_WORKFLOW_STATE_FILE
+        self._selected_map_config: MapConfig | None = None
+        self._selected_map_config_file: str | None = None
 
         self._build_ui()
         self._restore_workflow_state()
@@ -246,6 +248,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         map_frame.rowconfigure(2, weight=1)
 
         ctk.CTkLabel(map_frame, text="4) Karte").grid(row=0, column=0, sticky="w", padx=8, pady=(8, 2))
+        ctk.CTkButton(map_frame, text="Map-Config wählen", command=self._select_map_config_file).grid(
+            row=0, column=0, sticky="e", padx=8, pady=(8, 2)
+        )
         self.map_status_var = tk.StringVar(value="Karte nicht konfiguriert.")
         ctk.CTkLabel(map_frame, textvariable=self.map_status_var, anchor="w").grid(
             row=1, column=0, sticky="ew", padx=8, pady=(0, 6)
@@ -372,8 +377,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._map_image_size = None
         self._live_position = None
 
-        mission = self._mission
-        map_config = mission.map_config if mission is not None else None
+        map_config = self._selected_map_config
         if map_config is None:
             self.map_status_var.set("Karte nicht konfiguriert (map_config fehlt).")
             self._render_map_placeholder("Kein Kartenbild konfiguriert.")
@@ -411,6 +415,51 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             f"Karte geladen: {image_path.name} ({photo.width()}x{photo.height()} px)"
         )
         self._draw_map_preview()
+
+    def _select_map_config_file(self) -> None:
+        selected_file = filedialog.askopenfilename(
+            title="Map-Config auswählen",
+            filetypes=[
+                ("Map-Dateien", "*.yaml *.yml *.json"),
+                ("YAML", "*.yaml *.yml"),
+                ("JSON", "*.json"),
+                ("Alle Dateien", "*.*"),
+            ],
+        )
+        if not selected_file:
+            return
+
+        map_config_path = Path(selected_file).expanduser().resolve()
+        try:
+            map_config = self._load_map_config_from_file(map_config_path)
+        except Exception as exc:
+            messagebox.showwarning("Map-Config ungültig", str(exc))
+            return
+
+        self._selected_map_config = map_config
+        self._selected_map_config_file = str(map_config_path)
+        if self._mission is not None:
+            self._mission = replace(self._mission, map_config=map_config)
+        self._persist_workflow_state()
+        self._refresh_map_section()
+        self._append_validation(f"✅ Map-Config geladen: {map_config_path.name}")
+
+    def _load_map_config_from_file(self, map_config_path: Path) -> MapConfig:
+        parsed_mission = measurement_mission_from_dict(
+            {
+                "name": "map-config-check",
+                "points": [{"id": "map-check", "x": 0.0, "y": 0.0, "yaw": 0.0}],
+                "map_config": str(map_config_path),
+            }
+        )
+        map_config = parsed_mission.map_config
+        if map_config is None:
+            raise ValueError("Map-Config konnte nicht gelesen werden.")
+
+        image_path = Path(map_config.image).expanduser()
+        if not image_path.is_absolute():
+            image_path = (map_config_path.parent / image_path).resolve()
+        return replace(map_config, image=str(image_path))
 
     def _render_map_placeholder(self, text: str) -> None:
         self.map_preview_canvas.delete("all")
@@ -809,6 +858,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 points=list(self._mission_points),
                 repeat=repeat,
                 wait_after_arrival_s=0.0,
+                map_config=self._selected_map_config,
             )
             serialized_points = [self._serialize_point(point) for point in mission.points]
             measurement_mission_from_dict(
@@ -817,6 +867,17 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                     "repeat": mission.repeat,
                     "wait_after_arrival_s": mission.wait_after_arrival_s,
                     "points": serialized_points,
+                    "map_config": {
+                        "image": mission.map_config.image,
+                        "resolution": mission.map_config.resolution,
+                        "origin": list(mission.map_config.origin),
+                        "frame_id": mission.map_config.frame_id,
+                        "negate": mission.map_config.negate,
+                        "occupied_thresh": mission.map_config.occupied_thresh,
+                        "free_thresh": mission.map_config.free_thresh,
+                    }
+                    if mission.map_config is not None
+                    else None,
                 }
             )
         except Exception as exc:
@@ -870,6 +931,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "repeat": repeat,
             "points": [self._serialize_point(point) for point in self._mission_points],
             "start_point_index": self._selected_start_point_index(),
+            "map_config_file": self._selected_map_config_file,
         }
 
     def _persist_workflow_state(self) -> None:
@@ -882,12 +944,27 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             return
 
         try:
+            map_config_file = payload.get("map_config_file")
+            loaded_map_config: MapConfig | None = None
+            if isinstance(map_config_file, str) and map_config_file.strip():
+                loaded_map_config = self._load_map_config_from_file(Path(map_config_file))
             mission = measurement_mission_from_dict(
                 {
                     "name": str(payload.get("name") or "mission-ui"),
                     "repeat": payload.get("repeat", 1),
                     "wait_after_arrival_s": 0.0,
                     "points": payload.get("points", []),
+                    "map_config": {
+                        "image": loaded_map_config.image,
+                        "resolution": loaded_map_config.resolution,
+                        "origin": list(loaded_map_config.origin),
+                        "frame_id": loaded_map_config.frame_id,
+                        "negate": loaded_map_config.negate,
+                        "occupied_thresh": loaded_map_config.occupied_thresh,
+                        "free_thresh": loaded_map_config.free_thresh,
+                    }
+                    if loaded_map_config is not None
+                    else None,
                 }
             )
         except Exception:
@@ -900,6 +977,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.repeat_var.set(str(mission.repeat or 1))
         self._mission_points = list(mission.points)
         self._mission = mission
+        self._selected_map_config = mission.map_config
+        self._selected_map_config_file = payload.get("map_config_file")
         self._refresh_points_table()
         self._refresh_map_section()
         persisted_start_point = payload.get("start_point_index")
