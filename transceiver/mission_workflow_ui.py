@@ -634,6 +634,15 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
     def _is_pixel_inside_map(pixel_x: float, pixel_y: float, *, width: int, height: int) -> bool:
         return 0.0 <= pixel_x <= float(width) and 0.0 <= pixel_y <= float(height)
 
+    def _expected_live_frame_id(self) -> str:
+        mission = self._mission
+        if mission is None or mission.map_config is None:
+            return "map"
+        frame_id = mission.map_config.frame_id
+        if isinstance(frame_id, str) and frame_id.strip():
+            return frame_id
+        return "map"
+
     def _current_live_status_text(self) -> str:
         if self._map_image_size is None:
             return "Karte nicht geladen"
@@ -641,8 +650,17 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         position = self._live_position
         if not isinstance(position, dict):
             return "Keine Live-Pose verfügbar"
-        if position.get("frame_id") not in {None, "", "map"}:
-            return "Keine Live-Pose verfügbar"
+        expected_frame_id = self._expected_live_frame_id()
+        received_frame_id = position.get("frame_id")
+        if (
+            isinstance(received_frame_id, str)
+            and received_frame_id.strip()
+            and received_frame_id != expected_frame_id
+        ):
+            return (
+                "Frame-Mismatch: "
+                f"erwarteter Frame={expected_frame_id}, empfangen={received_frame_id}"
+            )
 
         x_value = position.get("x")
         y_value = position.get("y")
@@ -684,7 +702,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             or position is None
         ):
             return
-        if position.get("frame_id") not in {None, "", "map"}:
+        expected_frame_id = self._expected_live_frame_id()
+        received_frame_id = position.get("frame_id")
+        if (
+            isinstance(received_frame_id, str)
+            and received_frame_id.strip()
+            and received_frame_id != expected_frame_id
+        ):
             return
         x_value = position.get("x")
         y_value = position.get("y")
