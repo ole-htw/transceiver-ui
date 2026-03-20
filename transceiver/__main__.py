@@ -6167,7 +6167,13 @@ class TransceiverUI(ctk.CTk):
 
     def _run_rx_thread(
         self, arg_list: list[str], channels: int, rate: float
-    ) -> None:
+    ) -> dict[str, object]:
+        result: dict[str, object] = {
+            "ok": False,
+            "error": None,
+            "output_file": None,
+            "started_at": time.time(),
+        }
         try:
             from .helpers import rx_to_file
 
@@ -6175,6 +6181,7 @@ class TransceiverUI(ctk.CTk):
             rx_to_file.main(args=args)
         except Exception as exc:
             self._out_queue.put(f"Receive error: {exc}\n")
+            result["error"] = str(exc)
             args = None
         finally:
             self._cmd_running = False
@@ -6182,6 +6189,8 @@ class TransceiverUI(ctk.CTk):
             self._ui(self._reset_rx_buttons)
 
         if args is not None:
+            result["ok"] = True
+            result["output_file"] = str(args.output_file)
             try:
                 path = Path(args.output_file)
                 try:
@@ -6197,6 +6206,41 @@ class TransceiverUI(ctk.CTk):
                 )
             except Exception as exc:
                 self._out_queue.put(f"Receive plot error: {exc}\n")
+        result["finished_at"] = time.time()
+        return result
+
+    def _build_receive_arg_list(self, *, output_file: str | None = None) -> tuple[list[str], int, float]:
+        out_file = output_file if output_file is not None else self.rx_file.get().strip()
+        channels = 2 if self.rx_channel_2.get() else 1
+        rate = _parse_number_expr_or_error(self.rx_rate.get())
+        arg_list = [
+            "-a",
+            self.rx_args.get(),
+            "-f",
+            self.rx_freq.get(),
+            "-r",
+            self.rx_rate.get(),
+            "-d",
+            self.rx_dur.get(),
+            "-g",
+            self.rx_gain.get(),
+            "--dram",
+        ]
+        if out_file:
+            arg_list += ["--output-file", out_file]
+        if self.rx_channel_2.get():
+            arg_list += ["--channels", "0", "1"]
+        return arg_list, channels, rate
+
+    def receive_for_mission(self, *, output_file: str) -> dict[str, object]:
+        arg_list, channels, rate = self._build_receive_arg_list(output_file=output_file)
+        self._cmd_running = True
+        if hasattr(self, "rx_stop"):
+            self._ui(lambda: self.rx_stop.configure(state="normal"))
+        if hasattr(self, "rx_button"):
+            self._ui(lambda: self.rx_button.configure(state="disabled"))
+        self._process_queue()
+        return self._run_rx_thread(arg_list, channels, rate)
 
     def _reset_rx_buttons(self) -> None:
         if hasattr(self, "rx_stop"):
@@ -7139,30 +7183,11 @@ class TransceiverUI(ctk.CTk):
             self.rx_button.configure(state="normal")
 
     def receive(self):
-        out_file = self.rx_file.get().strip()
-        channels = 2 if self.rx_channel_2.get() else 1
         try:
-            rate = _parse_number_expr_or_error(self.rx_rate.get())
+            arg_list, channels, rate = self._build_receive_arg_list()
         except ValueError as exc:
             messagebox.showerror("Receive", str(exc))
             return
-        arg_list = [
-            "-a",
-            self.rx_args.get(),
-            "-f",
-            self.rx_freq.get(),
-            "-r",
-            self.rx_rate.get(),
-            "-d",
-            self.rx_dur.get(),
-            "-g",
-            self.rx_gain.get(),
-            "--dram",
-        ]
-        if out_file:
-            arg_list += ["--output-file", out_file]
-        if self.rx_channel_2.get():
-            arg_list += ["--channels", "0", "1"]
         self._cmd_running = True
         if hasattr(self, "rx_stop"):
             self.rx_stop.configure(state="normal")
