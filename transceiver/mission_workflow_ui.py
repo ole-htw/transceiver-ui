@@ -179,7 +179,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(5, weight=1)
+        self.rowconfigure(2, weight=1)
+        self.rowconfigure(5, weight=0)
 
         workflow = ctk.CTkFrame(self)
         workflow.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
