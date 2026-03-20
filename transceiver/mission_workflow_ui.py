@@ -178,7 +178,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(6, weight=1)
+        self.rowconfigure(5, weight=1)
 
         workflow = ctk.CTkFrame(self)
         workflow.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
@@ -242,8 +242,14 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.validation_box.insert("1.0", "3) Validierungsergebnis erscheint hier.\n")
         self.validation_box.configure(state="disabled")
 
-        map_frame = ctk.CTkFrame(self)
-        map_frame.grid(row=4, column=0, sticky="nsew", padx=10, pady=(0, 6))
+        map_controls_row = ctk.CTkFrame(self, fg_color="transparent")
+        map_controls_row.grid(row=4, column=0, sticky="nsew", padx=10, pady=(0, 6))
+        map_controls_row.columnconfigure(0, weight=3)
+        map_controls_row.columnconfigure(1, weight=2)
+        map_controls_row.rowconfigure(0, weight=1)
+
+        map_frame = ctk.CTkFrame(map_controls_row)
+        map_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
         map_frame.columnconfigure(0, weight=1)
         map_frame.rowconfigure(2, weight=1)
 
@@ -270,16 +276,17 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._live_position: dict[str, Any] | None = None
         self._selected_point_index: int | None = None
 
-        controls = ctk.CTkFrame(self)
-        controls.grid(row=5, column=0, sticky="ew", padx=10, pady=(0, 6))
-        for col in range(9):
+        controls = ctk.CTkFrame(map_controls_row)
+        controls.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        for col in range(4):
             controls.columnconfigure(col, weight=0)
-        controls.columnconfigure(8, weight=1)
+        controls.columnconfigure(3, weight=1)
+        controls.rowconfigure(3, weight=1)
 
-        ctk.CTkLabel(controls, text="5) Laufsteuerung").grid(row=0, column=0, padx=8, pady=8)
+        ctk.CTkLabel(controls, text="5) Laufsteuerung").grid(row=0, column=0, columnspan=4, sticky="w", padx=8, pady=(8, 4))
         self.start_btn = ctk.CTkButton(controls, text="Start", command=self._start_run)
-        self.start_btn.grid(row=0, column=1, padx=3)
-        ctk.CTkLabel(controls, text="Start ab Punkt").grid(row=0, column=2, padx=(10, 2))
+        self.start_btn.grid(row=1, column=0, padx=(8, 3), pady=(0, 4), sticky="w")
+        ctk.CTkLabel(controls, text="Start ab Punkt").grid(row=1, column=1, padx=(10, 2), pady=(0, 4), sticky="e")
         self.start_point_var = tk.StringVar(value="1")
         self.start_point_combo = ctk.CTkComboBox(
             controls,
@@ -289,20 +296,24 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             state="readonly",
             command=lambda _value: self._persist_workflow_state(),
         )
-        self.start_point_combo.grid(row=0, column=3, padx=(0, 8))
+        self.start_point_combo.grid(row=1, column=2, columnspan=2, padx=(0, 8), pady=(0, 4), sticky="w")
         self.pause_btn = ctk.CTkButton(controls, text="Pause", command=self._pause_run, state="disabled")
-        self.pause_btn.grid(row=0, column=4, padx=3)
+        self.pause_btn.grid(row=2, column=0, padx=(8, 3), pady=3, sticky="w")
         self.resume_btn = ctk.CTkButton(controls, text="Fortsetzen", command=self._resume_run, state="disabled")
-        self.resume_btn.grid(row=0, column=5, padx=3)
+        self.resume_btn.grid(row=2, column=1, padx=3, pady=3, sticky="w")
         self.stop_btn = ctk.CTkButton(controls, text="Stop", command=self._stop_run, state="disabled")
-        self.stop_btn.grid(row=0, column=6, padx=3)
-        ctk.CTkButton(controls, text="Run-Logs exportieren", command=self._export_logs).grid(row=0, column=7, padx=(10, 3))
+        self.stop_btn.grid(row=2, column=2, padx=3, pady=3, sticky="w")
+        ctk.CTkButton(controls, text="Run-Logs exportieren", command=self._export_logs).grid(
+            row=2, column=3, padx=(10, 8), pady=3, sticky="w"
+        )
 
         self.live_var = tk.StringVar(value="Punkt: - | Navigation: idle | Messung: idle | Verbleibend: - | Live-Status: Karte nicht geladen")
-        ctk.CTkLabel(controls, textvariable=self.live_var, anchor="w").grid(row=0, column=8, sticky="ew", padx=8)
+        ctk.CTkLabel(controls, textvariable=self.live_var, anchor="w", justify="left").grid(
+            row=3, column=0, columnspan=4, sticky="nsew", padx=8, pady=(4, 8)
+        )
 
         table_frame = ctk.CTkFrame(self)
-        table_frame.grid(row=6, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        table_frame.grid(row=5, column=0, sticky="nsew", padx=10, pady=(0, 10))
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
