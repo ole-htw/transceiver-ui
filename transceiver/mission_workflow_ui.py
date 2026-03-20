@@ -1010,29 +1010,34 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "map_config_file": self._selected_map_config_file,
         }
 
-    def _persist_workflow_state(self) -> None:
-        if self._is_restoring_workflow_state:
-            return
-        payload = self._build_workflow_state_payload()
-        _save_json_dict(self._workflow_state_file, payload)
-
-    def _restore_workflow_state(self) -> None:
-        payload = _load_json_dict(self._workflow_state_file)
-        if not payload:
-            return
-
-        self._is_restoring_workflow_state = True
+    def _remove_workflow_state_file(self) -> None:
         try:
-            map_config_file = payload.get("map_config_file")
-            loaded_map_config: MapConfig | None = None
-            if isinstance(map_config_file, str) and map_config_file.strip():
+            self._workflow_state_file.unlink(missing_ok=True)
+        except Exception:
+            return
+
+    def _validate_workflow_state_payload(
+        self, payload: dict[str, Any]
+    ) -> tuple[MeasurementMission | None, str | None]:
+        points = payload.get("points", [])
+        if not isinstance(points, list) or not points:
+            return None, "Persistenzdatei enthält keine Punkte."
+
+        map_config_file = payload.get("map_config_file")
+        loaded_map_config: MapConfig | None = None
+        if isinstance(map_config_file, str) and map_config_file.strip():
+            try:
                 loaded_map_config = self._load_map_config_from_file(Path(map_config_file))
+            except Exception as exc:
+                return None, f"Map-Config konnte nicht geladen werden: {exc}"
+
+        try:
             mission = measurement_mission_from_dict(
                 {
                     "name": str(payload.get("name") or "mission-ui"),
                     "repeat": payload.get("repeat", 1),
                     "wait_after_arrival_s": 0.0,
-                    "points": payload.get("points", []),
+                    "points": points,
                     "map_config": {
                         "image": loaded_map_config.image,
                         "resolution": loaded_map_config.resolution,
@@ -1046,13 +1051,37 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                     else None,
                 }
             )
-        except Exception:
+        except Exception as exc:
+            return None, str(exc)
+        return mission, None
+
+    def _persist_workflow_state(self) -> None:
+        if self._is_restoring_workflow_state:
+            return
+        payload = self._build_workflow_state_payload()
+        _mission, validation_error = self._validate_workflow_state_payload(payload)
+        if validation_error is not None:
+            self._remove_workflow_state_file()
             self._append_validation(
-                "⚠️ Persistierter Workflow konnte nicht geladen werden (ungültige Daten)."
+                f"⚠️ Workflow-Status wurde wegen ungültiger Persistenzdaten nicht gespeichert: {validation_error}"
             )
             return
+        _save_json_dict(self._workflow_state_file, payload)
 
+    def _restore_workflow_state(self) -> None:
+        payload = _load_json_dict(self._workflow_state_file)
+        if not payload:
+            return
+
+        self._is_restoring_workflow_state = True
         try:
+            mission, validation_error = self._validate_workflow_state_payload(payload)
+            if mission is None:
+                self._remove_workflow_state_file()
+                detail = validation_error or "Ungültige Daten."
+                self._append_validation(f"⚠️ Persistierter Workflow wurde verworfen: {detail}")
+                return
+
             self.mission_name_var.set(mission.name)
             self.repeat_var.set(str(mission.repeat or 1))
             self._mission_points = list(mission.points)
