@@ -291,6 +291,10 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         controls.rowconfigure(3, weight=1)
 
         ctk.CTkLabel(controls, text="5) Laufsteuerung").grid(row=0, column=0, columnspan=4, sticky="w", padx=8, pady=(8, 4))
+        self.review_ready_var = tk.StringVar(value="Review: nicht geprüft")
+        ctk.CTkLabel(controls, textvariable=self.review_ready_var, anchor="w").grid(
+            row=0, column=3, padx=(8, 8), pady=(8, 4), sticky="e"
+        )
         self.start_btn = ctk.CTkButton(controls, text="Start", command=self._start_run)
         self.start_btn.grid(row=1, column=0, padx=(8, 3), pady=(0, 4), sticky="w")
         ctk.CTkLabel(controls, text="Start ab Punkt").grid(row=1, column=1, padx=(10, 2), pady=(0, 4), sticky="e")
@@ -351,6 +355,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.repeat_var.trace_add("write", lambda *_args: self._persist_workflow_state())
         self._refresh_start_point_options()
         self._refresh_map_section()
+        self._refresh_review_ready_indicator()
 
     def _stabilize_initial_geometry(self) -> None:
         """Ensure all control rows are visible right after opening the window."""
@@ -1026,6 +1031,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 )
 
         self._set_validation_text("\n".join(validation_lines))
+        self._refresh_review_ready_indicator()
 
     def _build_workflow_state_payload(self) -> dict[str, Any]:
         repeat_raw = self.repeat_var.get().strip()
@@ -1107,6 +1113,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 f"✅ Persistierter Workflow geladen: {mission.name}\n"
                 f"Punkte pro Zyklus: {len(mission.points)} | Wiederholungen: {repeats} | Gesamtpunkte: {total_points}"
             )
+            self._refresh_review_ready_indicator()
         finally:
             self._is_restoring_workflow_state = False
 
@@ -1115,6 +1122,17 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             messagebox.showwarning("Mission", "Bitte zuerst eine gültige Mission anlegen und validieren.")
             return
         if self._run_thread and self._run_thread.is_alive():
+            return
+        ready, reasons = self._check_run_prerequisites()
+        self._refresh_review_ready_indicator(prerequisites_ok=ready)
+        if not ready:
+            details = "\n".join(f"• {reason}" for reason in reasons)
+            messagebox.showwarning(
+                "Run-Start blockiert",
+                "Der Run kann nicht gestartet werden, da Voraussetzungen fehlen:\n\n"
+                f"{details}\n\nBitte Voraussetzungen erfüllen und erneut starten.",
+            )
+            self._append_validation("❌ Run-Start blockiert: " + " | ".join(reasons))
             return
         start_point_index = self._selected_start_point_index()
 
@@ -1183,6 +1201,52 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._append_validation("⚠️ Mission-Review nicht verfügbar; Messung wird verworfen.")
             return False
         return review_fn(point_label=point_label, output_file=output_file)
+
+    def _get_crosscorr_reference_for_mission(self) -> Any:
+        get_reference = getattr(self.master, "_get_crosscorr_reference", None)
+        if callable(get_reference):
+            try:
+                reference_payload = get_reference()
+            except Exception:
+                return None
+            if isinstance(reference_payload, tuple) and reference_payload:
+                return reference_payload[0]
+            return reference_payload
+        return getattr(self.master, "tx_data", None)
+
+    @staticmethod
+    def _has_crosscorr_reference_data(reference_data: Any) -> bool:
+        if reference_data is None:
+            return False
+        size = getattr(reference_data, "size", None)
+        if isinstance(size, int):
+            return size > 0
+        try:
+            return len(reference_data) > 0  # type: ignore[arg-type]
+        except Exception:
+            return False
+
+    def _check_run_prerequisites(self) -> tuple[bool, list[str]]:
+        reasons: list[str] = []
+        review_fn = getattr(self.master, "review_measurement_for_mission", None)
+        if not callable(review_fn):
+            reasons.append(
+                "Review-Funktion ist nicht verfügbar (self.master.review_measurement_for_mission ist nicht callable)."
+            )
+        reference_data = self._get_crosscorr_reference_for_mission()
+        if not self._has_crosscorr_reference_data(reference_data):
+            reasons.append(
+                "TX-Referenzdaten für Crosscorrelation fehlen. Bitte TX laden (gleiche Quelle wie _get_crosscorr_reference)."
+            )
+        return len(reasons) == 0, reasons
+
+    def _refresh_review_ready_indicator(self, prerequisites_ok: bool | None = None) -> None:
+        if prerequisites_ok is None:
+            prerequisites_ok, _ = self._check_run_prerequisites()
+        if prerequisites_ok:
+            self.review_ready_var.set("Review: bereit ✅")
+        else:
+            self.review_ready_var.set("Review: nicht bereit ❌")
 
     def _run_executor_thread(self) -> None:
         assert self._executor is not None
