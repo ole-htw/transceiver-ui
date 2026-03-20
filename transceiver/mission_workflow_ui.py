@@ -324,7 +324,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
-        columns = ("idx", "point", "nav", "measurement", "status", "error")
+        columns = ("idx", "point", "nav", "measurement", "echo_delays", "status", "error")
         self.results_table = ttk.Treeview(table_frame, columns=columns, show="headings", height=14)
         self.results_table.grid(row=0, column=0, sticky="nsew")
         headings = {
@@ -332,12 +332,14 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "point": "Punkt",
             "nav": "Navigation",
             "measurement": "Messung",
+            "echo_delays": "LOS->Echo",
             "status": "Gesamtstatus",
             "error": "Fehler",
         }
         for key, title in headings.items():
             self.results_table.heading(key, text=title)
             self.results_table.column(key, stretch=True, width=110)
+        self.results_table.column("echo_delays", width=190)
         self.results_table.column("error", width=260)
 
         scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.results_table.yview)
@@ -1279,6 +1281,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         point = payload.get("point", {})
         nav = payload.get("navigation", {})
         meas = payload.get("measurement", {})
+        result = meas.get("result", {}) if isinstance(meas.get("result"), dict) else {}
+        echo_delays_text = self._format_echo_delays_for_table(result.get("echo_delays"))
         self.results_table.insert(
             "",
             "end",
@@ -1287,11 +1291,30 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 point.get("id") or point.get("name") or "-",
                 nav.get("state", "-"),
                 meas.get("status", "-"),
+                echo_delays_text,
                 "ok" if payload.get("error") is None else "fehler",
                 payload.get("error") or "",
             ),
         )
         self._update_live_label()
+
+    @staticmethod
+    def _format_echo_delays_for_table(value: Any) -> str:
+        if not isinstance(value, list) or not value:
+            return "-"
+        rows: list[str] = []
+        for idx, item in enumerate(value, start=1):
+            if not isinstance(item, dict):
+                rows.append(str(item))
+                continue
+            echo_idx = item.get("echo_index", idx - 1)
+            delta_lag = item.get("delta_lag")
+            distance = item.get("distance_m")
+            base = f"E{echo_idx}: {delta_lag if delta_lag is not None else '--'}"
+            if isinstance(distance, (int, float)):
+                base += f" ({float(distance):.1f}m)"
+            rows.append(base)
+        return "; ".join(rows)
 
     def _on_run_finished(self, state: str) -> None:
         self._set_run_buttons(running=False, paused=False)

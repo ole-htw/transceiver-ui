@@ -310,7 +310,12 @@ def test_writes_point_logs_and_run_summary(tmp_path: Path) -> None:
     executor = MeasurementRunExecutor(
         mission=_mission(),
         navigator=nav,
-        trigger_measurement=lambda _point: {"measurement_id": "ok-1"},
+        trigger_measurement=lambda _point: {
+            "measurement_id": "ok-1",
+            "los_lag": -100,
+            "echo_lags": [-80],
+            "echo_delays": [{"echo_index": 1, "delta_lag": 20, "distance_m": 30.0}],
+        },
         persist_result=lambda _payload: None,
         run_log_store=run_log_store,
         config=MeasurementRunExecutorConfig(on_point_error="continue"),
@@ -325,6 +330,9 @@ def test_writes_point_logs_and_run_summary(tmp_path: Path) -> None:
     first_payload = json.loads(point_logs[0].read_text(encoding="utf-8"))
     assert first_payload["timestamps"]["start"] <= first_payload["timestamps"]["end"]
     assert first_payload["measurement"]["status"] == "succeeded"
+    assert first_payload["measurement"]["result"]["echo_delays"] == [
+        {"echo_index": 1, "delta_lag": 20, "distance_m": 30.0}
+    ]
 
     second_payload = json.loads(point_logs[1].read_text(encoding="utf-8"))
     assert second_payload["measurement"]["status"] == "skipped"

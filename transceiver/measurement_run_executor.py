@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import threading
 import time
+from copy import deepcopy
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
@@ -511,6 +512,7 @@ class MeasurementRunExecutor:
         error: str | None,
     ) -> None:
         point_ended_at = time.time()
+        measurement_payload = deepcopy(measurement_result)
         payload = {
             "mission": self.mission.name,
             "cycle": cycle,
@@ -545,9 +547,9 @@ class MeasurementRunExecutor:
             },
             "measurement": {
                 "status": measurement_status,
-                "id": _extract_measurement_id(measurement_result),
-                "file_ref": _extract_measurement_file_ref(measurement_result),
-                "result": measurement_result,
+                "id": _extract_measurement_id(measurement_payload),
+                "file_ref": _extract_measurement_file_ref(measurement_payload),
+                "result": measurement_payload,
             },
             "error": error,
             "executor_state": self.state,
