@@ -257,6 +257,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._map_image_size: tuple[int, int] | None = None
         self._live_position: dict[str, Any] | None = None
         self._selected_point_index: int | None = None
+        self._last_live_diagnosis_key: str | None = None
+        self._emit_live_diagnostics_to_validation = True
 
         side_panel = ctk.CTkFrame(map_controls_row)
         side_panel.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
@@ -414,6 +416,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if map_config is None:
             self.map_status_var.set("Karte nicht konfiguriert (map_config fehlt).")
             self._render_map_placeholder("Kein Kartenbild konfiguriert.")
+            self._update_live_label()
             return
 
         image_path = Path(map_config.image).expanduser()
@@ -423,6 +426,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if not image_path.exists():
             self.map_status_var.set(f"Kartenbild nicht gefunden: {image_path}")
             self._render_map_placeholder("Kartenbild fehlt.\nBitte map_config.image prüfen.")
+            self._update_live_label()
             return
 
         try:
@@ -430,6 +434,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         except Exception:
             self.map_status_var.set(f"Kartenbild ungültig oder nicht lesbar: {image_path}")
             self._render_map_placeholder("Kartenbild konnte nicht geladen werden.")
+            self._update_live_label()
             return
 
         self._map_image_original = photo
@@ -439,6 +444,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             f"Karte geladen: {image_path.name} ({photo.width()}x{photo.height()} px)"
         )
         self._draw_map_preview()
+        self._update_live_label()
 
     def _on_map_canvas_resize(self, _event: tk.Event) -> None:
         if self._map_image_original is None:
@@ -643,13 +649,14 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             return frame_id
         return "map"
 
-    def _current_live_status_text(self) -> str:
+    def _live_pose_diagnosis(self) -> tuple[str, str]:
         if self._map_image_size is None:
-            return "Karte nicht geladen"
+            return ("map_not_loaded", "Karte nicht geladen")
 
         position = self._live_position
         if not isinstance(position, dict):
-            return "Keine Live-Pose verfügbar"
+            return ("no_position", "Keine Position empfangen")
+
         expected_frame_id = self._expected_live_frame_id()
         received_frame_id = position.get("frame_id")
         if (
@@ -658,26 +665,40 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             and received_frame_id != expected_frame_id
         ):
             return (
+                "frame_mismatch",
                 "Frame-Mismatch: "
-                f"erwarteter Frame={expected_frame_id}, empfangen={received_frame_id}"
+                f"erwarteter Frame={expected_frame_id}, empfangen={received_frame_id}",
             )
 
         x_value = position.get("x")
         y_value = position.get("y")
         if not isinstance(x_value, (int, float)) or not isinstance(y_value, (int, float)):
-            return "Keine Live-Pose verfügbar"
+            return ("invalid_numeric_values", "Ungültige numerische Werte in Live-Pose")
+
+        parsed_x = float(x_value)
+        parsed_y = float(y_value)
+        if not math.isfinite(parsed_x) or not math.isfinite(parsed_y):
+            return ("invalid_numeric_values", "Ungültige numerische Werte in Live-Pose")
 
         width, height = self._map_image_size
         map_pixel = self._world_to_map_pixel(
-            x=float(x_value),
-            y=float(y_value),
+            x=parsed_x,
+            y=parsed_y,
             image_height=height,
         )
         if map_pixel is None:
-            return "Karte nicht geladen"
+            return ("map_not_loaded", "Karte nicht geladen")
         if not self._is_pixel_inside_map(map_pixel[0], map_pixel[1], width=width, height=height):
-            return "Koordinaten außerhalb der Karte"
-        return "Live-Pose verfügbar"
+            return ("outside_map", "Koordinaten außerhalb Kartenbereich")
+        return ("ok", "Live-Pose verfügbar")
+
+    def _announce_live_diagnosis_if_changed(self, diagnosis_key: str, diagnosis_text: str) -> None:
+        if diagnosis_key == self._last_live_diagnosis_key:
+            return
+        self._last_live_diagnosis_key = diagnosis_key
+        if not self._emit_live_diagnostics_to_validation:
+            return
+        self._append_validation(f"ℹ️ Live-Diagnose geändert: {diagnosis_text}")
 
     def _on_points_table_select(self, _event: tk.Event) -> None:
         selected = self.points_table.selection()
@@ -1245,11 +1266,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             eta_s = int((elapsed / done) * remaining)
             eta = f"{eta_s}s"
 
+        diagnosis_key, diagnosis_text = self._live_pose_diagnosis()
+        self._announce_live_diagnosis_if_changed(diagnosis_key, diagnosis_text)
         self.live_var.set(
             f"Punktindex: {current_idx}/{max(total - 1, 0)} | "
             f"Navigation: {nav_status} | Messung: {meas_status} | "
             f"Verbleibend: {remaining} | ETA: {eta} | "
-            f"Live-Status: {self._current_live_status_text()}"
+            f"Live-Status: {diagnosis_text}"
         )
 
     def _on_record(self, payload: dict[str, Any]) -> None:
