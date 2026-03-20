@@ -6,6 +6,7 @@ import zipfile
 from dataclasses import replace
 from datetime import datetime
 import math
+from fractions import Fraction
 from pathlib import Path
 import json
 import re
@@ -244,8 +245,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             height=260,
         )
         self.map_preview_canvas.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self.map_preview_canvas.bind("<Configure>", self._on_map_canvas_resize)
         self._map_image_original: tk.PhotoImage | None = None
         self._map_image_preview: tk.PhotoImage | None = None
+        self._map_preview_scale: tuple[float, float] = (1.0, 1.0)
+        self._map_preview_offset: tuple[float, float] = (0.0, 0.0)
         self._map_canvas_image_id: int | None = None
         self._map_marker_ids: list[int] = []
         self._map_image_size: tuple[int, int] | None = None
@@ -397,6 +401,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
     def _refresh_map_section(self) -> None:
         self._map_image_original = None
         self._map_image_preview = None
+        self._map_preview_scale = (1.0, 1.0)
+        self._map_preview_offset = (0.0, 0.0)
         self._map_canvas_image_id = None
         self._map_marker_ids = []
         self._map_image_size = None
@@ -424,22 +430,46 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._render_map_placeholder("Kartenbild konnte nicht geladen werden.")
             return
 
-        max_width = 760
-        max_height = 240
-        downsample_factor = max(
-            1,
-            math.ceil(photo.width() / max_width),
-            math.ceil(photo.height() / max_height),
-        )
-        preview = photo.subsample(downsample_factor, downsample_factor) if downsample_factor > 1 else photo
-
         self._map_image_original = photo
-        self._map_image_preview = preview
+        self._map_image_preview = photo
         self._map_image_size = (photo.width(), photo.height())
         self.map_status_var.set(
             f"Karte geladen: {image_path.name} ({photo.width()}x{photo.height()} px)"
         )
         self._draw_map_preview()
+
+    def _on_map_canvas_resize(self, _event: tk.Event) -> None:
+        if self._map_image_original is None:
+            return
+        self._draw_map_preview()
+
+    @staticmethod
+    def _resize_photo_to_fit(photo: tk.PhotoImage, *, max_width: int, max_height: int) -> tk.PhotoImage:
+        if max_width <= 1 or max_height <= 1:
+            return photo
+
+        width = photo.width()
+        height = photo.height()
+        if width <= 0 or height <= 0:
+            return photo
+
+        scale = min(max_width / width, max_height / height)
+        if abs(scale - 1.0) < 0.01:
+            return photo
+
+        ratio = Fraction(scale).limit_denominator(16)
+        preview = photo.zoom(ratio.numerator, ratio.numerator).subsample(ratio.denominator, ratio.denominator)
+        if preview.width() <= max_width and preview.height() <= max_height:
+            return preview
+
+        fallback_factor = max(
+            1,
+            math.ceil(preview.width() / max_width),
+            math.ceil(preview.height() / max_height),
+        )
+        if fallback_factor > 1:
+            return preview.subsample(fallback_factor, fallback_factor)
+        return preview
 
     def _select_map_config_file(self) -> None:
         selected_file = filedialog.askopenfilename(
@@ -498,15 +528,21 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         )
 
     def _draw_map_preview(self) -> None:
-        preview = self._map_image_preview
-        if preview is None:
+        original = self._map_image_original
+        if original is None:
             return
+        canvas_width = max(1, self.map_preview_canvas.winfo_width())
+        canvas_height = max(1, self.map_preview_canvas.winfo_height())
+        preview = self._resize_photo_to_fit(original, max_width=canvas_width, max_height=canvas_height)
+        offset_x = (canvas_width - preview.width()) / 2.0
+        offset_y = (canvas_height - preview.height()) / 2.0
+
+        self._map_image_preview = preview
+        self._map_preview_scale = (preview.width() / original.width(), preview.height() / original.height())
+        self._map_preview_offset = (offset_x, offset_y)
+
         self.map_preview_canvas.delete("all")
-        self.map_preview_canvas.configure(
-            width=preview.width(),
-            height=preview.height(),
-        )
-        self._map_canvas_image_id = self.map_preview_canvas.create_image(0, 0, anchor="nw", image=preview)
+        self._map_canvas_image_id = self.map_preview_canvas.create_image(offset_x, offset_y, anchor="nw", image=preview)
         self._draw_mission_markers()
         self._draw_live_marker()
 
@@ -518,8 +554,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if mission is None or mission.map_config is None or preview is None or original is None:
             return
 
-        scale_x = preview.width() / original.width()
-        scale_y = preview.height() / original.height()
+        scale_x, scale_y = self._map_preview_scale
+        offset_x, offset_y = self._map_preview_offset
 
         for index, point in enumerate(self._mission_points):
             pixel_coordinates = self._world_to_preview_pixel(
@@ -532,6 +568,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             if pixel_coordinates is None:
                 continue
             px, py = pixel_coordinates
+            px += offset_x
+            py += offset_y
             marker_id = self.map_preview_canvas.create_oval(
                 px - 4,
                 py - 4,
@@ -640,8 +678,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if not isinstance(x_value, (int, float)) or not isinstance(y_value, (int, float)):
             return
 
-        scale_x = preview.width() / original.width()
-        scale_y = preview.height() / original.height()
+        scale_x, scale_y = self._map_preview_scale
+        offset_x, offset_y = self._map_preview_offset
         map_pixel = self._world_to_map_pixel(
             x=float(x_value),
             y=float(y_value),
@@ -656,7 +694,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             height=original.height(),
         ):
             return
-        pixel_coordinates = (map_pixel[0] * scale_x, map_pixel[1] * scale_y)
+        pixel_coordinates = (map_pixel[0] * scale_x + offset_x, map_pixel[1] * scale_y + offset_y)
         px, py = pixel_coordinates
         radius = 6
         self.map_preview_canvas.create_oval(
