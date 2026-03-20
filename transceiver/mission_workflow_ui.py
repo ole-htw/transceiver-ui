@@ -6,7 +6,6 @@ import zipfile
 from dataclasses import replace
 from datetime import datetime
 import math
-from fractions import Fraction
 from pathlib import Path
 import json
 import re
@@ -458,18 +457,31 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if abs(scale - 1.0) < 0.01:
             return photo
 
-        ratio = Fraction(scale).limit_denominator(16)
-        preview = photo.zoom(ratio.numerator, ratio.numerator).subsample(ratio.denominator, ratio.denominator)
-        if preview.width() <= max_width and preview.height() <= max_height:
-            return preview
+        best_zoom = 1
+        best_subsample = 1
+        best_scale = 0.0
+        max_denominator = 256
+        for denominator in range(1, max_denominator + 1):
+            numerator = max(1, int(scale * denominator))
+            preview_width = math.ceil((width * numerator) / denominator)
+            preview_height = math.ceil((height * numerator) / denominator)
+            if preview_width > max_width or preview_height > max_height:
+                continue
+            candidate_scale = numerator / denominator
+            if candidate_scale > best_scale:
+                best_scale = candidate_scale
+                best_zoom = numerator
+                best_subsample = denominator
 
-        fallback_factor = max(
-            1,
-            math.ceil(preview.width() / max_width),
-            math.ceil(preview.height() / max_height),
-        )
-        if fallback_factor > 1:
-            return preview.subsample(fallback_factor, fallback_factor)
+        preview = photo.zoom(best_zoom, best_zoom).subsample(best_subsample, best_subsample)
+        if preview.width() > max_width or preview.height() > max_height:
+            fallback_factor = max(
+                1,
+                math.ceil(preview.width() / max_width),
+                math.ceil(preview.height() / max_height),
+            )
+            if fallback_factor > 1:
+                return preview.subsample(fallback_factor, fallback_factor)
         return preview
 
     def _select_map_config_file(self) -> None:
