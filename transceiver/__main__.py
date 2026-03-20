@@ -25,7 +25,7 @@ from queue import Empty as ThreadQueueEmpty
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageTk
-from pyqtgraph.Qt import QtCore, QtGui
+from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 import pyqtgraph as pg
 from pyqtgraph import exporters as pg_exporters
 
@@ -1524,6 +1524,97 @@ def _echo_delay_samples(
     if los_idx is None or echo_idx is None:
         return None
     return int(abs(lags[echo_idx] - lags[los_idx]))
+
+
+class MissionMeasurementReviewDialog(QtWidgets.QDialog):
+    """Blocking review dialog for mission cross-correlation peaks."""
+
+    def __init__(
+        self,
+        *,
+        parent=None,
+        point_label: str,
+        lags: np.ndarray,
+        magnitudes: np.ndarray,
+        los_idx: int | None,
+        echo_indices: list[int],
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Mission Measurement Review")
+        self.setModal(True)
+        self.resize(980, 560)
+        self._confirmed = False
+
+        layout = QtWidgets.QVBoxLayout(self)
+        header = QtWidgets.QLabel(
+            f"Crosscorrelation Review für {point_label}\n"
+            "Bitte LOS/Echo-Peaks prüfen und Messung explizit bestätigen."
+        )
+        layout.addWidget(header)
+
+        plot_widget = pg.PlotWidget()
+        plot = plot_widget.getPlotItem()
+        _style_pg_preview_axes(plot, PLOT_COLORS["text"])
+        plot.showGrid(x=True, y=True, alpha=0.2)
+        plot.setTitle("Crosscorr. mit Peak-Labels")
+        plot.setLabel("bottom", "Lag")
+        plot.setLabel("left", "Magnitude")
+        layout.addWidget(plot_widget, stretch=1)
+
+        plot.plot(lags, magnitudes, pen=pg.mkPen(PLOT_COLORS["crosscorr"], width=2))
+        label_group = [int(los_idx)] if los_idx is not None else []
+        label_group.extend(int(idx) for idx in echo_indices)
+        peak_labels = _crosscorr_peak_labels(label_group)
+
+        if los_idx is not None:
+            los_idx_int = int(los_idx)
+            plot.plot(
+                [float(lags[los_idx_int])],
+                [float(magnitudes[los_idx_int])],
+                pen=None,
+                symbol="o",
+                symbolSize=9,
+                symbolBrush=pg.mkBrush(PLOT_COLORS["los"]),
+                symbolPen=pg.mkPen(PLOT_COLORS["los"]),
+            )
+            los_label_item = pg.TextItem("LOS", color=PLOT_COLORS["text"], anchor=(0, 1))
+            los_label_item.setPos(float(lags[los_idx_int]), float(magnitudes[los_idx_int]))
+            plot.addItem(los_label_item)
+
+        for peak_idx in echo_indices:
+            idx = int(peak_idx)
+            plot.plot(
+                [float(lags[idx])],
+                [float(magnitudes[idx])],
+                pen=None,
+                symbol="o",
+                symbolSize=8,
+                symbolBrush=pg.mkBrush(PLOT_COLORS["echo"]),
+                symbolPen=pg.mkPen(PLOT_COLORS["echo"]),
+            )
+            label_value = peak_labels.get(idx)
+            label_text = f"Echo {label_value}" if label_value is not None else "Echo"
+            label_item = pg.TextItem(label_text, color=PLOT_COLORS["text"], anchor=(0, 1))
+            label_item.setPos(float(lags[idx]), float(magnitudes[idx]))
+            plot.addItem(label_item)
+
+        button_row = QtWidgets.QHBoxLayout()
+        button_row.addStretch(1)
+        cancel_btn = QtWidgets.QPushButton("Abbrechen / Wiederholen")
+        confirm_btn = QtWidgets.QPushButton("Bestätigen")
+        cancel_btn.clicked.connect(self.reject)
+        confirm_btn.clicked.connect(self._on_confirm)
+        button_row.addWidget(cancel_btn)
+        button_row.addWidget(confirm_btn)
+        layout.addLayout(button_row)
+
+    def _on_confirm(self) -> None:
+        self._confirmed = True
+        self.accept()
+
+    @property
+    def confirmed(self) -> bool:
+        return self._confirmed
 
 
 def _build_crosscorr_ctx(
@@ -6241,6 +6332,72 @@ class TransceiverUI(ctk.CTk):
             self._ui(lambda: self.rx_button.configure(state="disabled"))
         self._process_queue()
         return self._run_rx_thread(arg_list, channels, rate)
+
+    def review_measurement_for_mission(
+        self,
+        *,
+        point_label: str,
+        output_file: str,
+    ) -> bool:
+        """Open a blocking cross-correlation review dialog for one mission point."""
+        outcome = {"approved": False}
+        done = threading.Event()
+
+        def _show_review() -> None:
+            try:
+                channels = 2 if self.rx_channel_2.get() else 1
+                path = Path(output_file)
+                try:
+                    loaded = rx_convert.load_iq_file(path, channels=channels, layout="blocked")
+                except ValueError:
+                    loaded = rx_convert.load_iq_file(path, channels=channels, layout="interleaved")
+
+                data, _channel_label = self._select_rx_channel(loaded)
+                ref_data, _ref_label = self._get_crosscorr_reference()
+                if ref_data is None or ref_data.size == 0:
+                    messagebox.showerror(
+                        "Mission Review",
+                        "Crosscorrelation-Review nicht möglich: keine TX-Referenz geladen.",
+                    )
+                    outcome["approved"] = False
+                    return
+
+                ctx = _build_crosscorr_ctx(
+                    data,
+                    ref_data,
+                    normalize=self.rx_xcorr_normalized_enable.get(),
+                )
+                lags = np.asarray(ctx.get("lags", np.array([], dtype=float)))
+                mag = np.asarray(ctx.get("mag", np.array([], dtype=float)))
+                los_idx = ctx.get("los_idx")
+                echo_indices = [int(idx) for idx in list(ctx.get("echo_indices", []))]
+                if lags.size == 0 or mag.size == 0 or los_idx is None:
+                    messagebox.showerror(
+                        "Mission Review",
+                        "Crosscorrelation enthält keine auswertbaren Peaks (LOS fehlt).",
+                    )
+                    outcome["approved"] = False
+                    return
+
+                dialog = MissionMeasurementReviewDialog(
+                    parent=None,
+                    point_label=point_label,
+                    lags=lags,
+                    magnitudes=mag,
+                    los_idx=int(los_idx),
+                    echo_indices=echo_indices,
+                )
+                dialog.exec()
+                outcome["approved"] = bool(dialog.confirmed)
+            except Exception as exc:
+                self._out_queue.put(f"Mission review error: {exc}\n")
+                outcome["approved"] = False
+            finally:
+                done.set()
+
+        self._ui(_show_review)
+        done.wait()
+        return bool(outcome["approved"])
 
     def _reset_rx_buttons(self) -> None:
         if hasattr(self, "rx_stop"):

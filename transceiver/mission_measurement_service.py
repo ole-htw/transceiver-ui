@@ -16,10 +16,12 @@ class MissionRxMeasurementService:
         app: Any,
         on_status,
         on_operator_message=None,
+        review_measurement=None,
     ) -> None:
         self._app = app
         self._on_status = on_status
         self._on_operator_message = on_operator_message
+        self._review_measurement = review_measurement
 
     def trigger(self, point_context: PointExecutionContext) -> dict[str, Any]:
         self._on_status("measurement", "running")
@@ -48,6 +50,21 @@ class MissionRxMeasurementService:
             raise RuntimeError("measurement_failed")
 
         file_ref = str(result.get("output_file") or output_file)
+        if self._review_measurement is not None:
+            approved = bool(
+                self._review_measurement(
+                    point_context=point_context,
+                    output_file=file_ref,
+                )
+            )
+            if not approved:
+                self._on_status("measurement", "failed")
+                if self._on_operator_message is not None:
+                    self._on_operator_message(
+                        f"Review abgebrochen bei Punkt {point_context.global_index}: Messung wird nicht persistiert."
+                    )
+                raise RuntimeError("measurement_review_rejected")
+
         self._on_status("measurement", "succeeded")
         return {
             "measurement_id": f"{point_context.mission_name}-{point_context.global_index:04d}-{int(timestamp.timestamp())}",
