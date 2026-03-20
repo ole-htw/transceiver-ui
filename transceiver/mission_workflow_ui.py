@@ -172,6 +172,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._workflow_state_file = MISSION_WORKFLOW_STATE_FILE
         self._selected_map_config: MapConfig | None = None
         self._selected_map_config_file: str | None = None
+        self._is_restoring_workflow_state = False
 
         self._build_ui()
         self._restore_workflow_state()
@@ -1010,6 +1011,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         }
 
     def _persist_workflow_state(self) -> None:
+        if self._is_restoring_workflow_state:
+            return
         payload = self._build_workflow_state_payload()
         _save_json_dict(self._workflow_state_file, payload)
 
@@ -1018,6 +1021,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if not payload:
             return
 
+        self._is_restoring_workflow_state = True
         try:
             map_config_file = payload.get("map_config_file")
             loaded_map_config: MapConfig | None = None
@@ -1048,28 +1052,31 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             )
             return
 
-        self.mission_name_var.set(mission.name)
-        self.repeat_var.set(str(mission.repeat or 1))
-        self._mission_points = list(mission.points)
-        self._mission = mission
-        self._selected_map_config = mission.map_config
-        self._selected_map_config_file = payload.get("map_config_file")
-        self._refresh_points_table()
-        self._refresh_map_section()
-        persisted_start_point = payload.get("start_point_index")
-        if isinstance(persisted_start_point, int) and 0 <= persisted_start_point < len(self._mission_points):
-            self.start_point_var.set(
-                self._format_start_point_label(
-                    persisted_start_point,
-                    self._mission_points[persisted_start_point],
+        try:
+            self.mission_name_var.set(mission.name)
+            self.repeat_var.set(str(mission.repeat or 1))
+            self._mission_points = list(mission.points)
+            self._mission = mission
+            self._selected_map_config = mission.map_config
+            self._selected_map_config_file = payload.get("map_config_file")
+            self._refresh_points_table()
+            self._refresh_map_section()
+            persisted_start_point = payload.get("start_point_index")
+            if isinstance(persisted_start_point, int) and 0 <= persisted_start_point < len(self._mission_points):
+                self.start_point_var.set(
+                    self._format_start_point_label(
+                        persisted_start_point,
+                        self._mission_points[persisted_start_point],
+                    )
                 )
+            repeats = mission.repeat or 1
+            total_points = len(mission.points) * repeats
+            self._set_validation_text(
+                f"✅ Persistierter Workflow geladen: {mission.name}\n"
+                f"Punkte pro Zyklus: {len(mission.points)} | Wiederholungen: {repeats} | Gesamtpunkte: {total_points}"
             )
-        repeats = mission.repeat or 1
-        total_points = len(mission.points) * repeats
-        self._set_validation_text(
-            f"✅ Persistierter Workflow geladen: {mission.name}\n"
-            f"Punkte pro Zyklus: {len(mission.points)} | Wiederholungen: {repeats} | Gesamtpunkte: {total_points}"
-        )
+        finally:
+            self._is_restoring_workflow_state = False
 
     def _start_run(self) -> None:
         if self._mission is None:
