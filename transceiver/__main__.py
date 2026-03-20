@@ -4734,7 +4734,12 @@ class TransceiverUI(ctk.CTk):
             getattr(self, "rx_interpolation_factor_cont", None),
         )
 
-        focused = self.focus_get()
+        try:
+            focused = self.focus_get()
+        except (tk.TclError, KeyError):
+            # Can occur transiently when Tk focus points to a widget path that
+            # is already gone (e.g. "__tk_filedialog" during dialog teardown).
+            focused = None
         for widget in widgets:
             if widget is None:
                 continue
