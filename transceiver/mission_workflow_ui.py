@@ -218,32 +218,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         ctk.CTkButton(points_editor, text="▲", width=36, command=self._move_selected_point_up).grid(row=0, column=8, padx=3)
         ctk.CTkButton(points_editor, text="▼", width=36, command=self._move_selected_point_down).grid(row=0, column=9, padx=(3, 8), sticky="w")
 
-        points_table_frame = ctk.CTkFrame(self)
-        points_table_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 6))
-        points_table_frame.columnconfigure(0, weight=1)
-        point_columns = ("idx", "id", "name", "x", "y", "z", "yaw")
-        self.points_table = ttk.Treeview(points_table_frame, columns=point_columns, show="headings", height=5)
-        self.points_table.grid(row=0, column=0, sticky="ew")
-        for key, title in {
-            "idx": "#",
-            "id": "ID",
-            "name": "Name",
-            "x": "X",
-            "y": "Y",
-            "z": "Z",
-            "yaw": "Yaw",
-        }.items():
-            self.points_table.heading(key, text=title)
-            self.points_table.column(key, stretch=True, width=95)
-        self.points_table.bind("<<TreeviewSelect>>", self._on_points_table_select)
-
-        self.validation_box = ctk.CTkTextbox(self, height=110)
-        self.validation_box.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 6))
-        self.validation_box.insert("1.0", "3) Validierungsergebnis erscheint hier.\n")
-        self.validation_box.configure(state="disabled")
-
         map_controls_row = ctk.CTkFrame(self, fg_color="transparent")
-        map_controls_row.grid(row=4, column=0, sticky="nsew", padx=10, pady=(0, 6))
+        map_controls_row.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 6))
         map_controls_row.columnconfigure(0, weight=3)
         map_controls_row.columnconfigure(1, weight=2)
         map_controls_row.rowconfigure(0, weight=1)
@@ -276,8 +252,46 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._live_position: dict[str, Any] | None = None
         self._selected_point_index: int | None = None
 
-        controls = ctk.CTkFrame(map_controls_row)
-        controls.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        side_panel = ctk.CTkFrame(map_controls_row)
+        side_panel.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        side_panel.columnconfigure(0, weight=1)
+        side_panel.rowconfigure(0, weight=1)
+        side_panel.rowconfigure(1, weight=1)
+        side_panel.rowconfigure(2, weight=0)
+
+        points_table_frame = ctk.CTkFrame(side_panel)
+        points_table_frame.grid(row=0, column=0, sticky="nsew", padx=0, pady=(0, 6))
+        points_table_frame.columnconfigure(0, weight=1)
+        points_table_frame.rowconfigure(1, weight=1)
+        ctk.CTkLabel(points_table_frame, text="3) Wegpunkte").grid(row=0, column=0, sticky="w", padx=8, pady=(8, 2))
+        point_columns = ("idx", "id", "name", "x", "y", "z", "yaw")
+        self.points_table = ttk.Treeview(points_table_frame, columns=point_columns, show="headings", height=6)
+        self.points_table.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        for key, title in {
+            "idx": "#",
+            "id": "ID",
+            "name": "Name",
+            "x": "X",
+            "y": "Y",
+            "z": "Z",
+            "yaw": "Yaw",
+        }.items():
+            self.points_table.heading(key, text=title)
+            self.points_table.column(key, stretch=True, width=95)
+        self.points_table.bind("<<TreeviewSelect>>", self._on_points_table_select)
+
+        terminal_frame = ctk.CTkFrame(side_panel)
+        terminal_frame.grid(row=1, column=0, sticky="nsew", padx=0, pady=(0, 6))
+        terminal_frame.columnconfigure(0, weight=1)
+        terminal_frame.rowconfigure(1, weight=1)
+        ctk.CTkLabel(terminal_frame, text="Terminal-Ausgabe").grid(row=0, column=0, sticky="w", padx=8, pady=(8, 2))
+        self.validation_box = ctk.CTkTextbox(terminal_frame, height=120)
+        self.validation_box.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self.validation_box.insert("1.0", "3) Validierungsergebnis erscheint hier.\n")
+        self.validation_box.configure(state="disabled")
+
+        controls = ctk.CTkFrame(side_panel)
+        controls.grid(row=2, column=0, sticky="ew", padx=0, pady=0)
         for col in range(4):
             controls.columnconfigure(col, weight=0)
         controls.columnconfigure(3, weight=1)
