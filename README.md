@@ -82,13 +82,8 @@ Schema von `map_config`:
 - `resolution` (required): Kartenauflösung in Metern pro Pixel
 - `origin` (required): Ursprung der Karte als `[x, y, yaw]` im Karten-Frame
 
-Eine vollständige Dummy-Beispieldatei findest du unter
-`examples/measurement-mission-with-map.yaml`.
-
-Um von der Dummy-Konfiguration auf die reale Karte zu wechseln, ersetze in
-dieser Datei den Wert von `map_config.image` (aktuell
-`maps/DUMMY_MAP_PLACEHOLDER.pgm`) durch den Pfad zu deiner tatsächlichen
-Map-Datei.
+Eine vollständige Beispieldatei mit echter Kartenreferenz findest du unter
+`examples/measurement-mission-with-map.yaml` (`map_config: maps/hu_314.yaml`).
 
 Wichtig: Für die Positionsdarstellung wird der Koordinatenbezug
 `frame_id: map` erwartet.
