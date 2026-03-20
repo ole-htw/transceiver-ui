@@ -6449,7 +6449,11 @@ class TransceiverUI(ctk.CTk):
         output_file: str,
     ) -> dict[str, object]:
         """Open a blocking cross-correlation review dialog for one mission point."""
-        outcome: dict[str, object] = {"approved": False}
+        outcome: dict[str, object] = {
+            "approved": False,
+            "reason": "operator_rejected",
+            "detail": "Messung wurde vom Operator verworfen.",
+        }
         done = threading.Event()
 
         def _show_review() -> None:
@@ -6464,11 +6468,11 @@ class TransceiverUI(ctk.CTk):
                 data, _channel_label = self._select_rx_channel(loaded)
                 ref_data, _ref_label = self._get_crosscorr_reference()
                 if ref_data is None or ref_data.size == 0:
-                    messagebox.showerror(
-                        "Mission Review",
-                        "Crosscorrelation-Review nicht möglich: keine TX-Referenz geladen.",
-                    )
+                    detail = "Crosscorrelation-Review nicht möglich: keine TX-Referenz geladen."
+                    messagebox.showerror("Mission Review", detail)
                     outcome["approved"] = False
+                    outcome["reason"] = "missing_tx_reference"
+                    outcome["detail"] = detail
                     return
 
                 ctx = _build_crosscorr_ctx(
@@ -6481,11 +6485,11 @@ class TransceiverUI(ctk.CTk):
                 los_idx = ctx.get("los_idx")
                 echo_indices = [int(idx) for idx in list(ctx.get("echo_indices", []))]
                 if lags.size == 0 or mag.size == 0 or los_idx is None:
-                    messagebox.showerror(
-                        "Mission Review",
-                        "Crosscorrelation enthält keine auswertbaren Peaks (LOS fehlt).",
-                    )
+                    detail = "Crosscorrelation enthält keine auswertbaren Peaks (LOS fehlt)."
+                    messagebox.showerror("Mission Review", detail)
                     outcome["approved"] = False
+                    outcome["reason"] = "no_detectable_los"
+                    outcome["detail"] = detail
                     return
 
                 dialog = MissionMeasurementReviewDialog(
@@ -6500,6 +6504,8 @@ class TransceiverUI(ctk.CTk):
                 approved = bool(dialog.confirmed)
                 outcome["approved"] = approved
                 if approved:
+                    outcome["reason"] = ""
+                    outcome["detail"] = ""
                     los_idx_final = dialog.selected_los_idx
                     echo_indices_final = dialog.selected_echo_indices
                     outcome["manual_lags"] = dialog.manual_lags
@@ -6514,9 +6520,14 @@ class TransceiverUI(ctk.CTk):
                         int(round(float(lags[int(idx)])))
                         for idx in echo_indices_final
                     ]
+                else:
+                    outcome["reason"] = "operator_rejected"
+                    outcome["detail"] = "Messung wurde im Review-Dialog verworfen."
             except Exception as exc:
                 self._out_queue.put(f"Mission review error: {exc}\n")
                 outcome["approved"] = False
+                outcome["reason"] = "review_exception"
+                outcome["detail"] = str(exc)
             finally:
                 done.set()
 

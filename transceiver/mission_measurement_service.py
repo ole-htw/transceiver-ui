@@ -7,6 +7,13 @@ from typing import Any
 from .measurement_run_executor import PointExecutionContext
 
 _LOS_ECHO_SAMPLE_TO_M = 1.5
+_REVIEW_REASON_TO_ERROR_CODE = {
+    "review_unavailable": "measurement_review_unavailable",
+    "missing_tx_reference": "measurement_review_missing_tx_reference",
+    "no_detectable_los": "measurement_review_no_detectable_los",
+    "review_exception": "measurement_review_exception",
+    "operator_rejected": "measurement_review_operator_rejected",
+}
 
 
 def _coerce_echo_delay_entries(
@@ -90,12 +97,21 @@ class MissionRxMeasurementService:
         file_ref = str(result.get("output_file") or output_file)
         review_payload: dict[str, Any] | None = None
         if self._review_measurement is not None:
+            approved = False
+            review_reason = "operator_rejected"
+            review_detail = ""
             review_result = self._review_measurement(
                 point_context=point_context,
                 output_file=file_ref,
             )
             if isinstance(review_result, dict):
                 approved = bool(review_result.get("approved"))
+                raw_reason = review_result.get("reason")
+                raw_detail = review_result.get("detail")
+                if isinstance(raw_reason, str) and raw_reason.strip():
+                    review_reason = raw_reason.strip()
+                if isinstance(raw_detail, str) and raw_detail.strip():
+                    review_detail = raw_detail.strip()
                 if approved:
                     echo_delay_entries = _coerce_echo_delay_entries(
                         echo_delays=review_result.get("echo_delays"),
@@ -104,6 +120,9 @@ class MissionRxMeasurementService:
                         los_lag=review_result.get("los_lag"),
                     )
                     review_payload = {
+                        "approved": True,
+                        "reason": review_reason,
+                        "detail": review_detail,
                         "manual_lags": review_result.get("manual_lags"),
                         "los_idx": review_result.get("los_idx"),
                         "echo_indices": review_result.get("echo_indices"),
@@ -115,11 +134,13 @@ class MissionRxMeasurementService:
                 approved = bool(review_result)
             if not approved:
                 self._on_status("measurement", "failed")
+                error_code = _REVIEW_REASON_TO_ERROR_CODE.get(review_reason, "measurement_review_rejected")
                 if self._on_operator_message is not None:
                     self._on_operator_message(
-                        f"Review abgebrochen bei Punkt {point_context.global_index}: Messung wird nicht persistiert."
+                        f"Review abgebrochen bei Punkt {point_context.global_index} [{review_reason}]: "
+                        f"{review_detail or 'Messung wird nicht persistiert.'}"
                     )
-                raise RuntimeError("measurement_review_rejected")
+                raise RuntimeError(error_code, review_reason, review_detail)
 
         self._on_status("measurement", "succeeded")
         payload = {
