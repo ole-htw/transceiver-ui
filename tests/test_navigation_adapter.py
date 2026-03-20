@@ -472,3 +472,79 @@ def test_send_goal_maps_dead_transport_to_connection_error_even_after_accept(mon
     assert outcome.accepted is True
     assert outcome.terminal_state == "connection_error"
     assert transport._last_goal_id == "00000000-0000-0000-0000-000000000001"
+
+
+def test_extract_position_payload_parses_multiline_feedback_block() -> None:
+    transport = Ros2CliNavigationTransport()
+    payload = transport._extract_position_payload(
+        "\n".join(
+            [
+                "feedback:",
+                "  current_pose:",
+                "    header:",
+                "      frame_id: odom",
+                "    pose:",
+                "      position:",
+                "        x: 1.25",
+                "        y: -3.5",
+                "  yaw: 0.75",
+            ]
+        )
+    )
+
+    assert payload == {"x": 1.25, "y": -3.5, "yaw": 0.75, "frame_id": "odom"}
+
+
+def test_send_goal_emits_parse_diagnostics_when_feedback_position_parse_fails(monkeypatch) -> None:
+    class _Stream:
+        def __init__(self, lines: list[str], rest: str = "") -> None:
+            self._lines = lines
+            self._rest = rest
+            self._idx = 0
+
+        def readline(self) -> str:
+            if self._idx >= len(self._lines):
+                return ""
+            line = self._lines[self._idx]
+            self._idx += 1
+            return line
+
+        def read(self) -> str:
+            return self._rest
+
+    class _Process:
+        def __init__(self) -> None:
+            self.stdout = _Stream(
+                [
+                    "Goal accepted with ID: 00000000-0000-0000-0000-000000000001\n",
+                    "feedback:\n",
+                    "  status: moving\n",
+                    "  details: no coordinate keys in this block\n",
+                    "Goal succeeded\n",
+                ]
+            )
+            self.stderr = _Stream([], rest="")
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
+
+    feedback_payloads: list[dict[str, object]] = []
+    transport = Ros2CliNavigationTransport()
+    outcome = transport.send_goal(
+        point=NavigationPoint(1.0, 2.0),
+        config=NavigationAdapterConfig(
+            robot_host="robot@10.0.0.2",
+            remote_ros_setup="/opt/ros/humble/setup.bash",
+            ros2_namespace="robot1",
+        ),
+        on_feedback=lambda payload: feedback_payloads.append(payload),
+    )
+
+    assert outcome.terminal_state == "succeeded"
+    assert len(feedback_payloads) == 1
+    payload = feedback_payloads[0]
+    assert payload["position"] is None
+    assert payload["parse_error"] == "Failed to extract x/y from feedback block"
+    assert "status: moving" in str(payload["raw_feedback_excerpt"])
