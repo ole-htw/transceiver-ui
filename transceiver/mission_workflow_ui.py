@@ -1175,14 +1175,49 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._run_thread = threading.Thread(target=self._run_executor_thread, daemon=True)
         self._run_thread.start()
 
-    def _review_measurement(self, *, point_context, output_file: str) -> dict[str, object] | bool:  # type: ignore[no-untyped-def]
+    def _review_measurement(self, *, point_context, output_file: str) -> dict[str, object]:  # type: ignore[no-untyped-def]
         point_id = point_context.point.id or point_context.point.name or f"point-{point_context.global_index}"
         point_label = f"Punkt {point_context.global_index} ({point_id})"
         review_fn = getattr(self.master, "review_measurement_for_mission", None)
         if not callable(review_fn):
-            self._append_validation("⚠️ Mission-Review nicht verfügbar; Messung wird verworfen.")
-            return False
-        return review_fn(point_label=point_label, output_file=output_file)
+            detail = "Mission-Review nicht verfügbar; Messung wird verworfen."
+            self._append_validation(f"⚠️ {detail}")
+            return {
+                "approved": False,
+                "reason": "review_unavailable",
+                "detail": detail,
+            }
+        try:
+            review_result = review_fn(point_label=point_label, output_file=output_file)
+        except Exception as exc:
+            detail = f"Review-Aufruf fehlgeschlagen: {exc}"
+            self._append_validation(f"⚠️ {detail}")
+            return {
+                "approved": False,
+                "reason": "review_exception",
+                "detail": detail,
+            }
+
+        if not isinstance(review_result, dict):
+            approved = bool(review_result)
+            return {
+                "approved": approved,
+                "reason": "operator_rejected" if not approved else "",
+                "detail": "",
+            }
+
+        approved = bool(review_result.get("approved"))
+        reason = review_result.get("reason")
+        detail = review_result.get("detail")
+        reason_text = reason.strip() if isinstance(reason, str) else ""
+        detail_text = detail.strip() if isinstance(detail, str) else ""
+        if not approved and not reason_text:
+            reason_text = "operator_rejected"
+        result_payload = dict(review_result)
+        result_payload["approved"] = approved
+        result_payload["reason"] = reason_text
+        result_payload["detail"] = detail_text
+        return result_payload
 
     def _run_executor_thread(self) -> None:
         assert self._executor is not None
@@ -1282,6 +1317,14 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         nav = payload.get("navigation", {})
         meas = payload.get("measurement", {})
         result = meas.get("result", {}) if isinstance(meas.get("result"), dict) else {}
+        review = result.get("review", {}) if isinstance(result.get("review"), dict) else {}
+        review_reason = review.get("reason") if isinstance(review.get("reason"), str) else ""
+        review_detail = review.get("detail") if isinstance(review.get("detail"), str) else ""
+        error_text = payload.get("error") or ""
+        if review_reason:
+            error_text = f"{error_text} [{review_reason}]" if error_text else review_reason
+        if review_detail:
+            error_text = f"{error_text}: {review_detail}" if error_text else review_detail
         echo_delays_text = self._format_echo_delays_for_table(result.get("echo_delays"))
         self.results_table.insert(
             "",
@@ -1293,7 +1336,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 meas.get("status", "-"),
                 echo_delays_text,
                 "ok" if payload.get("error") is None else "fehler",
-                payload.get("error") or "",
+                error_text,
             ),
         )
         self._update_live_label()

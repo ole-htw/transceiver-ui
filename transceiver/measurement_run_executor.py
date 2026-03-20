@@ -441,6 +441,26 @@ class MeasurementRunExecutor:
                 )
             )
         except Exception as exc:
+            error_code = str(exc)
+            review_reason: str | None = None
+            review_detail: str | None = None
+            if isinstance(exc, RuntimeError) and exc.args:
+                first = exc.args[0]
+                if isinstance(first, str) and first.strip():
+                    error_code = first.strip()
+                if len(exc.args) > 1 and isinstance(exc.args[1], str) and exc.args[1].strip():
+                    review_reason = exc.args[1].strip()
+                if len(exc.args) > 2 and isinstance(exc.args[2], str) and exc.args[2].strip():
+                    review_detail = exc.args[2].strip()
+            failed_measurement_payload: dict[str, Any] | None = None
+            if review_reason is not None or review_detail is not None:
+                failed_measurement_payload = {
+                    "review": {
+                        "approved": False,
+                        "reason": review_reason,
+                        "detail": review_detail,
+                    }
+                }
             record = PointExecutionRecord(
                 index=global_index,
                 point_id=point.id,
@@ -449,7 +469,7 @@ class MeasurementRunExecutor:
                 navigation_state=nav_state,
                 navigation_attempts=attempt,
                 measurement_result=None,
-                error=str(exc),
+                error=error_code,
             )
             self._persist_point_log(
                 point=point,
@@ -458,7 +478,7 @@ class MeasurementRunExecutor:
                 navigation_state=nav_state,
                 navigation_attempts=attempt,
                 point_started_at=point_started_at,
-                measurement_result=None,
+                measurement_result=failed_measurement_payload,
                 measurement_status="failed",
                 error=record.error,
                 navigation_duration_s=max(0.0, navigation_done_at - point_started_at),
