@@ -1298,7 +1298,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             run_log_store=store,
             on_runtime_event=self._on_executor_runtime_event,
             config=MeasurementRunExecutorConfig(
-                on_point_error="continue",
+                on_point_error="stop",
                 goal_reached_timeout_s=self._runtime_config.goal_reached_timeout_s,
                 navigation_retry_attempts=self._runtime_config.navigation_retry_attempts,
                 start_point_index=start_point_index,
