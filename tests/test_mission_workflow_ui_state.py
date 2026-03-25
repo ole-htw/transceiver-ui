@@ -82,3 +82,19 @@ def test_save_and_load_json_dict_preserves_enabled_per_point(tmp_path) -> None:
     loaded = _load_json_dict(state_file)
 
     assert [point["enabled"] for point in loaded["points"]] == [True, False, True]
+
+
+def test_save_and_load_json_dict_preserves_rx_antenna_global_position(tmp_path) -> None:
+    state_file = tmp_path / "mission-workflow-state.json"
+    payload = {
+        "name": "scan-rx-antenna",
+        "repeat": 1,
+        "start_point_index": 0,
+        "rx_antenna_global_position": {"x": 12.345, "y": -6.789},
+        "points": [{"id": "p001", "x": 0.0, "y": 0.0, "z": 0.0, "yaw": 0.0, "enabled": True}],
+    }
+
+    _save_json_dict(state_file, payload)
+    loaded = _load_json_dict(state_file)
+
+    assert loaded["rx_antenna_global_position"] == {"x": 12.345, "y": -6.789}
