@@ -3361,6 +3361,7 @@ class TransceiverUI(ctk.CTk):
         self._tx_logger.setLevel(logging.INFO)
         self._tx_logger.propagate = False
         self._cmd_running = False
+        self._rx_running = False
         self._proc = None
         self._stop_requested = False
         self._plot_win = None
@@ -6485,6 +6486,7 @@ class TransceiverUI(ctk.CTk):
             args = None
         finally:
             self._cmd_running = False
+            self._rx_running = False
             self._proc = None
             self._ui(self._reset_rx_buttons)
 
@@ -6520,6 +6522,17 @@ class TransceiverUI(ctk.CTk):
         if idx + 1 >= len(arg_list):
             return None
         return arg_list[idx + 1]
+
+    def is_receive_active_for_mission(self) -> bool:
+        if bool(getattr(self, "_rx_running", False)):
+            return True
+        proc = getattr(self, "_proc", None)
+        if proc is None:
+            return False
+        try:
+            return proc.poll() is None
+        except Exception:
+            return True
 
     def _build_receive_arg_list(self, *, output_file: str | None = None) -> tuple[list[str], int, float]:
         out_file = output_file if output_file is not None else ""
@@ -6595,6 +6608,7 @@ class TransceiverUI(ctk.CTk):
             arg_list,
         )
         self._cmd_running = True
+        self._rx_running = True
         if hasattr(self, "rx_stop"):
             self._ui(lambda: self.rx_stop.configure(state="normal"))
         if hasattr(self, "rx_button"):
@@ -6759,6 +6773,7 @@ class TransceiverUI(ctk.CTk):
         return outcome
 
     def _reset_rx_buttons(self) -> None:
+        self._rx_running = False
         if hasattr(self, "rx_stop"):
             self.rx_stop.configure(state="disabled")
         if hasattr(self, "rx_button"):
@@ -7719,6 +7734,7 @@ class TransceiverUI(ctk.CTk):
                 self._proc = None
             except Exception:
                 pass
+        self._rx_running = False
         if hasattr(self, "rx_stop"):
             self.rx_stop.configure(state="disabled")
         if hasattr(self, "rx_button"):
@@ -7731,6 +7747,7 @@ class TransceiverUI(ctk.CTk):
             messagebox.showerror("Receive", str(exc))
             return
         self._cmd_running = True
+        self._rx_running = True
         if hasattr(self, "rx_stop"):
             self.rx_stop.configure(state="normal")
         if hasattr(self, "rx_button"):

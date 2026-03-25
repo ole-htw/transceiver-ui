@@ -1505,7 +1505,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         reasons: list[str] = []
         if self._is_continuous_active():
             reasons.append("Continuous-Modus zuerst stoppen (laufender Continuous-Thread erkannt).")
-        if bool(getattr(self.master, "_cmd_running", False)):
+        is_receive_active = getattr(self.master, "is_receive_active_for_mission", None)
+        if callable(is_receive_active):
+            if bool(is_receive_active()):
+                reasons.append("Laufenden RX-Job beenden (Receive ist aktiv).")
+        elif bool(getattr(self.master, "_cmd_running", False)):
             reasons.append("Laufenden RX-Job beenden (_cmd_running ist aktiv).")
         return reasons
 
