@@ -408,12 +408,16 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         ctk.CTkEntry(wrap, textvariable=variable, width=width).pack(side="top")
 
     def _append_validation(self, text: str) -> None:
+        if not self._is_validation_box_available():
+            return
         self.validation_box.configure(state="normal")
         self.validation_box.insert("end", text + "\n")
         self.validation_box.see("end")
         self.validation_box.configure(state="disabled")
 
     def _set_validation_text(self, text: str) -> None:
+        if not self._is_validation_box_available():
+            return
         self.validation_box.configure(state="normal")
         self.validation_box.delete("1.0", "end")
         if not text.endswith("\n"):
@@ -421,6 +425,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.validation_box.insert("1.0", text)
         self.validation_box.see("end")
         self.validation_box.configure(state="disabled")
+
+    def _is_validation_box_available(self) -> bool:
+        try:
+            return bool(self.validation_box.winfo_exists())
+        except tk.TclError:
+            return False
 
     def _refresh_map_section(self) -> None:
         self._map_image_original = None
