@@ -267,6 +267,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         )
         self.map_preview_canvas.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
         self.map_preview_canvas.bind("<Configure>", self._on_map_canvas_resize)
+        self.map_preview_canvas.bind("<Button-1>", self._on_map_canvas_click)
         self._map_image_original: tk.PhotoImage | None = None
         self._map_image_preview: tk.PhotoImage | None = None
         self._map_preview_scale: tuple[float, float] = (1.0, 1.0)
@@ -279,6 +280,34 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._selected_point_index: int | None = None
         self._last_live_diagnosis_key: str | None = None
         self._emit_live_diagnostics_to_validation = True
+        self._rx_antenna_global_position: tuple[float, float] | None = None
+        self.rx_antenna_x_var = tk.StringVar(value="")
+        self.rx_antenna_y_var = tk.StringVar(value="")
+
+        rx_position_controls = ctk.CTkFrame(map_frame, fg_color="transparent")
+        rx_position_controls.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 8))
+        rx_position_controls.columnconfigure(7, weight=1)
+        ctk.CTkLabel(rx_position_controls, text="RX-Antenne global").grid(row=0, column=0, padx=(0, 4), sticky="w")
+        ctk.CTkLabel(rx_position_controls, text="X").grid(row=0, column=1, padx=(6, 2), sticky="w")
+        ctk.CTkEntry(rx_position_controls, textvariable=self.rx_antenna_x_var, width=95).grid(
+            row=0, column=2, padx=(0, 4), sticky="w"
+        )
+        ctk.CTkLabel(rx_position_controls, text="Y").grid(row=0, column=3, padx=(6, 2), sticky="w")
+        ctk.CTkEntry(rx_position_controls, textvariable=self.rx_antenna_y_var, width=95).grid(
+            row=0, column=4, padx=(0, 6), sticky="w"
+        )
+        ctk.CTkButton(
+            rx_position_controls,
+            text="Übernehmen",
+            command=self._apply_rx_antenna_position_from_inputs,
+            width=90,
+        ).grid(row=0, column=5, padx=3, sticky="w")
+        ctk.CTkButton(
+            rx_position_controls,
+            text="Löschen",
+            command=self._clear_rx_antenna_position,
+            width=80,
+        ).grid(row=0, column=6, padx=(3, 0), sticky="w")
 
         side_panel = ctk.CTkFrame(map_controls_row)
         side_panel.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
@@ -491,6 +520,15 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             return
         self._draw_map_preview()
 
+    def _on_map_canvas_click(self, event: tk.Event) -> None:
+        world_position = self._preview_pixel_to_world(preview_x=float(event.x), preview_y=float(event.y))
+        if world_position is None:
+            return
+        self._set_rx_antenna_position(x=world_position[0], y=world_position[1])
+        self._append_validation(
+            f"✅ RX-Antenne auf Karte gesetzt: x={world_position[0]:.3f}, y={world_position[1]:.3f}"
+        )
+
     @staticmethod
     def _resize_photo_to_cover(photo: tk.PhotoImage, *, target_width: int, target_height: int) -> tk.PhotoImage:
         if target_width <= 1 or target_height <= 1:
@@ -590,7 +628,35 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.map_preview_canvas.delete("all")
         self._map_canvas_image_id = self.map_preview_canvas.create_image(offset_x, offset_y, anchor="nw", image=preview)
         self._draw_mission_markers()
+        self._draw_rx_antenna_marker()
         self._draw_live_marker()
+
+    def _draw_rx_antenna_marker(self) -> None:
+        position = self._rx_antenna_global_position
+        original = self._map_image_original
+        if position is None or original is None:
+            return
+        map_pixel = self._world_to_map_pixel(x=position[0], y=position[1], image_height=original.height())
+        if map_pixel is None:
+            return
+        if not self._is_pixel_inside_map(map_pixel[0], map_pixel[1], width=original.width(), height=original.height()):
+            return
+        scale_x, scale_y = self._map_preview_scale
+        offset_x, offset_y = self._map_preview_offset
+        px = map_pixel[0] * scale_x + offset_x
+        py = map_pixel[1] * scale_y + offset_y
+        cross_size = 7
+        self.map_preview_canvas.create_line(px - cross_size, py, px + cross_size, py, fill="#42a5f5", width=2)
+        self.map_preview_canvas.create_line(px, py - cross_size, px, py + cross_size, fill="#42a5f5", width=2)
+        self.map_preview_canvas.create_oval(
+            px - 3,
+            py - 3,
+            px + 3,
+            py + 3,
+            fill="#90caf9",
+            outline="#1565c0",
+            width=1,
+        )
 
     def _draw_mission_markers(self) -> None:
         self._map_marker_ids = []
@@ -662,6 +728,27 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         map_pixel_x = (x - origin_x) / resolution
         map_pixel_y = float(image_height) - ((y - origin_y) / resolution)
         return (map_pixel_x, map_pixel_y)
+
+    def _preview_pixel_to_world(self, *, preview_x: float, preview_y: float) -> tuple[float, float] | None:
+        mission = self._mission
+        original = self._map_image_original
+        if mission is None or mission.map_config is None or original is None:
+            return None
+        scale_x, scale_y = self._map_preview_scale
+        if scale_x <= 0.0 or scale_y <= 0.0:
+            return None
+        offset_x, offset_y = self._map_preview_offset
+        map_pixel_x = (preview_x - offset_x) / scale_x
+        map_pixel_y = (preview_y - offset_y) / scale_y
+        if not self._is_pixel_inside_map(map_pixel_x, map_pixel_y, width=original.width(), height=original.height()):
+            return None
+        resolution = mission.map_config.resolution
+        if resolution <= 0.0:
+            return None
+        origin_x, origin_y, _origin_yaw = mission.map_config.origin
+        world_x = origin_x + map_pixel_x * resolution
+        world_y = origin_y + (float(original.height()) - map_pixel_y) * resolution
+        return (world_x, world_y)
 
     @staticmethod
     def _is_pixel_inside_map(pixel_x: float, pixel_y: float, *, width: int, height: int) -> bool:
@@ -1138,7 +1225,28 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "points": [self._serialize_point(point) for point in self._mission_points],
             "start_point_index": self._selected_start_point_index(),
             "map_config_file": self._selected_map_config_file,
+            "rx_antenna_global_position": self._serialize_rx_antenna_global_position(),
         }
+
+    def _serialize_rx_antenna_global_position(self) -> dict[str, float] | None:
+        position = self._rx_antenna_global_position
+        if position is None:
+            return None
+        return {"x": position[0], "y": position[1]}
+
+    @staticmethod
+    def _parse_rx_antenna_global_position(payload: Any) -> tuple[float, float] | None:
+        if not isinstance(payload, dict):
+            return None
+        x_value = payload.get("x")
+        y_value = payload.get("y")
+        if not isinstance(x_value, (int, float)) or not isinstance(y_value, (int, float)):
+            return None
+        parsed_x = float(x_value)
+        parsed_y = float(y_value)
+        if not math.isfinite(parsed_x) or not math.isfinite(parsed_y):
+            return None
+        return (parsed_x, parsed_y)
 
     def _persist_workflow_state(self) -> None:
         if self._is_restoring_workflow_state:
@@ -1189,6 +1297,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._mission = mission
             self._selected_map_config = mission.map_config
             self._selected_map_config_file = payload.get("map_config_file")
+            rx_position = self._parse_rx_antenna_global_position(payload.get("rx_antenna_global_position"))
+            if rx_position is None:
+                self._clear_rx_antenna_position(persist=False)
+            else:
+                self._set_rx_antenna_position(x=rx_position[0], y=rx_position[1], persist=False)
             self._refresh_points_table()
             self._refresh_map_section()
             persisted_start_point = payload.get("start_point_index")
@@ -1210,6 +1323,35 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._refresh_review_ready_indicator()
         finally:
             self._is_restoring_workflow_state = False
+
+    def _set_rx_antenna_position(self, *, x: float, y: float, persist: bool = True) -> None:
+        self._rx_antenna_global_position = (x, y)
+        self.rx_antenna_x_var.set(f"{x:.3f}")
+        self.rx_antenna_y_var.set(f"{y:.3f}")
+        self._draw_map_preview()
+        if persist:
+            self._persist_workflow_state()
+
+    def _clear_rx_antenna_position(self, persist: bool = True) -> None:
+        self._rx_antenna_global_position = None
+        self.rx_antenna_x_var.set("")
+        self.rx_antenna_y_var.set("")
+        self._draw_map_preview()
+        if persist:
+            self._persist_workflow_state()
+
+    def _apply_rx_antenna_position_from_inputs(self) -> None:
+        try:
+            parsed_x = float(self.rx_antenna_x_var.get().strip().replace(",", "."))
+            parsed_y = float(self.rx_antenna_y_var.get().strip().replace(",", "."))
+        except ValueError:
+            messagebox.showwarning("RX-Antenne", "RX-Antennenposition muss numerisch sein (X/Y).")
+            return
+        if not math.isfinite(parsed_x) or not math.isfinite(parsed_y):
+            messagebox.showwarning("RX-Antenne", "RX-Antennenposition enthält ungültige Zahlen.")
+            return
+        self._set_rx_antenna_position(x=parsed_x, y=parsed_y)
+        self._append_validation(f"✅ RX-Antenne gesetzt: x={parsed_x:.3f}, y={parsed_y:.3f}")
 
     def _start_run(self) -> None:
         if self._mission is None:
