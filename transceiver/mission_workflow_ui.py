@@ -15,6 +15,7 @@ import tkinter as tk
 from typing import Any, Callable
 
 import customtkinter as ctk
+import numpy as np
 
 from .app_config import MissionRuntimeConfig
 from .measurement_mission import MapConfig, MeasurementMission, MeasurementPoint, measurement_mission_from_dict
@@ -1310,11 +1311,44 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             try:
                 reference_payload = get_reference()
             except Exception:
-                return None
+                reference_payload = None
             if isinstance(reference_payload, tuple) and reference_payload:
-                return reference_payload[0]
-            return reference_payload
+                reference_payload = reference_payload[0]
+            if self._has_crosscorr_reference_data(reference_payload):
+                return reference_payload
+
+        persisted_reference = self._load_persisted_tx_reference()
+        if self._has_crosscorr_reference_data(persisted_reference):
+            return persisted_reference
         return getattr(self.master, "tx_data", None)
+
+    def _load_persisted_tx_reference(self) -> np.ndarray:
+        tx_file_widget = getattr(self.master, "tx_file", None)
+        tx_file_getter = getattr(tx_file_widget, "get", None)
+        if not callable(tx_file_getter):
+            return np.array([], dtype=np.complex64)
+        tx_file = str(tx_file_getter() or "").strip()
+        if not tx_file:
+            return np.array([], dtype=np.complex64)
+        candidates = [Path(tx_file)]
+        tx_path = candidates[0]
+        suffix = "_zeros"
+        if tx_path.stem.endswith(suffix):
+            candidates.append(tx_path.with_name(f"{tx_path.stem[: -len(suffix)]}{tx_path.suffix}"))
+        for path in candidates:
+            try:
+                raw = np.fromfile(path, dtype=np.int16)
+            except Exception:
+                continue
+            if raw.size < 2:
+                continue
+            if raw.size % 2 != 0:
+                raw = raw[:-1]
+            if raw.size == 0:
+                continue
+            iq = raw.reshape(-1, 2).astype(np.float32)
+            return iq[:, 0] + 1j * iq[:, 1]
+        return np.array([], dtype=np.complex64)
 
     @staticmethod
     def _has_crosscorr_reference_data(reference_data: Any) -> bool:
