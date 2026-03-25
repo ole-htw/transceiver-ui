@@ -258,6 +258,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._map_marker_ids: list[int] = []
         self._map_image_size: tuple[int, int] | None = None
         self._live_position: dict[str, Any] | None = None
+        self._live_position_received_at: float | None = None
         self._selected_point_index: int | None = None
         self._last_live_diagnosis_key: str | None = None
         self._emit_live_diagnostics_to_validation = True
@@ -420,6 +421,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._map_marker_ids = []
         self._map_image_size = None
         self._live_position = None
+        self._live_position_received_at = None
 
         map_config = self._selected_map_config
         if map_config is None:
@@ -659,12 +661,20 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         return "map"
 
     def _live_pose_diagnosis(self) -> tuple[str, str]:
+        stale_threshold_s = 1.8
         if self._map_image_size is None:
             return ("map_not_loaded", "Karte nicht geladen")
 
         position = self._live_position
         if not isinstance(position, dict):
-            return ("no_position", "Keine Position empfangen")
+            if self._live_position_received_at is None:
+                return ("no_position_never_received", "Live-Pose noch nie empfangen")
+            return ("position_temporarily_unavailable", "Live-Pose temporär ausgefallen")
+
+        if self._live_position_received_at is not None:
+            pose_age_s = time.time() - self._live_position_received_at
+            if pose_age_s > stale_threshold_s:
+                return ("stale_position", "Live-Pose veraltet")
 
         expected_frame_id = self._expected_live_frame_id()
         received_frame_id = position.get("frame_id")
@@ -1362,8 +1372,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 return
             if event.get("type") != "position_update":
                 return
-            position = event.get("position")
-            self._live_position = position if isinstance(position, dict) else None
+            self._apply_live_position_update(event.get("position"))
             self._draw_map_preview()
             self._update_live_label()
             return
@@ -1374,10 +1383,15 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             return
         if event.get("type") != "position_update":
             return
-        position = event.get("position")
-        self._live_position = position if isinstance(position, dict) else None
+        self._apply_live_position_update(event.get("position"))
         self._draw_map_preview()
         self._update_live_label()
+
+    def _apply_live_position_update(self, position: Any) -> None:
+        now = time.time()
+        self._live_position = position if isinstance(position, dict) else None
+        if self._live_position is not None:
+            self._live_position_received_at = now
 
     def _update_live_label(self, *, stage: str | None = None, status: str | None = None) -> None:
         total = len(self._mission.points) * (self._mission.repeat or 1) if self._mission else 0
@@ -1404,11 +1418,15 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
         diagnosis_key, diagnosis_text = self._live_pose_diagnosis()
         self._announce_live_diagnosis_if_changed(diagnosis_key, diagnosis_text)
+        pose_age_text = "-"
+        if self._live_position_received_at is not None:
+            pose_age_s = max(0.0, time.time() - self._live_position_received_at)
+            pose_age_text = f"{pose_age_s:.1f}s"
         self.live_var.set(
             f"Punktindex: {current_idx}/{max(total - 1, 0)} | "
             f"Navigation: {nav_status} | Messung: {meas_status} | "
             f"Verbleibend: {remaining} | ETA: {eta} | "
-            f"Live-Status: {diagnosis_text}"
+            f"Pose-Alter: {pose_age_text} | Live-Status: {diagnosis_text}"
         )
 
     def _on_record(self, payload: dict[str, Any]) -> None:
