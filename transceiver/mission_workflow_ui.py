@@ -1259,6 +1259,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             )
             self._append_validation("❌ Run-Start blockiert: " + " | ".join(reasons))
             return
+        if not self._ensure_transmitter_before_run():
+            return
         start_point_index = self._selected_start_point_index()
 
         self.results_table.delete(*self.results_table.get_children())
@@ -1321,6 +1323,48 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._set_run_buttons(running=True, paused=False)
         self._run_thread = threading.Thread(target=self._run_executor_thread, daemon=True)
         self._run_thread.start()
+
+    def _ensure_transmitter_before_run(self) -> bool:
+        is_active_fn = getattr(self.master, "is_transmitter_active_for_mission", None)
+        transmitter_active = bool(is_active_fn()) if callable(is_active_fn) else bool(getattr(self.master, "_tx_running", False))
+        if transmitter_active:
+            return True
+
+        decision = messagebox.askyesnocancel(
+            "Transmitter inaktiv",
+            "Der Transmitter ist aktuell nicht aktiv.\n\n"
+            "Ja: Transmitter aktivieren und auf 'TX (Replay): playback started.' warten.\n"
+            "Nein: Mission trotzdem ohne aktiven Transmitter starten.\n"
+            "Abbrechen: Run-Start abbrechen.",
+        )
+        if decision is None:
+            self._append_validation("ℹ️ Run-Start abgebrochen: Transmitter-Entscheidung abgebrochen.")
+            return False
+        if decision is False:
+            self._append_validation("⚠️ Mission startet ohne aktiven Transmitter (Operator-Entscheidung).")
+            return True
+
+        activate_fn = getattr(self.master, "activate_transmitter_for_mission", None)
+        if not callable(activate_fn):
+            messagebox.showerror(
+                "Transmitter-Start fehlgeschlagen",
+                "Transmitter konnte nicht automatisch aktiviert werden (Funktion nicht verfügbar).",
+            )
+            self._append_validation("❌ Run-Start blockiert: TX-Aktivierung ist im Hauptfenster nicht verfügbar.")
+            return False
+
+        self._append_validation("ℹ️ Aktiviere Transmitter für Missionsstart ...")
+        ok, detail = activate_fn()
+        if not ok:
+            messagebox.showerror(
+                "Transmitter-Start fehlgeschlagen",
+                "Transmitter konnte nicht rechtzeitig aktiviert werden.\n\n"
+                f"Details: {detail}",
+            )
+            self._append_validation(f"❌ Run-Start blockiert: TX-Aktivierung fehlgeschlagen ({detail}).")
+            return False
+        self._append_validation("✅ Transmitter aktiv ('TX (Replay): playback started.'). Mission startet.")
+        return True
 
     def _start_live_label_ticker(self) -> None:
         if self._live_label_ticker_active:
