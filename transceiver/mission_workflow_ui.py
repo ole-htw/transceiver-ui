@@ -991,7 +991,10 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._refresh_start_point_options()
 
     def _refresh_start_point_options(self) -> None:
-        labels = [self._format_start_point_label(index, point) for index, point in enumerate(self._mission_points)]
+        labels = [
+            self._format_start_point_label(active_index, point)
+            for active_index, (_mission_index, point) in enumerate(self._active_start_points())
+        ]
         if not labels:
             labels = ["1"]
         self.start_point_combo.configure(values=labels)
@@ -1005,6 +1008,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         display_name = point.name or point.id or f"Punkt {index + 1}"
         return f"{index + 1}: {display_name}"
 
+    def _active_start_points(self) -> list[tuple[int, MeasurementPoint]]:
+        return [
+            (mission_index, point)
+            for mission_index, point in enumerate(self._mission_points)
+            if point.enabled
+        ]
+
     def _selected_start_point_index(self) -> int:
         selected = self.start_point_var.get().strip()
         match = re.match(r"^(\d+)", selected)
@@ -1013,7 +1023,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         parsed_index = int(match.group(1)) - 1
         if parsed_index < 0:
             return 0
-        if self._mission_points and parsed_index >= len(self._mission_points):
+        active_points = self._active_start_points()
+        if active_points and parsed_index >= len(active_points):
             return 0
         return parsed_index
 
@@ -1194,11 +1205,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._refresh_points_table()
             self._refresh_map_section()
             persisted_start_point = payload.get("start_point_index")
-            if isinstance(persisted_start_point, int) and 0 <= persisted_start_point < len(self._mission_points):
+            active_points = self._active_start_points()
+            if isinstance(persisted_start_point, int) and 0 <= persisted_start_point < len(active_points):
+                _mission_index, selected_point = active_points[persisted_start_point]
                 self.start_point_var.set(
                     self._format_start_point_label(
                         persisted_start_point,
-                        self._mission_points[persisted_start_point],
+                        selected_point,
                     )
                 )
             repeats = mission.repeat or 1
@@ -1438,6 +1451,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _check_run_prerequisites(self) -> tuple[bool, list[str]]:
         reasons: list[str] = []
+        if not any(point.enabled for point in self._mission_points):
+            reasons.append("Keine aktiven Wegpunkte vorhanden. Bitte mindestens einen Punkt aktivieren.")
         reasons.extend(self._runtime_guard_reasons())
         review_fn = getattr(self.master, "review_measurement_for_mission", None)
         if not callable(review_fn):

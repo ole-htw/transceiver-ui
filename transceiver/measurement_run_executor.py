@@ -7,7 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Callable, Literal, Protocol
 
 from transceiver.measurement_mission import MeasurementMission, MeasurementPoint
 from transceiver.navigation_adapter import NavigationPoint, TerminalNavigationState
@@ -197,19 +197,30 @@ class MeasurementRunExecutor:
     def start(self) -> ExecutorState:
         abort_reason: str | None = None
         completion_substatus: str | None = None
-        points_per_cycle = len(self.mission.points)
+        active_points = [point for point in self.mission.points if point.enabled]
+        points_per_cycle = len(active_points)
         repeats = self.mission.repeat or 1
-        expected_points = points_per_cycle * repeats - self.config.start_point_index
+        expected_points = max(0, points_per_cycle * repeats - self.config.start_point_index)
         with self._state_lock:
             if self._state not in {"idle", "completed", "failed", "cancelled", "interrupted"}:
                 raise RuntimeError(f"Cannot start from state '{self._state}'")
+            if points_per_cycle == 0:
+                self._state = "failed"
+                abort_reason = "mission_has_no_active_points"
+                self._write_run_summary(
+                    abort_reason=abort_reason,
+                    completion_substatus=completion_substatus,
+                    expected_points=0,
+                    points_per_cycle=0,
+                )
+                return self._state
             self._state = "running"
 
         self.records = []
         self._cancel_requested = False
         self._cancel_confirmed = False
         for cycle in range(repeats):
-            for point_index, point in enumerate(self.mission.points):
+            for point_index, point in enumerate(active_points):
                 if cycle == 0 and point_index < self.config.start_point_index:
                     continue
                 if not self._wait_until_resumed_or_stopped():
@@ -219,6 +230,7 @@ class MeasurementRunExecutor:
                         abort_reason=abort_reason,
                         completion_substatus=completion_substatus,
                         expected_points=expected_points,
+                        points_per_cycle=points_per_cycle,
                     )
                     return final_state
 
@@ -229,6 +241,7 @@ class MeasurementRunExecutor:
                         abort_reason=abort_reason,
                         completion_substatus=completion_substatus,
                         expected_points=expected_points,
+                        points_per_cycle=points_per_cycle,
                     )
                     return final_state
 
@@ -236,6 +249,7 @@ class MeasurementRunExecutor:
                     point=point,
                     point_index=point_index,
                     cycle=cycle,
+                    points_per_cycle=points_per_cycle,
                 )
                 self.records.append(record)
 
@@ -247,6 +261,7 @@ class MeasurementRunExecutor:
                         abort_reason=abort_reason,
                         completion_substatus=completion_substatus,
                         expected_points=expected_points,
+                        points_per_cycle=points_per_cycle,
                     )
                     return self.state
 
@@ -276,6 +291,7 @@ class MeasurementRunExecutor:
             abort_reason=abort_reason,
             completion_substatus=completion_substatus,
             expected_points=expected_points,
+            points_per_cycle=points_per_cycle,
         )
         return self.state
 
@@ -339,11 +355,12 @@ class MeasurementRunExecutor:
         point: MeasurementPoint,
         point_index: int,
         cycle: int,
+        points_per_cycle: int,
     ) -> PointExecutionRecord:
         nav_state: TerminalNavigationState | None = None
         attempts = self.config.navigation_retry_attempts + 1
         point_started_at = time.time()
-        global_index = cycle * len(self.mission.points) + point_index
+        global_index = cycle * points_per_cycle + point_index
 
         def _emit_navigation_event(event_payload: dict[str, Any]) -> None:
             self._emit_runtime_event(
@@ -554,6 +571,7 @@ class MeasurementRunExecutor:
                 },
                 "notes": point.notes,
                 "measurement_profile": point.measurement_profile,
+                "enabled": point.enabled,
             },
             "timestamps": {
                 "start": point_started_at,
@@ -584,12 +602,12 @@ class MeasurementRunExecutor:
         abort_reason: str | None,
         completion_substatus: str | None,
         expected_points: int,
+        points_per_cycle: int,
     ) -> None:
         total = len(self.records)
         succeeded = sum(1 for record in self.records if record.status == "succeeded")
         failed = sum(1 for record in self.records if record.status == "failed")
         skipped = sum(1 for record in self.records if record.status == "skipped")
-        points_per_cycle = len(self.mission.points)
         completed_cycles = 0
         if points_per_cycle > 0 and self.state == "completed":
             completed_cycles = min(total // points_per_cycle, self.mission.repeat or 1)
@@ -614,10 +632,13 @@ class MeasurementRunExecutor:
     def _validate_start_point_index(self) -> None:
         if self.config.start_point_index < 0:
             raise ValueError("start_point_index must be >= 0")
-        if self.mission.points and self.config.start_point_index >= len(self.mission.points):
+        active_points = [point for point in self.mission.points if point.enabled]
+        if active_points and self.config.start_point_index >= len(active_points):
             raise ValueError(
-                "start_point_index must be smaller than number of mission points"
+                "start_point_index must be smaller than number of active mission points"
             )
+        if not active_points and self.config.start_point_index != 0:
+            raise ValueError("start_point_index must be 0 when no active mission points exist")
 
     @staticmethod
     def _to_navigation_point(point: MeasurementPoint) -> NavigationPoint:

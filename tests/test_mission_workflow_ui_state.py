@@ -63,3 +63,22 @@ def test_save_and_load_json_dict_preserves_auto_generated_ids(tmp_path) -> None:
     loaded = _load_json_dict(state_file)
 
     assert [point["id"] for point in loaded["points"]] == ["p001", "p002", "p003"]
+
+
+def test_save_and_load_json_dict_preserves_enabled_per_point(tmp_path) -> None:
+    state_file = tmp_path / "mission-workflow-state.json"
+    payload = {
+        "name": "scan-enabled",
+        "repeat": 1,
+        "start_point_index": 0,
+        "points": [
+            {"id": "p001", "x": 0.0, "y": 0.0, "z": 0.0, "yaw": 0.0, "enabled": True},
+            {"id": "p002", "x": 1.0, "y": 1.0, "z": 0.0, "yaw": 0.0, "enabled": False},
+            {"id": "p003", "x": 2.0, "y": 2.0, "z": 0.0, "yaw": 0.0, "enabled": True},
+        ],
+    }
+
+    _save_json_dict(state_file, payload)
+    loaded = _load_json_dict(state_file)
+
+    assert [point["enabled"] for point in loaded["points"]] == [True, False, True]
