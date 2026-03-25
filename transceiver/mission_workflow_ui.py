@@ -38,6 +38,7 @@ from .navigation_adapter import (
 )
 
 MISSION_WORKFLOW_STATE_FILE = Path(__file__).with_name("mission_workflow_state.json")
+LIVE_LABEL_TICKER_INTERVAL_MS = 250
 
 
 def _load_json_dict(path: Path) -> dict[str, Any]:
@@ -181,10 +182,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._selected_map_config: MapConfig | None = None
         self._selected_map_config_file: str | None = None
         self._is_restoring_workflow_state = False
+        self._live_label_ticker_job: str | None = None
+        self._live_label_ticker_active = False
 
         self._build_ui()
         self._restore_workflow_state()
         self.after_idle(self._stabilize_initial_geometry)
+        self.protocol("WM_DELETE_WINDOW", self._on_window_close)
 
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
@@ -1225,9 +1229,38 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         )
 
         self._navigator.start_pose_stream(on_runtime_event=self._on_executor_runtime_event)
+        self._start_live_label_ticker()
         self._set_run_buttons(running=True, paused=False)
         self._run_thread = threading.Thread(target=self._run_executor_thread, daemon=True)
         self._run_thread.start()
+
+    def _start_live_label_ticker(self) -> None:
+        if self._live_label_ticker_active:
+            return
+        self._live_label_ticker_active = True
+        self._schedule_live_label_ticker()
+
+    def _schedule_live_label_ticker(self) -> None:
+        if not self._live_label_ticker_active:
+            return
+        self._live_label_ticker_job = self.after(LIVE_LABEL_TICKER_INTERVAL_MS, self._run_live_label_ticker)
+
+    def _run_live_label_ticker(self) -> None:
+        self._live_label_ticker_job = None
+        if not self._live_label_ticker_active:
+            return
+        self._update_live_label()
+        self._schedule_live_label_ticker()
+
+    def _stop_live_label_ticker(self) -> None:
+        self._live_label_ticker_active = False
+        if self._live_label_ticker_job is None:
+            return
+        try:
+            self.after_cancel(self._live_label_ticker_job)
+        except Exception:
+            pass
+        self._live_label_ticker_job = None
 
     def _review_measurement(self, *, point_context, output_file: str) -> dict[str, object]:  # type: ignore[no-untyped-def]
         point_id = point_context.point.id or point_context.point.name or f"point-{point_context.global_index}"
@@ -1482,6 +1515,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         return "; ".join(rows)
 
     def _on_run_finished(self, state: str) -> None:
+        self._stop_live_label_ticker()
         if self._navigator is not None:
             self._navigator.stop_pose_stream()
             self._navigator = None
@@ -1505,6 +1539,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             if last_error:
                 self._append_validation(f"Operator-Hinweis: {last_error}")
         self._update_live_label()
+
+    def _on_window_close(self) -> None:
+        self._stop_live_label_ticker()
+        if self._navigator is not None:
+            self._navigator.stop_pose_stream()
+            self._navigator = None
+        self.destroy()
 
     def _export_logs(self) -> None:
         if self._run_log_dir is None or not self._run_log_dir.exists():
