@@ -3379,6 +3379,7 @@ class TransceiverUI(ctk.CTk):
         self._cached_tx_load_error_path: str | None = None
         self._tx_controller = None
         self._tx_output_capture: _FDCapture | None = None
+        self._tx_playback_started_event = threading.Event()
         self._closing = False
         self._plot_worker_manager = _get_plot_worker_manager()
         self._plot_worker_manager.start()
@@ -6378,6 +6379,8 @@ class TransceiverUI(ctk.CTk):
                 break
         if chunks:
             text = "".join(chunks)
+            if "TX (Replay): playback started." in text:
+                self._tx_playback_started_event.set()
             if self.console and self.console.winfo_exists():
                 self.console.append(text)
             if hasattr(self, "tx_log") and self.tx_log.winfo_exists():
@@ -7557,6 +7560,7 @@ class TransceiverUI(ctk.CTk):
             return
         controller = TxController.for_args(tx_args)
         self._tx_controller = controller
+        self._tx_playback_started_event.clear()
         if hasattr(self, "tx_log"):
             self.tx_log.delete("1.0", tk.END)
         self._cmd_running = True
@@ -7605,6 +7609,7 @@ class TransceiverUI(ctk.CTk):
         self._stop_tx_output_capture()
         self._cmd_running = False
         self._tx_running = False
+        self._tx_playback_started_event.clear()
         self._active_tx_file = None
         self._last_tx_end = controller.last_end_monotonic or time.monotonic()
         self._ui(self._reset_tx_buttons)
@@ -7616,6 +7621,7 @@ class TransceiverUI(ctk.CTk):
         if controller is None:
             self._tx_running = False
             self._cmd_running = False
+            self._tx_playback_started_event.clear()
             self._active_tx_file = None
             self._last_tx_end = time.monotonic()
             self._stop_tx_output_capture()
@@ -7628,12 +7634,35 @@ class TransceiverUI(ctk.CTk):
         self._tx_running = controller.is_running
         self._cmd_running = controller.is_running
         if not controller.is_running:
+            self._tx_playback_started_event.clear()
             self._active_tx_file = None
         self._last_tx_end = controller.last_end_monotonic or time.monotonic()
         if not controller.is_running:
             self._stop_tx_output_capture()
             if reset_ui:
                 self._ui(self._reset_tx_buttons)
+
+    def is_transmitter_active_for_mission(self) -> bool:
+        controller = self._tx_controller
+        if controller is not None and controller.is_running:
+            return True
+        return bool(self._tx_running)
+
+    def activate_transmitter_for_mission(self, timeout_s: float = 15.0) -> tuple[bool, str]:
+        if self.is_transmitter_active_for_mission():
+            return True, "already_active"
+
+        self._call_in_main_thread_sync(self.transmit)
+        deadline = time.monotonic() + max(0.1, timeout_s)
+        while time.monotonic() < deadline:
+            if self._tx_playback_started_event.wait(timeout=0.1):
+                return True, "playback_started"
+            controller = self._tx_controller
+            if controller is None:
+                continue
+            if controller.last_error is not None and not controller.is_running:
+                return False, f"tx_error: {controller.last_error}"
+        return False, "timeout_waiting_for_playback_started"
 
     def retransmit(self) -> None:
         """Stop any ongoing transmission and start a new one."""
