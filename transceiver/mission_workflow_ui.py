@@ -214,9 +214,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
         points_editor = ctk.CTkFrame(self)
         points_editor.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
-        for col in range(10):
+        for col in range(11):
             points_editor.columnconfigure(col, weight=0)
-        points_editor.columnconfigure(9, weight=1)
+        points_editor.columnconfigure(10, weight=1)
 
         ctk.CTkLabel(points_editor, text="2) Messpunkt anlegen").grid(row=0, column=0, padx=8, pady=8)
         self.point_name_var = tk.StringVar(value="")
@@ -234,6 +234,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         ctk.CTkButton(points_editor, text="Auswahl entfernen", command=self._remove_selected_point).grid(row=0, column=7, padx=3)
         ctk.CTkButton(points_editor, text="▲", width=36, command=self._move_selected_point_up).grid(row=0, column=8, padx=3)
         ctk.CTkButton(points_editor, text="▼", width=36, command=self._move_selected_point_down).grid(row=0, column=9, padx=(3, 8), sticky="w")
+        ctk.CTkButton(
+            points_editor,
+            text="Aktivieren/Deaktivieren",
+            command=self._toggle_selected_point_enabled,
+        ).grid(row=0, column=10, padx=(3, 8), sticky="w")
 
         map_controls_row = ctk.CTkFrame(self, fg_color="transparent")
         map_controls_row.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 6))
@@ -287,11 +292,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         points_table_frame.columnconfigure(0, weight=1)
         points_table_frame.rowconfigure(1, weight=1)
         ctk.CTkLabel(points_table_frame, text="3) Wegpunkte").grid(row=0, column=0, sticky="w", padx=8, pady=(8, 2))
-        point_columns = ("idx", "id", "name", "x", "y", "z", "yaw")
+        point_columns = ("idx", "enabled", "id", "name", "x", "y", "z", "yaw")
         self.points_table = ttk.Treeview(points_table_frame, columns=point_columns, show="headings", height=6)
         self.points_table.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
         for key, title in {
             "idx": "#",
+            "enabled": "Aktiv",
             "id": "ID",
             "name": "Name",
             "x": "X",
@@ -300,8 +306,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "yaw": "Yaw",
         }.items():
             self.points_table.heading(key, text=title)
-            self.points_table.column(key, stretch=True, width=95)
+            self.points_table.column(key, stretch=True, width=85 if key == "enabled" else 95)
         self.points_table.bind("<<TreeviewSelect>>", self._on_points_table_select)
+        self.points_table.bind("<Double-1>", self._on_points_table_double_click)
 
         terminal_frame = ctk.CTkFrame(side_panel)
         terminal_frame.grid(row=1, column=0, sticky="nsew", padx=0, pady=(0, 6))
@@ -853,6 +860,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "y": self.point_y_var.get().strip(),
             "z": self.point_z_var.get().strip() or 0.0,
             "yaw": self.point_yaw_var.get().strip(),
+            "enabled": True,
         }
         try:
             mission = measurement_mission_from_dict(
@@ -928,6 +936,35 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.points_table.see(moved_item)
         self._append_validation("ℹ️ Punkt nach unten verschoben.")
 
+    def _toggle_selected_point_enabled(self) -> None:
+        selected = self.points_table.selection()
+        if not selected:
+            return
+        index = self.points_table.index(selected[0])
+        self._toggle_point_enabled(index)
+
+    def _on_points_table_double_click(self, event: tk.Event) -> None:
+        region = self.points_table.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+        column_id = self.points_table.identify_column(event.x)
+        if column_id != "#2":
+            return
+        row_id = self.points_table.identify_row(event.y)
+        if not row_id:
+            return
+        index = self.points_table.index(row_id)
+        self._toggle_point_enabled(index)
+
+    def _toggle_point_enabled(self, index: int) -> None:
+        if index < 0 or index >= len(self._mission_points):
+            return
+        point = self._mission_points[index]
+        self._mission_points[index] = replace(point, enabled=not point.enabled)
+        self._sync_validated_mission_points()
+        self._refresh_points_table()
+        self._persist_workflow_state()
+
     def _sync_validated_mission_points(self) -> None:
         if self._mission is None:
             return
@@ -941,6 +978,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 "end",
                 values=(
                     idx,
+                    "✓" if point.enabled else "✗",
                     point.id or "-",
                     point.name or "-",
                     f"{point.x:.3f}",
@@ -987,6 +1025,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "x": point.x,
             "y": point.y,
             "z": point.z,
+            "enabled": point.enabled,
         }
 
         if point.notes is not None:
