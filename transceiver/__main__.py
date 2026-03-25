@@ -4939,10 +4939,9 @@ class TransceiverUI(ctk.CTk):
         self.update_trim()
 
     def _rx_interpolation_factor_text(self) -> str:
-        widgets = (
-            getattr(self, "rx_interpolation_factor_single", None),
-            getattr(self, "rx_interpolation_factor_cont", None),
-        )
+        single_widget = getattr(self, "rx_interpolation_factor_single", None)
+        cont_widget = getattr(self, "rx_interpolation_factor_cont", None)
+        widgets = (single_widget, cont_widget)
 
         try:
             focused = self.focus_get()
@@ -4958,6 +4957,17 @@ class TransceiverUI(ctk.CTk):
                 text = widget.get().strip()
                 if text:
                     return text
+
+        # If the mirrored fields diverged (e.g. change committed in one field
+        # without firing sync callbacks yet), prefer the factor of the active
+        # RX tab so persistence restores what the operator just edited.
+        single_text = single_widget.get().strip() if single_widget is not None else ""
+        cont_text = cont_widget.get().strip() if cont_widget is not None else ""
+        if single_text and cont_text and single_text != cont_text:
+            active_tab = self._get_rx_active_tab()
+            if active_tab == "Continuous":
+                return cont_text
+            return single_text
 
         for widget in widgets:
             if widget is None:
