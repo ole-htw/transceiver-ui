@@ -6509,20 +6509,72 @@ class TransceiverUI(ctk.CTk):
         )
         return result  # type: ignore[return-value]
 
+    def _start_rx_worker(
+        self,
+        *,
+        arg_list: list[str],
+        channels: int,
+        rate: float,
+        point_context=None,
+        on_complete=None,
+    ) -> threading.Thread:
+        def _runner() -> None:
+            result = self._run_rx_thread(
+                arg_list,
+                channels,
+                rate,
+                point_context=point_context,
+            )
+            if on_complete is not None:
+                on_complete(result)
+
+        worker = threading.Thread(
+            target=_runner,
+            daemon=True,
+            name="rx-worker",
+        )
+        worker.start()
+        return worker
+
     def receive_for_mission(self, *, output_file: str, point_context=None) -> dict[str, object]:
         arg_list, channels, rate = self._build_receive_arg_list_for_worker(output_file=output_file)
+        point_index = getattr(point_context, "global_index", None)
+        _LOGGER.info(
+            "Workflow RX start: point=%s caller_thread=%s rx_args=%s",
+            point_index if point_index is not None else "n/a",
+            threading.current_thread().name,
+            arg_list,
+        )
         self._cmd_running = True
         if hasattr(self, "rx_stop"):
             self._ui(lambda: self.rx_stop.configure(state="normal"))
         if hasattr(self, "rx_button"):
             self._ui(lambda: self.rx_button.configure(state="disabled"))
-        self._process_queue()
-        return self._run_rx_thread(
-            arg_list,
-            channels,
-            rate,
+        done = threading.Event()
+        mission_result: dict[str, object] = {}
+
+        def _store_result(result: dict[str, object]) -> None:
+            mission_result.update(result)
+            done.set()
+
+        worker = self._start_rx_worker(
+            arg_list=arg_list,
+            channels=channels,
+            rate=rate,
             point_context=point_context,
+            on_complete=_store_result,
         )
+        self._process_queue()
+        done.wait()
+        result = dict(mission_result)
+        _LOGGER.info(
+            "Workflow RX finished: point=%s worker_thread=%s success=%s error=%s",
+            point_index if point_index is not None else "n/a",
+            worker.name,
+            result.get("ok"),
+            result.get("error"),
+        )
+        return result
 
     def review_measurement_for_mission(
         self,
@@ -7607,11 +7659,16 @@ class TransceiverUI(ctk.CTk):
             self.rx_stop.configure(state="normal")
         if hasattr(self, "rx_button"):
             self.rx_button.configure(state="disabled")
-        threading.Thread(
-            target=self._run_rx_thread,
-            args=(arg_list, channels, rate),
-            daemon=True,
-        ).start()
+        _LOGGER.debug(
+            "Single RX start: caller_thread=%s rx_args=%s",
+            threading.current_thread().name,
+            arg_list,
+        )
+        self._start_rx_worker(
+            arg_list=arg_list,
+            channels=channels,
+            rate=rate,
+        )
         self._process_queue()
 
     def start_continuous(self) -> None:
