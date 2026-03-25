@@ -40,6 +40,7 @@ from .navigation_adapter import (
 
 MISSION_WORKFLOW_STATE_FILE = Path(__file__).with_name("mission_workflow_state.json")
 LIVE_LABEL_TICKER_INTERVAL_MS = 250
+AUTO_STOP_CONTINUOUS_BEFORE_RUN = True
 
 
 def _load_json_dict(path: Path) -> dict[str, Any]:
@@ -1056,6 +1057,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             f"✅ Mission valide: {mission.name}\n"
             f"Punkte pro Zyklus: {len(mission.points)} | Wiederholungen: {repeats} | Gesamtpunkte: {total_points}"
         ]
+        runtime_reasons = self._runtime_guard_reasons()
+        if runtime_reasons:
+            validation_lines.append("⚠️ Start derzeit blockiert:")
+            validation_lines.extend(f"  • {reason}" for reason in runtime_reasons)
+        else:
+            validation_lines.append("✅ Startfreigabe: Kein Continuous-Modus oder RX-Job aktiv.")
 
         if self._map_image_size is None:
             validation_lines.append(
@@ -1171,6 +1178,24 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             return
         if self._run_thread and self._run_thread.is_alive():
             return
+        if AUTO_STOP_CONTINUOUS_BEFORE_RUN and self._is_continuous_active():
+            stop_continuous = getattr(self.master, "stop_continuous", None)
+            if callable(stop_continuous):
+                self._append_validation("ℹ️ Continuous-Modus aktiv – versuche vor Run-Start automatisch zu stoppen.")
+                try:
+                    stop_continuous()
+                except Exception as exc:
+                    messagebox.showerror(
+                        "Run-Start blockiert",
+                        "Continuous-Modus konnte nicht automatisch gestoppt werden.\n"
+                        "Bitte Continuous-Modus zuerst stoppen und erneut starten.\n\n"
+                        f"Details: {exc}",
+                    )
+                    self._append_validation(
+                        "❌ Run-Start blockiert: Continuous-Modus zuerst stoppen (Auto-Stop fehlgeschlagen)."
+                    )
+                    self._refresh_review_ready_indicator(prerequisites_ok=False)
+                    return
         ready, reasons = self._check_run_prerequisites()
         self._refresh_review_ready_indicator(prerequisites_ok=ready)
         if not ready:
@@ -1374,6 +1399,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _check_run_prerequisites(self) -> tuple[bool, list[str]]:
         reasons: list[str] = []
+        reasons.extend(self._runtime_guard_reasons())
         review_fn = getattr(self.master, "review_measurement_for_mission", None)
         if not callable(review_fn):
             reasons.append(
@@ -1385,6 +1411,18 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 "TX-Referenzdaten für Crosscorrelation fehlen. Bitte TX laden (gleiche Quelle wie _get_crosscorr_reference)."
             )
         return len(reasons) == 0, reasons
+
+    def _is_continuous_active(self) -> bool:
+        cont_thread = getattr(self.master, "_cont_thread", None)
+        return bool(cont_thread is not None and cont_thread.is_alive())
+
+    def _runtime_guard_reasons(self) -> list[str]:
+        reasons: list[str] = []
+        if self._is_continuous_active():
+            reasons.append("Continuous-Modus zuerst stoppen (laufender Continuous-Thread erkannt).")
+        if bool(getattr(self.master, "_cmd_running", False)):
+            reasons.append("Laufenden RX-Job beenden (_cmd_running ist aktiv).")
+        return reasons
 
     def _refresh_review_ready_indicator(self, prerequisites_ok: bool | None = None) -> None:
         if prerequisites_ok is None:
