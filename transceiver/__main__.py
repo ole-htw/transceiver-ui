@@ -197,6 +197,7 @@ def _current_peak_group_indices(
 
 
 _SHM_REGISTRY: set[str] = set()
+_LOGGER = logging.getLogger(__name__)
 
 
 def _create_shared_memory(size: int) -> shared_memory.SharedMemory:
@@ -6371,6 +6372,34 @@ class TransceiverUI(ctk.CTk):
         except tk.TclError:
             pass
 
+    def _call_in_main_thread_sync(self, callback):
+        if threading.current_thread() is threading.main_thread():
+            return callback()
+
+        done = threading.Event()
+        state: dict[str, object] = {}
+
+        def _invoke() -> None:
+            try:
+                state["result"] = callback()
+            except Exception as exc:
+                state["error"] = exc
+            finally:
+                done.set()
+
+        if self._closing:
+            raise RuntimeError("UI is closing")
+        try:
+            self.after(0, _invoke)
+        except tk.TclError as exc:
+            raise RuntimeError("UI is unavailable") from exc
+
+        done.wait()
+        error = state.get("error")
+        if error is not None:
+            raise error  # type: ignore[misc]
+        return state.get("result")
+
     def _reset_tx_buttons(self) -> None:
         if hasattr(self, "tx_stop"):
             self.tx_stop.configure(state="disabled")
@@ -6381,7 +6410,12 @@ class TransceiverUI(ctk.CTk):
         self._set_tx_indicator_state("idle")
 
     def _run_rx_thread(
-        self, arg_list: list[str], channels: int, rate: float
+        self,
+        arg_list: list[str],
+        channels: int,
+        rate: float,
+        *,
+        point_context=None,
     ) -> dict[str, object]:
         result: dict[str, object] = {
             "ok": False,
@@ -6392,6 +6426,12 @@ class TransceiverUI(ctk.CTk):
         try:
             from .helpers import rx_to_file
 
+            point_index = getattr(point_context, "global_index", None)
+            _LOGGER.info(
+                "Mission RX args before parse_args (point=%s): %s",
+                point_index if point_index is not None else "n/a",
+                arg_list,
+            )
             args = rx_to_file.parse_args(arg_list)
             rx_to_file.main(args=args)
         except Exception as exc:
@@ -6425,37 +6465,54 @@ class TransceiverUI(ctk.CTk):
         return result
 
     def _build_receive_arg_list(self, *, output_file: str | None = None) -> tuple[list[str], int, float]:
-        out_file = output_file if output_file is not None else self.rx_file.get().strip()
-        channels = 2 if self.rx_channel_2.get() else 1
-        rate = _parse_number_expr_or_error(self.rx_rate.get())
+        out_file = output_file if output_file is not None else ""
+        rx_args = self.rx_args.get()
+        rx_freq = self.rx_freq.get()
+        rx_rate = self.rx_rate.get()
+        rx_dur = self.rx_dur.get()
+        rx_gain = self.rx_gain.get()
+        use_channel_2 = bool(self.rx_channel_2.get())
+        channels = 2 if use_channel_2 else 1
+        rate = _parse_number_expr_or_error(rx_rate)
         arg_list = [
             "-a",
-            self.rx_args.get(),
+            rx_args,
             "-f",
-            self.rx_freq.get(),
+            rx_freq,
             "-r",
-            self.rx_rate.get(),
+            rx_rate,
             "-d",
-            self.rx_dur.get(),
+            rx_dur,
             "-g",
-            self.rx_gain.get(),
+            rx_gain,
             "--dram",
         ]
         if out_file:
             arg_list += ["--output-file", out_file]
-        if self.rx_channel_2.get():
+        if use_channel_2:
             arg_list += ["--channels", "0", "1"]
         return arg_list, channels, rate
 
-    def receive_for_mission(self, *, output_file: str) -> dict[str, object]:
-        arg_list, channels, rate = self._build_receive_arg_list(output_file=output_file)
+    def _build_receive_arg_list_for_worker(self, *, output_file: str) -> tuple[list[str], int, float]:
+        result = self._call_in_main_thread_sync(
+            lambda: self._build_receive_arg_list(output_file=output_file)
+        )
+        return result  # type: ignore[return-value]
+
+    def receive_for_mission(self, *, output_file: str, point_context=None) -> dict[str, object]:
+        arg_list, channels, rate = self._build_receive_arg_list_for_worker(output_file=output_file)
         self._cmd_running = True
         if hasattr(self, "rx_stop"):
             self._ui(lambda: self.rx_stop.configure(state="normal"))
         if hasattr(self, "rx_button"):
             self._ui(lambda: self.rx_button.configure(state="disabled"))
         self._process_queue()
-        return self._run_rx_thread(arg_list, channels, rate)
+        return self._run_rx_thread(
+            arg_list,
+            channels,
+            rate,
+            point_context=point_context,
+        )
 
     def review_measurement_for_mission(
         self,
