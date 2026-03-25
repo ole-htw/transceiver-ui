@@ -7,12 +7,35 @@ from typing import Any
 from .measurement_run_executor import PointExecutionContext
 
 _LOS_ECHO_SAMPLE_TO_M = 1.5
+REVIEW_REASON_REVIEW_UNAVAILABLE = "review_unavailable"
+REVIEW_REASON_MISSING_TX_REFERENCE = "missing_tx_reference"
+REVIEW_REASON_NO_DETECTABLE_LOS = "no_detectable_los"
+REVIEW_REASON_REVIEW_EXCEPTION = "review_exception"
+REVIEW_REASON_OPERATOR_REJECTED = "operator_rejected"
+
+ALLOWED_REVIEW_REASONS = {
+    REVIEW_REASON_REVIEW_UNAVAILABLE,
+    REVIEW_REASON_MISSING_TX_REFERENCE,
+    REVIEW_REASON_NO_DETECTABLE_LOS,
+    REVIEW_REASON_REVIEW_EXCEPTION,
+    REVIEW_REASON_OPERATOR_REJECTED,
+}
+
+
+def normalize_review_reason(raw_reason: Any, *, default: str = REVIEW_REASON_OPERATOR_REJECTED) -> str:
+    if isinstance(raw_reason, str):
+        candidate = raw_reason.strip()
+        if candidate in ALLOWED_REVIEW_REASONS:
+            return candidate
+    return default
+
+
 _REVIEW_REASON_TO_ERROR_CODE = {
-    "review_unavailable": "measurement_review_unavailable",
-    "missing_tx_reference": "measurement_review_missing_tx_reference",
-    "no_detectable_los": "measurement_review_no_detectable_los",
-    "review_exception": "measurement_review_exception",
-    "operator_rejected": "measurement_review_operator_rejected",
+    REVIEW_REASON_REVIEW_UNAVAILABLE: "measurement_review_unavailable",
+    REVIEW_REASON_MISSING_TX_REFERENCE: "measurement_review_missing_tx_reference",
+    REVIEW_REASON_NO_DETECTABLE_LOS: "measurement_review_no_detectable_los",
+    REVIEW_REASON_REVIEW_EXCEPTION: "measurement_review_exception",
+    REVIEW_REASON_OPERATOR_REJECTED: "measurement_review_operator_rejected",
 }
 
 
@@ -98,7 +121,7 @@ class MissionRxMeasurementService:
         review_payload: dict[str, Any] | None = None
         if self._review_measurement is not None:
             approved = False
-            review_reason = "operator_rejected"
+            review_reason = REVIEW_REASON_OPERATOR_REJECTED
             review_detail = ""
             review_result = self._review_measurement(
                 point_context=point_context,
@@ -108,8 +131,7 @@ class MissionRxMeasurementService:
                 approved = bool(review_result.get("approved"))
                 raw_reason = review_result.get("reason")
                 raw_detail = review_result.get("detail")
-                if isinstance(raw_reason, str) and raw_reason.strip():
-                    review_reason = raw_reason.strip()
+                review_reason = normalize_review_reason(raw_reason)
                 if isinstance(raw_detail, str) and raw_detail.strip():
                     review_detail = raw_detail.strip()
                 if approved:
@@ -134,7 +156,7 @@ class MissionRxMeasurementService:
                 approved = bool(review_result)
             if not approved:
                 self._on_status("measurement", "failed")
-                error_code = _REVIEW_REASON_TO_ERROR_CODE.get(review_reason, "measurement_review_rejected")
+                error_code = _REVIEW_REASON_TO_ERROR_CODE[review_reason]
                 if self._on_operator_message is not None:
                     self._on_operator_message(
                         f"Review abgebrochen bei Punkt {point_context.global_index} [{review_reason}]: "

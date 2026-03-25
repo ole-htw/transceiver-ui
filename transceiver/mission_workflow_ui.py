@@ -23,7 +23,13 @@ from .measurement_run_executor import (
     MeasurementRunExecutor,
     MeasurementRunExecutorConfig,
 )
-from .mission_measurement_service import MissionRxMeasurementService
+from .mission_measurement_service import (
+    MissionRxMeasurementService,
+    REVIEW_REASON_OPERATOR_REJECTED,
+    REVIEW_REASON_REVIEW_EXCEPTION,
+    REVIEW_REASON_REVIEW_UNAVAILABLE,
+    normalize_review_reason,
+)
 from .navigation_adapter import (
     NavigationAdapter,
     NavigationAdapterConfig,
@@ -1222,7 +1228,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._append_validation(f"⚠️ {detail}")
             return {
                 "approved": False,
-                "reason": "review_unavailable",
+                "reason": REVIEW_REASON_REVIEW_UNAVAILABLE,
                 "detail": detail,
             }
         try:
@@ -1232,7 +1238,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._append_validation(f"⚠️ {detail}")
             return {
                 "approved": False,
-                "reason": "review_exception",
+                "reason": REVIEW_REASON_REVIEW_EXCEPTION,
                 "detail": detail,
             }
 
@@ -1240,17 +1246,15 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             approved = bool(review_result)
             return {
                 "approved": approved,
-                "reason": "operator_rejected" if not approved else "",
+                "reason": REVIEW_REASON_OPERATOR_REJECTED if not approved else "",
                 "detail": "",
             }
 
         approved = bool(review_result.get("approved"))
         reason = review_result.get("reason")
         detail = review_result.get("detail")
-        reason_text = reason.strip() if isinstance(reason, str) else ""
+        reason_text = normalize_review_reason(reason, default=REVIEW_REASON_OPERATOR_REJECTED) if not approved else ""
         detail_text = detail.strip() if isinstance(detail, str) else ""
-        if not approved and not reason_text:
-            reason_text = "operator_rejected"
         result_payload = dict(review_result)
         result_payload["approved"] = approved
         result_payload["reason"] = reason_text

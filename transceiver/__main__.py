@@ -52,6 +52,12 @@ from .helpers.echo_aoa import _find_peaks_simple
 from .helpers.interpolation import _apply_rx_interpolation, apply_tx_upsampling
 from .helpers.number_parser import parse_number_expr
 from .helpers.plot_colors import PLOT_COLORS
+from .mission_measurement_service import (
+    REVIEW_REASON_MISSING_TX_REFERENCE,
+    REVIEW_REASON_NO_DETECTABLE_LOS,
+    REVIEW_REASON_OPERATOR_REJECTED,
+    REVIEW_REASON_REVIEW_EXCEPTION,
+)
 from .mission_workflow_ui import MissionWorkflowWindow
 from .tx_controller import TxController
 
@@ -6451,13 +6457,14 @@ class TransceiverUI(ctk.CTk):
         """Open a blocking cross-correlation review dialog for one mission point."""
         outcome: dict[str, object] = {
             "approved": False,
-            "reason": "operator_rejected",
+            "reason": REVIEW_REASON_OPERATOR_REJECTED,
             "detail": "Messung wurde vom Operator verworfen.",
         }
         done = threading.Event()
 
         def _show_review() -> None:
             try:
+                qapp = pg.mkQApp()
                 channels = 2 if self.rx_channel_2.get() else 1
                 path = Path(output_file)
                 try:
@@ -6471,7 +6478,7 @@ class TransceiverUI(ctk.CTk):
                     detail = "Crosscorrelation-Review nicht möglich: keine TX-Referenz geladen."
                     messagebox.showerror("Mission Review", detail)
                     outcome["approved"] = False
-                    outcome["reason"] = "missing_tx_reference"
+                    outcome["reason"] = REVIEW_REASON_MISSING_TX_REFERENCE
                     outcome["detail"] = detail
                     return
 
@@ -6488,19 +6495,43 @@ class TransceiverUI(ctk.CTk):
                     detail = "Crosscorrelation enthält keine auswertbaren Peaks (LOS fehlt)."
                     messagebox.showerror("Mission Review", detail)
                     outcome["approved"] = False
-                    outcome["reason"] = "no_detectable_los"
+                    outcome["reason"] = REVIEW_REASON_NO_DETECTABLE_LOS
                     outcome["detail"] = detail
                     return
 
+                parent_window = qapp.activeWindow()
+                if parent_window is None:
+                    top_level_widgets = [
+                        widget
+                        for widget in QtWidgets.QApplication.topLevelWidgets()
+                        if isinstance(widget, QtWidgets.QWidget) and widget.isVisible()
+                    ]
+                    parent_window = top_level_widgets[0] if top_level_widgets else None
                 dialog = MissionMeasurementReviewDialog(
-                    parent=None,
+                    parent=parent_window,
                     point_label=point_label,
                     lags=lags,
                     magnitudes=mag,
                     los_idx=int(los_idx),
                     echo_indices=echo_indices,
                 )
-                dialog.exec()
+                dialog.raise_()
+                dialog.activateWindow()
+                logging.info(
+                    "Mission review opening dialog: point_label=%s reason=%s detail=%s",
+                    point_label,
+                    outcome.get("reason", ""),
+                    outcome.get("detail", ""),
+                )
+                dialog_result = dialog.exec()
+                logging.info(
+                    "Mission review dialog finished: point_label=%s result=%s confirmed=%s reason=%s detail=%s",
+                    point_label,
+                    dialog_result,
+                    dialog.confirmed,
+                    outcome.get("reason", ""),
+                    outcome.get("detail", ""),
+                )
                 approved = bool(dialog.confirmed)
                 outcome["approved"] = approved
                 if approved:
@@ -6521,12 +6552,19 @@ class TransceiverUI(ctk.CTk):
                         for idx in echo_indices_final
                     ]
                 else:
-                    outcome["reason"] = "operator_rejected"
+                    outcome["reason"] = REVIEW_REASON_OPERATOR_REJECTED
                     outcome["detail"] = "Messung wurde im Review-Dialog verworfen."
+                logging.info(
+                    "Mission review outcome: point_label=%s approved=%s reason=%s detail=%s",
+                    point_label,
+                    outcome.get("approved"),
+                    outcome.get("reason", ""),
+                    outcome.get("detail", ""),
+                )
             except Exception as exc:
                 self._out_queue.put(f"Mission review error: {exc}\n")
                 outcome["approved"] = False
-                outcome["reason"] = "review_exception"
+                outcome["reason"] = REVIEW_REASON_REVIEW_EXCEPTION
                 outcome["detail"] = str(exc)
             finally:
                 done.set()
