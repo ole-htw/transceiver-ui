@@ -6,6 +6,7 @@ import re
 import shlex
 import signal
 import subprocess
+import threading
 import time
 from collections import deque
 from collections.abc import Callable
@@ -610,3 +611,294 @@ class NavigationAdapter:
                 return state
 
         return "aborted"
+
+
+class Ros2CliPoseStreamTransport:
+    """Continuously streams robot pose updates from `/amcl_pose` via ROS2 CLI over SSH."""
+
+    _FRAME_ID_PATTERN = re.compile(
+        r"\bframe_id\s*:\s*['\"]?([A-Za-z0-9_./-]+)['\"]?",
+        re.IGNORECASE,
+    )
+    _STAMP_SEC_PATTERN = re.compile(r"\bsec\s*:\s*(-?\d+)\b", re.IGNORECASE)
+    _STAMP_NANOSEC_PATTERN = re.compile(r"\bnanosec\s*:\s*(\d+)\b", re.IGNORECASE)
+    _NUMERIC_PATTERN = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
+
+    def __init__(self) -> None:
+        self._thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        self._process: subprocess.Popen[str] | None = None
+        self._lock = threading.Lock()
+
+    @classmethod
+    def _build_stream_command(
+        cls,
+        *,
+        config: NavigationAdapterConfig,
+        topic: str = "/amcl_pose",
+    ) -> list[str]:
+        remote_ros_env_cmd = config.remote_ros_env_cmd.strip()
+        remote_setup = config.remote_ros_setup.strip()
+        fastdds_profiles_file = config.fastdds_profiles_file.strip()
+
+        env_exports: list[str] = []
+        if fastdds_profiles_file:
+            quoted_profile = shlex.quote(fastdds_profiles_file)
+            env_exports.extend(
+                [
+                    f"export FASTDDS_DEFAULT_PROFILES_FILE={quoted_profile}",
+                    f"export FASTRTPS_DEFAULT_PROFILES_FILE={quoted_profile}",
+                ]
+            )
+
+        shell_parts: list[str] = ["set -euo pipefail"]
+        shell_parts.extend(env_exports)
+        if remote_ros_env_cmd:
+            shell_parts.append(remote_ros_env_cmd)
+        elif remote_setup:
+            shell_parts.append(f"source {shlex.quote(remote_setup)}")
+        shell_parts.append(
+            " ".join(
+                [
+                    "ros2",
+                    "topic",
+                    "echo",
+                    shlex.quote(topic),
+                ]
+            )
+        )
+        remote_cmd = "; ".join(shell_parts)
+        return [
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "PasswordAuthentication=no",
+            "-o",
+            "KbdInteractiveAuthentication=no",
+            "-o",
+            "NumberOfPasswordPrompts=0",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            f"ConnectTimeout={int(max(1.0, config.goal_acceptance_timeout_s))}",
+            config.robot_host,
+            "bash",
+            "-lc",
+            remote_cmd,
+        ]
+
+    @classmethod
+    def _extract_position_xy(cls, block: str) -> tuple[float, float] | None:
+        lines = block.splitlines()
+        in_position = False
+        position_indent = 0
+        x_value: float | None = None
+        y_value: float | None = None
+
+        for raw_line in lines:
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            indent = len(raw_line) - len(raw_line.lstrip(" "))
+            key = stripped.split(":", 1)[0].strip().lower()
+            if key == "position":
+                in_position = True
+                position_indent = indent
+                continue
+            if in_position and indent <= position_indent and key not in {"x", "y"}:
+                in_position = False
+            if not in_position:
+                continue
+            if key not in {"x", "y"}:
+                continue
+            value_part = stripped.split(":", 1)[1] if ":" in stripped else ""
+            number_match = cls._NUMERIC_PATTERN.search(value_part)
+            if not number_match:
+                continue
+            try:
+                value = float(number_match.group(0))
+            except ValueError:
+                continue
+            if key == "x":
+                x_value = value
+            elif key == "y":
+                y_value = value
+            if x_value is not None and y_value is not None:
+                return x_value, y_value
+        return None
+
+    @classmethod
+    def _extract_pose_payload(cls, block: str) -> dict[str, Any] | None:
+        xy = cls._extract_position_xy(block)
+        if xy is None:
+            return None
+        x_value, y_value = xy
+
+        frame_match = cls._FRAME_ID_PATTERN.search(block)
+        frame_id = frame_match.group(1) if frame_match else "map"
+
+        sec_match = cls._STAMP_SEC_PATTERN.search(block)
+        nanosec_match = cls._STAMP_NANOSEC_PATTERN.search(block)
+        timestamp = time.time()
+        if sec_match:
+            try:
+                sec = int(sec_match.group(1))
+                nanosec = int(nanosec_match.group(1)) if nanosec_match else 0
+                timestamp = float(sec) + float(nanosec) / 1_000_000_000.0
+            except ValueError:
+                timestamp = time.time()
+
+        return {
+            "x": x_value,
+            "y": y_value,
+            "frame_id": frame_id,
+            "timestamp": timestamp,
+        }
+
+    def _stop_process(self) -> None:
+        with self._lock:
+            process = self._process
+            self._process = None
+        if process is None:
+            return
+        try:
+            process.terminate()
+            process.wait(timeout=1.0)
+            return
+        except Exception:
+            pass
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+    def start(
+        self,
+        *,
+        config: NavigationAdapterConfig,
+        on_event: Callable[[dict[str, Any]], None],
+    ) -> None:
+        self.stop()
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run_loop,
+            kwargs={"config": config, "on_event": on_event},
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        self._stop_process()
+        thread = self._thread
+        self._thread = None
+        if thread is not None:
+            thread.join(timeout=2.0)
+
+    def _run_loop(
+        self,
+        *,
+        config: NavigationAdapterConfig,
+        on_event: Callable[[dict[str, Any]], None],
+    ) -> None:
+        reconnect_attempt = 0
+        while not self._stop_event.is_set():
+            reconnect_attempt += 1
+            try:
+                cmd = self._build_stream_command(config=config)
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                with self._lock:
+                    self._process = process
+                on_event(
+                    {
+                        "type": "pose_stream",
+                        "event": {
+                            "type": "stream_connected",
+                            "attempt": reconnect_attempt,
+                            "timestamp": time.time(),
+                        },
+                    }
+                )
+                block_lines: list[str] = []
+                while not self._stop_event.is_set():
+                    raw_line = process.stdout.readline() if process.stdout else ""
+                    if raw_line:
+                        stripped = raw_line.strip()
+                        if stripped == "---":
+                            payload = self._extract_pose_payload("\n".join(block_lines))
+                            block_lines = []
+                            if payload is not None:
+                                on_event(
+                                    {
+                                        "type": "pose_stream",
+                                        "event": {
+                                            "type": "position_update",
+                                            "position": payload,
+                                        },
+                                    }
+                                )
+                            continue
+                        if stripped:
+                            block_lines.append(raw_line.rstrip("\n"))
+                        continue
+                    poll = process.poll()
+                    if poll is not None:
+                        break
+                    time.sleep(0.05)
+                if not self._stop_event.is_set():
+                    exit_code = process.poll()
+                    stderr_tail = ""
+                    if process.stderr is not None:
+                        stderr_tail = Ros2CliNavigationTransport._tail_text(
+                            process.stderr.read(),
+                            max_lines=5,
+                        )
+                    on_event(
+                        {
+                            "type": "pose_stream",
+                            "event": {
+                                "type": "stream_error",
+                                "message": (
+                                    f"pose stream disconnected (exit_code={exit_code}); stderr={stderr_tail}"
+                                ),
+                                "attempt": reconnect_attempt,
+                                "timestamp": time.time(),
+                            },
+                        }
+                    )
+            except OSError as exc:
+                on_event(
+                    {
+                        "type": "pose_stream",
+                        "event": {
+                            "type": "stream_error",
+                            "message": str(exc),
+                            "attempt": reconnect_attempt,
+                            "timestamp": time.time(),
+                        },
+                    }
+                )
+            finally:
+                self._stop_process()
+
+            if self._stop_event.is_set():
+                break
+            backoff_s = min(10.0, float(2 ** min(reconnect_attempt - 1, 4)))
+            on_event(
+                {
+                    "type": "pose_stream",
+                    "event": {
+                        "type": "stream_reconnect_wait",
+                        "backoff_s": backoff_s,
+                        "attempt": reconnect_attempt,
+                        "timestamp": time.time(),
+                    },
+                }
+            )
+            self._stop_event.wait(timeout=backoff_s)

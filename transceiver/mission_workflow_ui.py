@@ -12,7 +12,7 @@ import json
 import re
 from tkinter import filedialog, messagebox, ttk
 import tkinter as tk
-from typing import Any
+from typing import Any, Callable
 
 import customtkinter as ctk
 
@@ -24,7 +24,12 @@ from .measurement_run_executor import (
     MeasurementRunExecutorConfig,
 )
 from .mission_measurement_service import MissionRxMeasurementService
-from .navigation_adapter import NavigationAdapter, NavigationAdapterConfig, NavigationEvent
+from .navigation_adapter import (
+    NavigationAdapter,
+    NavigationAdapterConfig,
+    NavigationEvent,
+    Ros2CliPoseStreamTransport,
+)
 
 MISSION_WORKFLOW_STATE_FILE = Path(__file__).with_name("mission_workflow_state.json")
 
@@ -74,6 +79,17 @@ class _UiNavigator:
         self._adapter = adapter
         self._on_status = on_status
         self._on_operator_message = on_operator_message
+        self._pose_stream = Ros2CliPoseStreamTransport()
+
+    def start_pose_stream(
+        self,
+        *,
+        on_runtime_event: Callable[[dict[str, Any]], None],
+    ) -> None:
+        self._pose_stream.start(config=self._adapter.config, on_event=on_runtime_event)
+
+    def stop_pose_stream(self) -> None:
+        self._pose_stream.stop()
 
     def navigate_to_point(  # type: ignore[no-untyped-def]
         self,
@@ -149,6 +165,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
         self._mission: MeasurementMission | None = None
         self._executor: MeasurementRunExecutor | None = None
+        self._navigator: _UiNavigator | None = None
         self._run_thread: threading.Thread | None = None
         self._records: list[dict[str, Any]] = []
         self._run_started_at: float | None = None
@@ -1165,13 +1182,15 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             )
         )
 
+        self._navigator = _UiNavigator(
+            adapter=nav_adapter,
+            on_status=self._on_stage_update,
+            on_operator_message=self._append_validation,
+        )
+
         self._executor = MeasurementRunExecutor(
             mission=self._mission,
-            navigator=_UiNavigator(
-                adapter=nav_adapter,
-                on_status=self._on_stage_update,
-                on_operator_message=self._append_validation,
-            ),
+            navigator=self._navigator,
             measurement_service=MissionRxMeasurementService(
                 app=self.master,
                 on_status=self._on_stage_update,
@@ -1189,6 +1208,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             ),
         )
 
+        self._navigator.start_pose_stream(on_runtime_event=self._on_executor_runtime_event)
         self._set_run_buttons(running=True, paused=False)
         self._run_thread = threading.Thread(target=self._run_executor_thread, daemon=True)
         self._run_thread.start()
@@ -1285,7 +1305,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _run_executor_thread(self) -> None:
         assert self._executor is not None
-        state = self._executor.start()
+        try:
+            state = self._executor.start()
+        except Exception as exc:
+            self.after(0, lambda: self._append_validation(f"❌ Run-Thread fehlgeschlagen: {exc}"))
+            state = "failed"
         self.after(0, lambda: self._on_run_finished(state))
 
     def _pause_run(self) -> None:
@@ -1331,7 +1355,19 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.after(0, lambda: self._handle_executor_runtime_event(payload))
 
     def _handle_executor_runtime_event(self, payload: dict[str, Any]) -> None:
-        if payload.get("type") != "navigation":
+        payload_type = payload.get("type")
+        if payload_type == "navigation":
+            event = payload.get("event")
+            if not isinstance(event, dict):
+                return
+            if event.get("type") != "position_update":
+                return
+            position = event.get("position")
+            self._live_position = position if isinstance(position, dict) else None
+            self._draw_map_preview()
+            self._update_live_label()
+            return
+        if payload_type != "pose_stream":
             return
         event = payload.get("event")
         if not isinstance(event, dict):
@@ -1424,6 +1460,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         return "; ".join(rows)
 
     def _on_run_finished(self, state: str) -> None:
+        if self._navigator is not None:
+            self._navigator.stop_pose_stream()
+            self._navigator = None
         self._set_run_buttons(running=False, paused=False)
         completion_substatus = None
         if self._run_log_dir is not None:
