@@ -22,6 +22,8 @@ class _DummyWindow:
     _load_persisted_tx_reference = MissionWorkflowWindow._load_persisted_tx_reference
     _get_crosscorr_reference_for_mission = MissionWorkflowWindow._get_crosscorr_reference_for_mission
     _ensure_transmitter_before_run = MissionWorkflowWindow._ensure_transmitter_before_run
+    _is_continuous_active = MissionWorkflowWindow._is_continuous_active
+    _runtime_guard_reasons = MissionWorkflowWindow._runtime_guard_reasons
 
     def __init__(self, master) -> None:
         self.master = master
@@ -136,3 +138,29 @@ def test_ensure_transmitter_before_run_blocks_when_activation_fails(monkeypatch:
     window = _DummyWindow(_Master())
 
     assert window._ensure_transmitter_before_run() is False
+
+
+def test_runtime_guard_does_not_block_when_only_cmd_running_is_true_for_non_rx() -> None:
+    class _Master:
+        _cmd_running = True
+
+        @staticmethod
+        def is_receive_active_for_mission() -> bool:
+            return False
+
+    window = _DummyWindow(_Master())
+
+    assert window._runtime_guard_reasons() == []
+
+
+def test_runtime_guard_blocks_when_receive_is_active() -> None:
+    class _Master:
+        _cmd_running = False
+
+        @staticmethod
+        def is_receive_active_for_mission() -> bool:
+            return True
+
+    window = _DummyWindow(_Master())
+
+    assert window._runtime_guard_reasons() == ["Laufenden RX-Job beenden (Receive ist aktiv)."]
