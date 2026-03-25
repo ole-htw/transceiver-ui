@@ -131,7 +131,7 @@ class MissionRxMeasurementService:
                 approved = bool(review_result.get("approved"))
                 raw_reason = review_result.get("reason")
                 raw_detail = review_result.get("detail")
-                review_reason = normalize_review_reason(raw_reason)
+                review_reason = "" if approved else normalize_review_reason(raw_reason)
                 if isinstance(raw_detail, str) and raw_detail.strip():
                     review_detail = raw_detail.strip()
                 if approved:
@@ -143,7 +143,6 @@ class MissionRxMeasurementService:
                     )
                     review_payload = {
                         "approved": True,
-                        "reason": review_reason,
                         "detail": review_detail,
                         "manual_lags": review_result.get("manual_lags"),
                         "los_idx": review_result.get("los_idx"),
