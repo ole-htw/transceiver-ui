@@ -5018,8 +5018,21 @@ class TransceiverUI(ctk.CTk):
                 continue
             if widget.get().strip() == value:
                 continue
-            widget.delete(0, tk.END)
-            widget.insert(0, value)
+            entry_widget = getattr(widget, "entry", None)
+            if entry_widget is None:
+                continue
+            try:
+                previous_state = str(entry_widget.cget("state"))
+            except Exception:
+                previous_state = "normal"
+            if previous_state != "normal":
+                entry_widget.configure(state="normal")
+            try:
+                widget.delete(0, tk.END)
+                widget.insert(0, value)
+            finally:
+                if previous_state != "normal":
+                    entry_widget.configure(state=previous_state)
 
 
     def _apply_crosscorr_interpolation(
@@ -7114,14 +7127,7 @@ class TransceiverUI(ctk.CTk):
             if interpolation_factor is None:
                 interpolation_factor = params.get("interpolation_factor", "2")
             interpolation_factor = str(interpolation_factor).strip() or "2"
-            for widget in (
-                getattr(self, "rx_interpolation_factor_single", None),
-                getattr(self, "rx_interpolation_factor_cont", None),
-            ):
-                if widget is None:
-                    continue
-                widget.delete(0, tk.END)
-                widget.insert(0, interpolation_factor)
+            self._set_rx_interpolation_factor_text(interpolation_factor)
             self._sync_rx_interpolation_factor_entries("single")
             if hasattr(self, "_cont_runtime_config"):
                 self._cont_runtime_config["interpolation_enabled"] = bool(
