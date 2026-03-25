@@ -3767,6 +3767,7 @@ class TransceiverUI(ctk.CTk):
         self.upsampling_target_rate_entry = SuggestEntry(
             upsampling_body,
             "upsampling_target_rate_entry",
+            textvariable=self.upsampling_target_rate_var,
         )
         self.upsampling_target_rate_entry.grid(
             row=0,
@@ -3775,15 +3776,13 @@ class TransceiverUI(ctk.CTk):
             padx=(0, 10),
             pady=(6, 2),
         )
-        self.upsampling_target_rate_entry.delete(0, tk.END)
-        self.upsampling_target_rate_entry.insert(0, self.upsampling_target_rate_var.get())
         self.upsampling_target_rate_entry.entry.bind(
             "<FocusOut>",
             lambda _e: self._on_upsampling_target_rate_focus_out(),
         )
         self.upsampling_target_rate_entry.entry.bind(
             "<KeyRelease>",
-            lambda _e: self.auto_update_tx_filename(),
+            lambda _e: self._on_upsampling_target_rate_key_release(),
         )
         ctk.CTkLabel(
             upsampling_body,
@@ -4782,6 +4781,10 @@ class TransceiverUI(ctk.CTk):
         self.auto_update_tx_filename()
 
     def _on_upsampling_target_rate_focus_out(self) -> None:
+        self.upsampling_target_rate_var.set(self.upsampling_target_rate_entry.get())
+        self.auto_update_tx_filename()
+
+    def _on_upsampling_target_rate_key_release(self) -> None:
         self.upsampling_target_rate_var.set(self.upsampling_target_rate_entry.get())
         self.auto_update_tx_filename()
 
@@ -6778,10 +6781,7 @@ class TransceiverUI(ctk.CTk):
 
     # ----- Preset handling --------------------------------------------------
     def _get_current_params(self) -> dict:
-        upsampling_target_rate = (
-            self.upsampling_target_rate_entry.get()
-            or self.upsampling_target_rate_var.get()
-        )
+        upsampling_target_rate = self.upsampling_target_rate_var.get()
         return {
             "waveform": self.wave_var.get(),
             "fs": self.fs_entry.get(),
@@ -6799,7 +6799,6 @@ class TransceiverUI(ctk.CTk):
             "zeros_enabled": self.zeros_enable.get(),
             "upsampling_enabled": bool(self.upsampling_enable.get()),
             "upsampling_target_rate": upsampling_target_rate,
-            "target_fs": upsampling_target_rate,
             "amplitude": self.amp_entry.get(),
             "ofdm_nfft": self.ofdm_nfft_entry.get(),
             "ofdm_cp": self.ofdm_cp_entry.get(),
@@ -6948,10 +6947,13 @@ class TransceiverUI(ctk.CTk):
                 upsampling_target_rate_value = params.get("upsampling_rate")
             if upsampling_target_rate_value is None:
                 upsampling_target_rate_value = params.get("target_fs")
+            if (
+                params.get("upsampling_target_rate") is None
+                and upsampling_target_rate_value is not None
+            ):
+                params["upsampling_target_rate"] = upsampling_target_rate_value
             upsampling_target_rate = str(upsampling_target_rate_value or "")
             self.upsampling_target_rate_var.set(upsampling_target_rate)
-            self.upsampling_target_rate_entry.delete(0, tk.END)
-            self.upsampling_target_rate_entry.insert(0, upsampling_target_rate)
             upsampling_enabled = params.get("upsampling_enabled")
             if upsampling_enabled is None:
                 upsampling_enabled = params.get("upsample_enabled")
