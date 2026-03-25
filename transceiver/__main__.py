@@ -6472,7 +6472,7 @@ class TransceiverUI(ctk.CTk):
                 except ValueError:
                     loaded = rx_convert.load_iq_file(path, channels=channels, layout="interleaved")
 
-                data, _channel_label = self._select_rx_channel(loaded)
+                data, _channel_label = self._select_rx_display_data(loaded)
                 ref_data, _ref_label = self._get_crosscorr_reference()
                 if ref_data is None or ref_data.size == 0:
                     detail = "Crosscorrelation-Review nicht möglich: keine TX-Referenz geladen."
