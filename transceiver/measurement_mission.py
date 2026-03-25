@@ -21,6 +21,7 @@ class MeasurementPoint:
     qw: float | None = None
     notes: str | None = None
     measurement_profile: str | None = None
+    enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -124,6 +125,10 @@ def _parse_point(payload: dict[str, Any], index: int) -> MeasurementPoint:
             f"{point_label}.measurement_profile must be a string when provided"
         )
 
+    enabled_raw = payload.get("enabled", True)
+    if not isinstance(enabled_raw, bool):
+        raise ValueError(f"{point_label}.enabled must be a bool when provided")
+
     return MeasurementPoint(
         id=point_id,
         name=point_name,
@@ -137,6 +142,7 @@ def _parse_point(payload: dict[str, Any], index: int) -> MeasurementPoint:
         qw=qw,
         notes=notes,
         measurement_profile=measurement_profile,
+        enabled=enabled_raw,
     )
 
 
