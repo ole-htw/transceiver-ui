@@ -6626,6 +6626,13 @@ class TransceiverUI(ctk.CTk):
                     outcome["detail"] = detail
                     return
 
+                data, ref_data, _compare, _interp_fs = self._apply_crosscorr_interpolation(
+                    data,
+                    float(getattr(self, "latest_fs", 1.0) or 1.0),
+                    ref_data,
+                )
+                self._latest_rx_data_interpolated = bool(self.rx_interpolation_enable.get())
+
                 ctx = _build_crosscorr_ctx(
                     data,
                     ref_data,
