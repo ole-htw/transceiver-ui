@@ -6865,6 +6865,12 @@ class TransceiverUI(ctk.CTk):
     def _apply_params(self, params: dict) -> None:
         self._restoring_state = True
         try:
+            sync_enabled = _coerce_bool(params.get("sync_rates", True), default=True)
+            self.sync_var.set(sync_enabled)
+            # Apply the persisted sync mode before populating rate fields so
+            # generator fs doesn't get overwritten by temporarily shared vars.
+            self.toggle_rate_sync(sync_enabled)
+
             self.wave_var.set(params.get("waveform", "sinus"))
             self.update_waveform_fields()
             fs_value = params.get("fs")
@@ -6981,8 +6987,11 @@ class TransceiverUI(ctk.CTk):
             self.file_entry.insert(0, params.get("file", ""))
             self.tx_args.delete(0, tk.END)
             self.tx_args.insert(0, params.get("tx_args", ""))
-            self.tx_rate.delete(0, tk.END)
-            self.tx_rate.insert(0, params.get("tx_rate", ""))
+            if sync_enabled:
+                self.rate_var.set(str(fs_value or ""))
+            else:
+                self.tx_rate.delete(0, tk.END)
+                self.tx_rate.insert(0, params.get("tx_rate", ""))
             self.tx_freq.delete(0, tk.END)
             self.tx_freq.insert(0, params.get("tx_freq", ""))
             self.tx_gain.delete(0, tk.END)
@@ -6996,8 +7005,9 @@ class TransceiverUI(ctk.CTk):
             )
             self.rx_args.delete(0, tk.END)
             self.rx_args.insert(0, params.get("rx_args", ""))
-            self.rx_rate.delete(0, tk.END)
-            self.rx_rate.insert(0, params.get("rx_rate", ""))
+            if not sync_enabled:
+                self.rx_rate.delete(0, tk.END)
+                self.rx_rate.insert(0, params.get("rx_rate", ""))
             self.rx_freq.delete(0, tk.END)
             self.rx_freq.insert(0, params.get("rx_freq", ""))
             self.rx_dur.delete(0, tk.END)
@@ -7108,16 +7118,6 @@ class TransceiverUI(ctk.CTk):
             self.trim_start.set(params.get("trim_start", 0.0))
             self.trim_end.set(params.get("trim_end", 100.0))
             self.update_trim()
-            sync_enabled = _coerce_bool(params.get("sync_rates", True), default=True)
-            self.sync_var.set(sync_enabled)
-            if sync_enabled:
-                # Preserve persisted fs as the leading sync value before rebinding.
-                persisted_fs = str(fs_value or "")
-                self.rate_var.set(persisted_fs)
-                self.fs_var = self.rate_var
-                self.tx_rate_var = self.rate_var
-                self.rx_rate_var = self.rate_var
-            self.toggle_rate_sync(sync_enabled)
         finally:
             self._restoring_state = False
 
