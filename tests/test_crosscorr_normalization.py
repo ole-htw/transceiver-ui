@@ -9,8 +9,6 @@ def _install_pyqtgraph_stub() -> None:
         return
 
     qt_mod = types.ModuleType("pyqtgraph.Qt")
-    qt_mod.QtCore = object()
-    qt_mod.QtGui = object()
 
     class _PgDummy:
         def __init__(self, *args, **kwargs):
@@ -21,6 +19,16 @@ def _install_pyqtgraph_stub() -> None:
 
         def __getattr__(self, _name: str):
             return self
+
+    class _QtWidgetsDummy:
+        QDialog = type("QDialog", (), {})
+
+        def __getattr__(self, name: str):
+            return type(name, (), {})
+
+    qt_mod.QtCore = _PgDummy()
+    qt_mod.QtGui = _PgDummy()
+    qt_mod.QtWidgets = _QtWidgetsDummy()
 
     pg_mod = types.ModuleType("pyqtgraph")
     pg_mod.Qt = qt_mod
@@ -43,6 +51,7 @@ _install_pyqtgraph_stub()
 sys.modules.setdefault("uhd", types.ModuleType("uhd"))
 
 from transceiver.__main__ import (
+    TransceiverUI,
     _build_crosscorr_ctx,
     _format_echo_delay_display,
     _format_rx_stats_rows,
@@ -169,3 +178,34 @@ def test_format_rx_stats_rows_does_not_scale_echo_when_interpolation_not_applied
 
     as_dict = dict(rows)
     assert as_dict["LOS-Echo"] == "12 samp (18.0 m)"
+
+
+class _DummyEntryWidget:
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self.entry = object()
+
+    def get(self) -> str:
+        return self._text
+
+
+def test_rx_interpolation_factor_prefers_continuous_value_on_continuous_tab() -> None:
+    dummy = types.SimpleNamespace()
+    dummy.rx_interpolation_factor_single = _DummyEntryWidget("2")
+    dummy.rx_interpolation_factor_cont = _DummyEntryWidget("7")
+    dummy.focus_get = lambda: None
+    dummy._get_rx_active_tab = lambda: "Continuous"
+
+    value = TransceiverUI._rx_interpolation_factor_text(dummy)  # type: ignore[arg-type]
+    assert value == "7"
+
+
+def test_rx_interpolation_factor_prefers_single_value_on_single_tab() -> None:
+    dummy = types.SimpleNamespace()
+    dummy.rx_interpolation_factor_single = _DummyEntryWidget("5")
+    dummy.rx_interpolation_factor_cont = _DummyEntryWidget("2")
+    dummy.focus_get = lambda: None
+    dummy._get_rx_active_tab = lambda: "Single"
+
+    value = TransceiverUI._rx_interpolation_factor_text(dummy)  # type: ignore[arg-type]
+    assert value == "5"
