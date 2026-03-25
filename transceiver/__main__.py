@@ -1671,7 +1671,44 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             label_item.setPos(float(self._lags[idx]), float(self._magnitudes[idx]))
             self._plot.addItem(label_item)
 
+        focus_range = self._focused_x_range()
+        if focus_range is not None:
+            self._plot.setXRange(*focus_range, padding=0.0)
+
+        visible_x = self._plot.getViewBox().viewRange()[0]
+        x_min, x_max = float(visible_x[0]), float(visible_x[1])
+        visible_mask = (self._lags >= x_min) & (self._lags <= x_max)
+        if np.any(visible_mask):
+            visible_peak = float(np.max(self._magnitudes[visible_mask]))
+        else:
+            visible_peak = float(np.max(self._magnitudes)) if self._magnitudes.size else 0.0
+        current_y = self._plot.getViewBox().viewRange()[1]
+        y_range = _crosscorr_dynamic_y_range(
+            (float(current_y[0]), float(current_y[1])),
+            visible_peak,
+        )
+        if y_range is not None:
+            self._plot.setYRange(*y_range, padding=0.0)
+
         self._update_stats_label()
+
+    def _focused_x_range(self) -> tuple[float, float] | None:
+        if self._lags.size == 0:
+            return None
+        focus_lags: list[float] = []
+        if self._selected_los_idx is not None:
+            focus_lags.append(float(self._lags[int(self._selected_los_idx)]))
+        for idx in self._selected_echo_indices:
+            focus_lags.append(float(self._lags[int(idx)]))
+        if not focus_lags:
+            return None
+
+        center = float(sum(focus_lags) / len(focus_lags))
+        lag_min = float(np.min(self._lags))
+        lag_max = float(np.max(self._lags))
+        max_half_window = max(10.0, (lag_max - lag_min) / 2.0)
+        zoom_half_window = float(np.clip(50.0, 10.0, max_half_window))
+        return (center - zoom_half_window, center + zoom_half_window)
 
     def _apply_manual_lag(self, kind: str, lag_value: float) -> None:
         if kind not in ("los", "echo"):
