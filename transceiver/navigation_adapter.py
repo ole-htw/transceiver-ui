@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import select
 import shlex
 import signal
 import subprocess
@@ -623,6 +624,7 @@ class Ros2CliPoseStreamTransport:
     _STAMP_SEC_PATTERN = re.compile(r"\bsec\s*:\s*(-?\d+)\b", re.IGNORECASE)
     _STAMP_NANOSEC_PATTERN = re.compile(r"\bnanosec\s*:\s*(\d+)\b", re.IGNORECASE)
     _NUMERIC_PATTERN = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
+    _NO_DATA_WARNING_AFTER_S = 5.0
 
     def __init__(self) -> None:
         self._thread: threading.Thread | None = None
@@ -826,14 +828,23 @@ class Ros2CliPoseStreamTransport:
                     }
                 )
                 block_lines: list[str] = []
+                connected_at = time.time()
+                has_reported_no_data_warning = False
                 while not self._stop_event.is_set():
-                    raw_line = process.stdout.readline() if process.stdout else ""
+                    raw_line = ""
+                    if process.stdout is not None and hasattr(process.stdout, "fileno"):
+                        readable, _, _ = select.select([process.stdout], [], [], 0.25)
+                        if readable:
+                            raw_line = process.stdout.readline()
+                    elif process.stdout is not None:
+                        raw_line = process.stdout.readline()
                     if raw_line:
                         stripped = raw_line.strip()
                         if stripped == "---":
                             payload = self._extract_pose_payload("\n".join(block_lines))
                             block_lines = []
                             if payload is not None:
+                                has_reported_no_data_warning = True
                                 on_event(
                                     {
                                         "type": "pose_stream",
@@ -847,10 +858,28 @@ class Ros2CliPoseStreamTransport:
                         if stripped:
                             block_lines.append(raw_line.rstrip("\n"))
                         continue
+                    if (
+                        not has_reported_no_data_warning
+                        and (time.time() - connected_at) >= self._NO_DATA_WARNING_AFTER_S
+                    ):
+                        has_reported_no_data_warning = True
+                        on_event(
+                            {
+                                "type": "pose_stream",
+                                "event": {
+                                    "type": "stream_error",
+                                    "message": (
+                                        "keine /amcl_pose-Nachrichten empfangen "
+                                        f"(>{self._NO_DATA_WARNING_AFTER_S:.0f}s nach Verbindungsaufbau)"
+                                    ),
+                                    "attempt": reconnect_attempt,
+                                    "timestamp": time.time(),
+                                },
+                            }
+                        )
                     poll = process.poll()
                     if poll is not None:
                         break
-                    time.sleep(0.05)
                 if not self._stop_event.is_set():
                     exit_code = process.poll()
                     stderr_tail = ""
