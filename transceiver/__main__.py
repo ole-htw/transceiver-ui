@@ -5114,9 +5114,15 @@ class TransceiverUI(ctk.CTk):
     def toggle_rate_sync(self, enable: bool) -> None:
         """Enable or disable rate synchronization between TX and RX."""
         if enable:
-            self.rate_var.set(
-                self.fs_entry.get() or self.tx_rate.get() or self.rx_rate.get()
-            )
+            # Sync source priority is explicit and consistent:
+            #   1) persisted/generator fs (self.fs_entry)
+            #   2) tx_rate
+            #   3) rx_rate
+            self.rate_var.set(self.fs_entry.get())
+            if not self.rate_var.get():
+                self.rate_var.set(self.tx_rate.get())
+            if not self.rate_var.get():
+                self.rate_var.set(self.rx_rate.get())
             self.fs_var = self.rate_var
             self.tx_rate_var = self.rate_var
             self.rx_rate_var = self.rate_var
@@ -7100,8 +7106,16 @@ class TransceiverUI(ctk.CTk):
             self.trim_start.set(params.get("trim_start", 0.0))
             self.trim_end.set(params.get("trim_end", 100.0))
             self.update_trim()
-            self.sync_var.set(params.get("sync_rates", True))
-            self.toggle_rate_sync(self.sync_var.get())
+            sync_enabled = _coerce_bool(params.get("sync_rates", True), default=True)
+            self.sync_var.set(sync_enabled)
+            if sync_enabled:
+                # Preserve persisted fs as the leading sync value before rebinding.
+                persisted_fs = str(fs_value or "")
+                self.rate_var.set(persisted_fs)
+                self.fs_var = self.rate_var
+                self.tx_rate_var = self.rate_var
+                self.rx_rate_var = self.rate_var
+            self.toggle_rate_sync(sync_enabled)
         finally:
             self._restoring_state = False
 
