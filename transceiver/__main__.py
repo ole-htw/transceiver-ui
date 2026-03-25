@@ -4,6 +4,7 @@ import logging
 import io
 import threading
 import queue
+import subprocess
 from collections import deque
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, filedialog
@@ -6442,6 +6443,7 @@ class TransceiverUI(ctk.CTk):
         rate: float,
         *,
         point_context=None,
+        backend_only: bool = False,
     ) -> dict[str, object]:
         result: dict[str, object] = {
             "ok": False,
@@ -6450,16 +6452,33 @@ class TransceiverUI(ctk.CTk):
             "started_at": time.time(),
         }
         try:
-            from .helpers import rx_to_file
-
             point_index = getattr(point_context, "global_index", None)
             _LOGGER.info(
                 "Mission RX args before parse_args (point=%s): %s",
                 point_index if point_index is not None else "n/a",
                 arg_list,
             )
-            args = rx_to_file.parse_args(arg_list)
-            rx_to_file.main(args=args)
+            if backend_only:
+                args = None
+                command = [sys.executable, "-m", "transceiver.helpers.rx_to_file", *arg_list]
+                proc = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+                self._proc = proc
+                if proc.stdout is not None:
+                    for line in proc.stdout:
+                        self._out_queue.put(line)
+                return_code = proc.wait()
+                if return_code != 0:
+                    raise RuntimeError(f"rx_to_file exited with return code {return_code}")
+            else:
+                from .helpers import rx_to_file
+
+                args = rx_to_file.parse_args(arg_list)
+                rx_to_file.main(args=args)
         except Exception as exc:
             self._out_queue.put(f"Receive error: {exc}\n")
             result["error"] = str(exc)
@@ -6469,7 +6488,10 @@ class TransceiverUI(ctk.CTk):
             self._proc = None
             self._ui(self._reset_rx_buttons)
 
-        if args is not None:
+        if backend_only:
+            result["ok"] = result.get("error") is None
+            result["output_file"] = self._extract_output_file_from_args(arg_list)
+        elif args is not None:
             result["ok"] = True
             result["output_file"] = str(args.output_file)
             try:
@@ -6489,6 +6511,15 @@ class TransceiverUI(ctk.CTk):
                 self._out_queue.put(f"Receive plot error: {exc}\n")
         result["finished_at"] = time.time()
         return result
+
+    def _extract_output_file_from_args(self, arg_list: list[str]) -> str | None:
+        try:
+            idx = arg_list.index("--output-file")
+        except ValueError:
+            return None
+        if idx + 1 >= len(arg_list):
+            return None
+        return arg_list[idx + 1]
 
     def _build_receive_arg_list(self, *, output_file: str | None = None) -> tuple[list[str], int, float]:
         out_file = output_file if output_file is not None else ""
@@ -6533,6 +6564,7 @@ class TransceiverUI(ctk.CTk):
         rate: float,
         point_context=None,
         on_complete=None,
+        backend_only: bool = False,
     ) -> threading.Thread:
         def _runner() -> None:
             result = self._run_rx_thread(
@@ -6540,6 +6572,7 @@ class TransceiverUI(ctk.CTk):
                 channels,
                 rate,
                 point_context=point_context,
+                backend_only=backend_only,
             )
             if on_complete is not None:
                 on_complete(result)
@@ -6579,6 +6612,7 @@ class TransceiverUI(ctk.CTk):
             rate=rate,
             point_context=point_context,
             on_complete=_store_result,
+            backend_only=True,
         )
         self._process_queue()
         done.wait()

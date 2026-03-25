@@ -84,12 +84,14 @@ def test_receive_for_mission_uses_worker_path_and_waits_for_result() -> None:
         rate,
         point_context=None,
         on_complete=None,
+        backend_only=False,
     ):
         captured["arg_list"] = arg_list
         captured["channels"] = channels
         captured["rate"] = rate
         captured["point_context"] = point_context
         captured["caller_thread"] = threading.current_thread().name
+        captured["backend_only"] = backend_only
 
         def _runner():
             time.sleep(0.05)
@@ -114,10 +116,68 @@ def test_receive_for_mission_uses_worker_path_and_waits_for_result() -> None:
     assert captured["arg_list"] == ["-a", "type=b200"]
     assert captured["channels"] == 2
     assert captured["rate"] == 2_000_000.0
+    assert captured["backend_only"] is True
     assert process_queue_calls == ["called"]
     assert result == {"ok": True, "output_file": "signals/rx/mission/demo.bin"}
     assert ui.rx_stop.calls == [{"state": "normal"}]
     assert ui.rx_button.calls == [{"state": "disabled"}]
+
+
+def test_receive_for_mission_can_run_multiple_times_sequentially() -> None:
+    ui = object.__new__(TransceiverUI)
+    ui._cmd_running = False
+    ui.rx_stop = _DummyWidget()
+    ui.rx_button = _DummyWidget()
+    ui._ui = lambda callback: callback()
+    ui._process_queue = lambda: None
+    ui._build_receive_arg_list_for_worker = (
+        lambda *, output_file: (["--output-file", output_file], 1, 1_000_000.0)
+    )
+
+    run_calls: list[dict[str, object]] = []
+
+    def _fake_start_rx_worker(
+        *,
+        arg_list,
+        channels,
+        rate,
+        point_context=None,
+        on_complete=None,
+        backend_only=False,
+    ):
+        run_calls.append(
+            {
+                "arg_list": list(arg_list),
+                "channels": channels,
+                "rate": rate,
+                "backend_only": backend_only,
+                "point_index": getattr(point_context, "global_index", None),
+            }
+        )
+        if on_complete is not None:
+            on_complete({"ok": True, "output_file": arg_list[-1]})
+        return types.SimpleNamespace(name="rx-worker-test")
+
+    ui._start_rx_worker = _fake_start_rx_worker
+
+    first = TransceiverUI.receive_for_mission(
+        ui,
+        output_file="signals/rx/mission/p1.bin",
+        point_context=types.SimpleNamespace(global_index=1),
+    )
+    second = TransceiverUI.receive_for_mission(
+        ui,
+        output_file="signals/rx/mission/p2.bin",
+        point_context=types.SimpleNamespace(global_index=2),
+    )
+
+    assert first["ok"] is True
+    assert second["ok"] is True
+    assert [call["arg_list"][-1] for call in run_calls] == [
+        "signals/rx/mission/p1.bin",
+        "signals/rx/mission/p2.bin",
+    ]
+    assert [call["backend_only"] for call in run_calls] == [True, True]
 
 
 def test_review_measurement_for_mission_applies_same_interpolation_as_single_receive(monkeypatch) -> None:
