@@ -969,7 +969,7 @@ class SignalViewer(ctk.CTkToplevel):
             fs,
             self.tx_data,
             manual_lags=getattr(self.parent, "manual_xcorr_lags", None),
-            xcorr_reduce=True,
+            xcorr_reduce=False,
         )
         text = _format_stats_text(stats)
         self.stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
@@ -1203,7 +1203,7 @@ class SignalColumn(ctk.CTkFrame):
             )
             self.canvases.append(canvas)
 
-        stats = _calc_stats(data, fs, tx_data, xcorr_reduce=True)
+        stats = _calc_stats(data, fs, tx_data, xcorr_reduce=False)
         text = _format_stats_text(stats)
         self.stats_label.grid(row=len(modes), column=0, sticky="ew", pady=2)
         self.stats_label.configure(text=text)
@@ -5609,7 +5609,7 @@ class TransceiverUI(ctk.CTk):
                 plot_fs,
                 plot_ref_data,
                 manual_lags=self.manual_xcorr_lags,
-                xcorr_reduce=True,
+                xcorr_reduce=False,
                 path_cancel_info=path_cancel_info,
                 xcorr_normalized=self.rx_xcorr_normalized_enable.get(),
             )
@@ -5925,7 +5925,7 @@ class TransceiverUI(ctk.CTk):
                 plot_fs,
                 plot_ref_data,
                 manual_lags=self.manual_xcorr_lags,
-                xcorr_reduce=True,
+                xcorr_reduce=False,
                 path_cancel_info=path_cancel_info,
                 include_spectrum=(mode == "Freq"),
                 include_amp=(mode == "Signal"),
@@ -6618,7 +6618,7 @@ class TransceiverUI(ctk.CTk):
             self.latest_fs,
             ref_data,
             manual_lags=self.manual_xcorr_lags,
-            xcorr_reduce=True,
+            xcorr_reduce=False,
             path_cancel_info=path_cancel_info,
             xcorr_normalized=self.rx_xcorr_normalized_enable.get(),
         )
