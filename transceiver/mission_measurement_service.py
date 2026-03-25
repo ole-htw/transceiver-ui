@@ -103,7 +103,10 @@ class MissionRxMeasurementService:
         output_file = mission_dir / filename
 
         try:
-            result = self._app.receive_for_mission(output_file=str(output_file))
+            result = self._app.receive_for_mission(
+                output_file=str(output_file),
+                point_context=point_context,
+            )
         except Exception as exc:
             self._on_status("measurement", "failed")
             if self._on_operator_message is not None:
