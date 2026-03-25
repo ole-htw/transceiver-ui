@@ -590,8 +590,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         original = self._map_image_original
         if original is None:
             return
-        canvas_width = max(1, self.map_preview_canvas.winfo_width())
-        canvas_height = max(1, self.map_preview_canvas.winfo_height())
+        if not self.winfo_exists() or not self.map_preview_canvas.winfo_exists():
+            return
+        try:
+            canvas_width = max(1, self.map_preview_canvas.winfo_width())
+            canvas_height = max(1, self.map_preview_canvas.winfo_height())
+        except tk.TclError:
+            return
         preview = self._resize_photo_to_fit(original, target_width=canvas_width, target_height=canvas_height)
         offset_x = (canvas_width - preview.width()) / 2.0
         offset_y = (canvas_height - preview.height()) / 2.0
@@ -1579,51 +1584,57 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.after(0, lambda: self._update_live_label(stage=stage, status=status))
 
     def _on_executor_runtime_event(self, payload: dict[str, Any]) -> None:
-        self.after(0, lambda: self._handle_executor_runtime_event(payload))
+        try:
+            self.after(0, lambda: self._handle_executor_runtime_event(payload))
+        except tk.TclError:
+            return
 
     def _handle_executor_runtime_event(self, payload: dict[str, Any]) -> None:
-        payload_type = payload.get("type")
-        if payload_type == "navigation":
+        try:
+            payload_type = payload.get("type")
+            if payload_type == "navigation":
+                event = payload.get("event")
+                if not isinstance(event, dict):
+                    return
+                if event.get("type") != "position_update":
+                    return
+                self._apply_live_position_update(event.get("position"))
+                self._draw_map_preview()
+                self._update_live_label()
+                return
+            if payload_type != "pose_stream":
+                return
             event = payload.get("event")
             if not isinstance(event, dict):
                 return
-            if event.get("type") != "position_update":
+            event_type = str(event.get("type") or "")
+            if event_type == "position_update":
+                self._apply_live_position_update(event.get("position"))
+                self._draw_map_preview()
+                self._update_live_label()
                 return
-            self._apply_live_position_update(event.get("position"))
-            self._draw_map_preview()
-            self._update_live_label()
+            if event_type == "stream_connected":
+                attempt = event.get("attempt")
+                self._append_validation(f"ℹ️ Live-Stream verbunden (Versuch {attempt}).")
+                self._update_live_label()
+                return
+            if event_type == "stream_reconnect_wait":
+                attempt = event.get("attempt")
+                backoff_s = event.get("backoff_s")
+                self._append_validation(
+                    f"⚠️ Live-Stream getrennt, neuer Verbindungsversuch {attempt} in {backoff_s}s."
+                )
+                self._update_live_label()
+                return
+            if event_type == "stream_error":
+                detail = str(event.get("message") or "ohne Details")
+                attempt = event.get("attempt")
+                self._append_validation(
+                    f"⚠️ Live-Stream Fehler (Versuch {attempt}): {detail}"
+                )
+                self._update_live_label()
+        except tk.TclError:
             return
-        if payload_type != "pose_stream":
-            return
-        event = payload.get("event")
-        if not isinstance(event, dict):
-            return
-        event_type = str(event.get("type") or "")
-        if event_type == "position_update":
-            self._apply_live_position_update(event.get("position"))
-            self._draw_map_preview()
-            self._update_live_label()
-            return
-        if event_type == "stream_connected":
-            attempt = event.get("attempt")
-            self._append_validation(f"ℹ️ Live-Stream verbunden (Versuch {attempt}).")
-            self._update_live_label()
-            return
-        if event_type == "stream_reconnect_wait":
-            attempt = event.get("attempt")
-            backoff_s = event.get("backoff_s")
-            self._append_validation(
-                f"⚠️ Live-Stream getrennt, neuer Verbindungsversuch {attempt} in {backoff_s}s."
-            )
-            self._update_live_label()
-            return
-        if event_type == "stream_error":
-            detail = str(event.get("message") or "ohne Details")
-            attempt = event.get("attempt")
-            self._append_validation(
-                f"⚠️ Live-Stream Fehler (Versuch {attempt}): {detail}"
-            )
-            self._update_live_label()
 
     def _apply_live_position_update(self, position: Any) -> None:
         now = time.time()
