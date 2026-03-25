@@ -1462,11 +1462,32 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         event = payload.get("event")
         if not isinstance(event, dict):
             return
-        if event.get("type") != "position_update":
+        event_type = str(event.get("type") or "")
+        if event_type == "position_update":
+            self._apply_live_position_update(event.get("position"))
+            self._draw_map_preview()
+            self._update_live_label()
             return
-        self._apply_live_position_update(event.get("position"))
-        self._draw_map_preview()
-        self._update_live_label()
+        if event_type == "stream_connected":
+            attempt = event.get("attempt")
+            self._append_validation(f"ℹ️ Live-Stream verbunden (Versuch {attempt}).")
+            self._update_live_label()
+            return
+        if event_type == "stream_reconnect_wait":
+            attempt = event.get("attempt")
+            backoff_s = event.get("backoff_s")
+            self._append_validation(
+                f"⚠️ Live-Stream getrennt, neuer Verbindungsversuch {attempt} in {backoff_s}s."
+            )
+            self._update_live_label()
+            return
+        if event_type == "stream_error":
+            detail = str(event.get("message") or "ohne Details")
+            attempt = event.get("attempt")
+            self._append_validation(
+                f"⚠️ Live-Stream Fehler (Versuch {attempt}): {detail}"
+            )
+            self._update_live_label()
 
     def _apply_live_position_update(self, position: Any) -> None:
         now = time.time()
