@@ -9,6 +9,7 @@ from transceiver.navigation_adapter import (
     NavigationOutcome,
     NavigationPoint,
     Ros2CliNavigationTransport,
+    Ros2CliPoseStreamTransport,
 )
 
 
@@ -548,3 +549,32 @@ def test_send_goal_emits_parse_diagnostics_when_feedback_position_parse_fails(mo
     assert payload["position"] is None
     assert payload["parse_error"] == "Failed to extract x/y from feedback block"
     assert "status: moving" in str(payload["raw_feedback_excerpt"])
+
+
+def test_pose_stream_build_command_contains_ros2_prechecks_for_amcl_pose() -> None:
+    config = NavigationAdapterConfig(
+        robot_host="robot@10.0.0.2",
+        remote_ros_setup="/opt/ros/humble/setup.bash",
+        ros2_namespace="robot1",
+    )
+
+    cmd = Ros2CliPoseStreamTransport._build_stream_command(config=config)
+
+    remote_cmd = cmd[-1]
+    assert "command -v ros2 >/dev/null 2>&1" in remote_cmd
+    assert "test -n \"${ROS_DOMAIN_ID:-}\"" in remote_cmd
+    assert "ros2 topic list >/dev/null 2>&1" in remote_cmd
+    assert "grep -Fx -- /amcl_pose" in remote_cmd
+    assert "ros2 topic info /amcl_pose >/dev/null 2>&1" in remote_cmd
+    assert "ros2 topic echo /amcl_pose" in remote_cmd
+    assert "/robot1/amcl_pose" not in remote_cmd
+
+
+def test_pose_stream_build_command_rejects_topic_override() -> None:
+    config = NavigationAdapterConfig(robot_host="robot@10.0.0.2")
+
+    try:
+        Ros2CliPoseStreamTransport._build_stream_command(config=config, topic="/robot1/amcl_pose")
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert str(exc) == "Pose stream topic must be /amcl_pose"

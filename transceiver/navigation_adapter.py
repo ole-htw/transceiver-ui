@@ -639,9 +639,15 @@ class Ros2CliPoseStreamTransport:
         config: NavigationAdapterConfig,
         topic: str = "/amcl_pose",
     ) -> list[str]:
+        if topic != "/amcl_pose":
+            raise ValueError("Pose stream topic must be /amcl_pose")
         remote_ros_env_cmd = config.remote_ros_env_cmd.strip()
         remote_setup = config.remote_ros_setup.strip()
         fastdds_profiles_file = config.fastdds_profiles_file.strip()
+        env_source_label = Ros2CliNavigationTransport._build_env_source_label(config)
+        profile_source_label = (
+            "FASTDDS profile configured" if fastdds_profiles_file else "FASTDDS profile not configured"
+        )
 
         env_exports: list[str] = []
         if fastdds_profiles_file:
@@ -659,6 +665,18 @@ class Ros2CliPoseStreamTransport:
             shell_parts.append(remote_ros_env_cmd)
         elif remote_setup:
             shell_parts.append(f"source {shlex.quote(remote_setup)}")
+        shell_parts.append(
+            f"echo {shlex.quote(f'[transceiver] ROS env source={env_source_label}; {profile_source_label}; pose_topic={topic}') }"
+        )
+        shell_parts.extend(
+            [
+                "command -v ros2 >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 CLI not found in PATH' >&2; exit 70; }",
+                "test -n \"${ROS_DOMAIN_ID:-}\" || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ROS_DOMAIN_ID is not set' >&2; exit 72; }",
+                "ros2 topic list >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 topic list failed' >&2; exit 73; }",
+                f"ros2 topic list 2>/dev/null | grep -Fx -- {shlex.quote(topic)} >/dev/null || {{ echo 'TRANSCEIVER_ENV_CHECK_FAILED: topic {topic} is not visible in ros2 topic list' >&2; exit 74; }}",
+                f"ros2 topic info {shlex.quote(topic)} >/dev/null 2>&1 || {{ echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 topic info {topic} failed' >&2; exit 75; }}",
+            ]
+        )
         shell_parts.append(
             " ".join(
                 [
@@ -884,18 +902,26 @@ class Ros2CliPoseStreamTransport:
                     exit_code = process.poll()
                     stderr_tail = ""
                     if process.stderr is not None:
-                        stderr_tail = Ros2CliNavigationTransport._tail_text(
-                            process.stderr.read(),
-                            max_lines=5,
+                        stderr = process.stderr.read()
+                        stderr_tail = Ros2CliNavigationTransport._tail_text(stderr, max_lines=5)
+                    else:
+                        stderr = ""
+                    if "TRANSCEIVER_ENV_CHECK_FAILED:" in stderr:
+                        reason = Ros2CliNavigationTransport._tail_text(
+                            "\n".join(
+                                line for line in stderr.splitlines() if "TRANSCEIVER_ENV_CHECK_FAILED:" in line
+                            ),
+                            max_lines=1,
                         )
+                        message = f"ROS environment precheck failed before starting pose stream: {reason}"
+                    else:
+                        message = f"pose stream disconnected (exit_code={exit_code}); stderr={stderr_tail}"
                     on_event(
                         {
                             "type": "pose_stream",
                             "event": {
                                 "type": "stream_error",
-                                "message": (
-                                    f"pose stream disconnected (exit_code={exit_code}); stderr={stderr_tail}"
-                                ),
+                                "message": message,
                                 "attempt": reconnect_attempt,
                                 "timestamp": time.time(),
                             },
