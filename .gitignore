@@ -14,5 +14,6 @@ __pycache__
 presets.json
 
 transceiver/state.json
+transceiver/mission_workflow_state.json
 
 .env
