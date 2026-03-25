@@ -87,12 +87,14 @@ class MissionRxMeasurementService:
         on_operator_message=None,
         review_measurement=None,
         collect_lidar_reference=None,
+        enable_lidar_reference: bool = True,
     ) -> None:
         self._app = app
         self._on_status = on_status
         self._on_operator_message = on_operator_message
         self._review_measurement = review_measurement
         self._collect_lidar_reference = collect_lidar_reference or self._capture_lidar_reference
+        self._enable_lidar_reference = enable_lidar_reference
 
     @staticmethod
     def _capture_lidar_reference(output_file: Path) -> dict[str, Any]:
@@ -124,15 +126,17 @@ class MissionRxMeasurementService:
         output_file = mission_dir / filename
         lidar_reference_file = mission_dir / f"{output_file.stem}.lidar.scan.txt"
 
-        try:
-            lidar_reference = self._collect_lidar_reference(lidar_reference_file)
-        except Exception as exc:
-            self._on_status("measurement", "failed")
-            if self._on_operator_message is not None:
-                self._on_operator_message(
-                    f"LIDAR-Referenzmessung fehlgeschlagen bei Punkt {point_context.global_index}: {exc}"
-                )
-            raise RuntimeError("lidar_reference_failed") from exc
+        lidar_reference: dict[str, Any] | None = None
+        if self._enable_lidar_reference:
+            try:
+                lidar_reference = self._collect_lidar_reference(lidar_reference_file)
+            except Exception as exc:
+                self._on_status("measurement", "failed")
+                if self._on_operator_message is not None:
+                    self._on_operator_message(
+                        f"LIDAR-Referenzmessung fehlgeschlagen bei Punkt {point_context.global_index}: {exc}"
+                    )
+                raise RuntimeError("lidar_reference_failed") from exc
 
         try:
             result = self._app.receive_for_mission(

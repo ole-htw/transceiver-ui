@@ -186,6 +186,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._is_restoring_workflow_state = False
         self._live_label_ticker_job: str | None = None
         self._live_label_ticker_active = False
+        self.lidar_reference_enabled_var = tk.BooleanVar(value=True)
 
         self._build_ui()
         self._restore_workflow_state()
@@ -383,10 +384,16 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         ctk.CTkButton(controls, text="Run-Logs exportieren", command=self._export_logs).grid(
             row=2, column=3, padx=(10, 8), pady=3, sticky="w"
         )
+        ctk.CTkCheckBox(
+            controls,
+            text="LIDAR-Referenzmessung aktiv",
+            variable=self.lidar_reference_enabled_var,
+            command=self._persist_workflow_state,
+        ).grid(row=3, column=0, columnspan=2, padx=(8, 3), pady=(0, 4), sticky="w")
 
         self.live_var = tk.StringVar(value="Punkt: - | Navigation: idle | Messung: idle | Verbleibend: - | Live-Status: Karte nicht geladen")
         ctk.CTkLabel(controls, textvariable=self.live_var, anchor="w", justify="left").grid(
-            row=3, column=0, columnspan=4, sticky="nsew", padx=8, pady=(4, 8)
+            row=4, column=0, columnspan=4, sticky="nsew", padx=8, pady=(4, 8)
         )
 
         table_frame = ctk.CTkFrame(self)
@@ -1226,6 +1233,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "start_point_index": self._selected_start_point_index(),
             "map_config_file": self._selected_map_config_file,
             "rx_antenna_global_position": self._serialize_rx_antenna_global_position(),
+            "lidar_reference_enabled": bool(self.lidar_reference_enabled_var.get()),
         }
 
     def _serialize_rx_antenna_global_position(self) -> dict[str, float] | None:
@@ -1302,6 +1310,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 self._clear_rx_antenna_position(persist=False)
             else:
                 self._set_rx_antenna_position(x=rx_position[0], y=rx_position[1], persist=False)
+            self.lidar_reference_enabled_var.set(bool(payload.get("lidar_reference_enabled", True)))
             self._refresh_points_table()
             self._refresh_map_section()
             persisted_start_point = payload.get("start_point_index")
@@ -1435,6 +1444,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 on_status=self._on_stage_update,
                 on_operator_message=self._append_validation,
                 review_measurement=self._review_measurement,
+                enable_lidar_reference=bool(self.lidar_reference_enabled_var.get()),
             ),
             persist_result=_persist,
             run_log_store=store,

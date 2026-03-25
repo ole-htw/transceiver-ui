@@ -78,3 +78,19 @@ def test_trigger_waits_for_receive_and_runs_review_after_success() -> None:
     assert status_events == [("measurement", "running"), ("measurement", "succeeded")]
     assert timestamps["review_called"] >= timestamps["receive_end"]
     assert payload["file_ref"].endswith(".bin")
+
+
+def test_trigger_skips_lidar_reference_when_disabled() -> None:
+    lidar_calls: list[str] = []
+
+    service = MissionRxMeasurementService(
+        app=_FakeApp(),
+        on_status=lambda *_args: None,
+        collect_lidar_reference=lambda output_file: lidar_calls.append(str(output_file)) or {"topic": "/scan"},
+        enable_lidar_reference=False,
+    )
+
+    payload = service.trigger(_point_context())
+
+    assert lidar_calls == []
+    assert "lidar_reference" not in payload
