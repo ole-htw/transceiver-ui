@@ -131,6 +131,15 @@ these values persistent across terminal sessions.
 SSH based ROS2 execution is configured for non-interactive operation (`BatchMode`,
 no password prompts, host key auto-accept for new hosts).
 
+### LIDAR-Referenzmessung pro Messpunkt
+
+Im Mission-Workflow wird vor jeder RX-Messung automatisch eine Referenzmessung
+mit dem LIDAR-Topic `/scan` erfasst.
+
+- Ausgeführter ROS2-Befehl: `ros2 topic echo /scan --once`
+- Die Referenz wird als Textdatei neben der RX-Datei abgelegt:
+  `signals/rx/mission/<mission-name>/point-<idx>-<timestamp>.lidar.scan.txt`
+
 
 ### Fast-DDS runtime policy for Nav2 actions
 

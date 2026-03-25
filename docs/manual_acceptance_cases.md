@@ -11,8 +11,9 @@
 - **Erwartetes Ergebnis:**
   - Navigation für alle Punkte erfolgreich.
   - Pro Punkt genau ein Messresultat.
+  - Pro Punkt genau eine LIDAR-Referenzmessung über `ros2 topic echo /scan --once`.
   - Run-Status `completed`, `succeeded_points=3`, `failed_points=0`.
-  - Drei Punkt-Logs und ein `run-summary.json` vorhanden.
+  - Drei Punkt-Logs, drei `.lidar.scan.txt` Referenzdateien und ein `run-summary.json` vorhanden.
 
 ## 2) Navigationsabbruch am 2. Punkt
 - **Voraussetzungen:**

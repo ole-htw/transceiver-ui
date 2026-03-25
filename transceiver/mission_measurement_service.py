@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -85,11 +86,31 @@ class MissionRxMeasurementService:
         on_status,
         on_operator_message=None,
         review_measurement=None,
+        collect_lidar_reference=None,
     ) -> None:
         self._app = app
         self._on_status = on_status
         self._on_operator_message = on_operator_message
         self._review_measurement = review_measurement
+        self._collect_lidar_reference = collect_lidar_reference or self._capture_lidar_reference
+
+    @staticmethod
+    def _capture_lidar_reference(output_file: Path) -> dict[str, Any]:
+        command = ["ros2", "topic", "echo", "/scan", "--once"]
+        completed = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        payload = {
+            "topic": "/scan",
+            "command": " ".join(command),
+            "output_file": str(output_file),
+        }
+        output_file.write_text(completed.stdout, encoding="utf-8")
+        return payload
 
     def trigger(self, point_context: PointExecutionContext) -> dict[str, Any]:
         self._on_status("measurement", "running")
@@ -101,6 +122,17 @@ class MissionRxMeasurementService:
         mission_dir = Path("signals") / "rx" / "mission" / point_context.mission_name
         mission_dir.mkdir(parents=True, exist_ok=True)
         output_file = mission_dir / filename
+        lidar_reference_file = mission_dir / f"{output_file.stem}.lidar.scan.txt"
+
+        try:
+            lidar_reference = self._collect_lidar_reference(lidar_reference_file)
+        except Exception as exc:
+            self._on_status("measurement", "failed")
+            if self._on_operator_message is not None:
+                self._on_operator_message(
+                    f"LIDAR-Referenzmessung fehlgeschlagen bei Punkt {point_context.global_index}: {exc}"
+                )
+            raise RuntimeError("lidar_reference_failed") from exc
 
         try:
             result = self._app.receive_for_mission(
@@ -179,4 +211,6 @@ class MissionRxMeasurementService:
             payload["los_lag"] = review_payload.get("los_lag")
             payload["echo_lags"] = review_payload.get("echo_lags")
             payload["echo_delays"] = review_payload.get("echo_delays")
+        if isinstance(lidar_reference, dict):
+            payload["lidar_reference"] = lidar_reference
         return payload
