@@ -23,7 +23,7 @@ class FakeNavigator:
         self._idx = 0
         self.cancel_requested = False
 
-    def navigate_to_point(self, point, *, timeout_s: float):
+    def navigate_to_point(self, point, *, timeout_s: float, on_navigation_event=None):
         self.calls.append((point.x, point.y, point.qz, timeout_s))
         response = self.responses[min(self._idx, len(self.responses) - 1)]
         self._idx += 1
@@ -124,7 +124,7 @@ def test_state_transitions_start_pause_resume_stop() -> None:
             super().__init__(["canceled", "canceled"])
             self._released = threading.Event()
 
-        def navigate_to_point(self, point, *, timeout_s: float):
+        def navigate_to_point(self, point, *, timeout_s: float, on_navigation_event=None):
             self.calls.append((point.x, point.y, point.qz, timeout_s))
             self._released.wait(timeout=1.0)
             return "canceled"
@@ -166,7 +166,7 @@ def test_manual_stop_during_navigation_results_in_cancelled_state() -> None:
             super().__init__(["canceled"])
             self._released = threading.Event()
 
-        def navigate_to_point(self, point, *, timeout_s: float):
+        def navigate_to_point(self, point, *, timeout_s: float, on_navigation_event=None):
             self.calls.append((point.x, point.y, point.qz, timeout_s))
             self._released.wait(timeout=1.0)
             return "canceled"
@@ -230,7 +230,7 @@ def test_manual_stop_without_cancel_confirmation_marks_failed() -> None:
             super().__init__(["connection_error"])
             self._released = threading.Event()
 
-        def navigate_to_point(self, point, *, timeout_s: float):
+        def navigate_to_point(self, point, *, timeout_s: float, on_navigation_event=None):
             self.calls.append((point.x, point.y, point.qz, timeout_s))
             self._released.wait(timeout=1.0)
             return "connection_error"
@@ -412,6 +412,95 @@ def test_start_point_index_skips_points_before_selected_start() -> None:
     assert summaries[0]["start_point_index"] == 1
 
 
+def test_disabled_points_are_skipped_in_execution_and_expected_points() -> None:
+    nav = FakeNavigator(["succeeded", "succeeded"])
+    measured: list[str] = []
+    summaries: list[dict] = []
+    mission = MeasurementMission(
+        name="active-only",
+        points=[
+            MeasurementPoint(id="p1", name="A", x=1.0, y=2.0, yaw=0.0, enabled=True),
+            MeasurementPoint(id="p2", name="B", x=3.0, y=4.0, yaw=0.0, enabled=False),
+            MeasurementPoint(id="p3", name="C", x=5.0, y=6.0, yaw=0.0, enabled=True),
+        ],
+        repeat=1,
+    )
+
+    executor = MeasurementRunExecutor(
+        mission=mission,
+        navigator=nav,
+        trigger_measurement=lambda point: measured.append(point.id or "") or {"ok": True},
+        persist_result=lambda _payload: None,
+        persist_run_summary=summaries.append,
+        config=MeasurementRunExecutorConfig(start_point_index=0),
+    )
+
+    final_state = executor.start()
+
+    assert final_state == "completed"
+    assert measured == ["p1", "p3"]
+    assert [record.index for record in executor.records] == [0, 1]
+    assert summaries[0]["expected_points"] == 2
+    assert summaries[0]["completed_cycles"] == 1
+
+
+def test_start_point_index_uses_active_point_order() -> None:
+    nav = FakeNavigator(["succeeded"])
+    measured: list[str] = []
+    summaries: list[dict] = []
+    mission = MeasurementMission(
+        name="active-start",
+        points=[
+            MeasurementPoint(id="p1", name="A", x=1.0, y=2.0, yaw=0.0, enabled=False),
+            MeasurementPoint(id="p2", name="B", x=3.0, y=4.0, yaw=0.0, enabled=True),
+            MeasurementPoint(id="p3", name="C", x=5.0, y=6.0, yaw=0.0, enabled=True),
+        ],
+        repeat=1,
+    )
+
+    executor = MeasurementRunExecutor(
+        mission=mission,
+        navigator=nav,
+        trigger_measurement=lambda point: measured.append(point.id or "") or {"ok": True},
+        persist_result=lambda _payload: None,
+        persist_run_summary=summaries.append,
+        config=MeasurementRunExecutorConfig(start_point_index=1),
+    )
+
+    final_state = executor.start()
+
+    assert final_state == "completed"
+    assert measured == ["p3"]
+    assert summaries[0]["expected_points"] == 1
+    assert summaries[0]["start_point_index"] == 1
+
+
+def test_start_fails_when_mission_has_no_active_points() -> None:
+    nav = FakeNavigator(["succeeded"])
+    summaries: list[dict] = []
+    executor = MeasurementRunExecutor(
+        mission=MeasurementMission(
+            name="inactive",
+            points=[
+                MeasurementPoint(id="p1", name="A", x=1.0, y=2.0, yaw=0.0, enabled=False),
+            ],
+            repeat=1,
+        ),
+        navigator=nav,
+        trigger_measurement=lambda _point: {"ok": True},
+        persist_result=lambda _payload: None,
+        persist_run_summary=summaries.append,
+    )
+
+    final_state = executor.start()
+
+    assert final_state == "failed"
+    assert executor.state == "failed"
+    assert executor.records == []
+    assert summaries[0]["expected_points"] == 0
+    assert summaries[0]["abort_reason"] == "mission_has_no_active_points"
+
+
 def test_invalid_start_point_index_raises() -> None:
     with pytest.raises(ValueError):
         MeasurementRunExecutor(
@@ -420,4 +509,22 @@ def test_invalid_start_point_index_raises() -> None:
             trigger_measurement=lambda _point: {"ok": True},
             persist_result=lambda _payload: None,
             config=MeasurementRunExecutorConfig(start_point_index=2),
+        )
+
+
+def test_invalid_start_point_index_raises_for_active_points() -> None:
+    with pytest.raises(ValueError):
+        MeasurementRunExecutor(
+            mission=MeasurementMission(
+                name="active-index-validation",
+                points=[
+                    MeasurementPoint(id="p1", name="A", x=1.0, y=2.0, yaw=0.0, enabled=False),
+                    MeasurementPoint(id="p2", name="B", x=3.0, y=4.0, yaw=0.0, enabled=True),
+                ],
+                repeat=1,
+            ),
+            navigator=FakeNavigator(["succeeded"]),
+            trigger_measurement=lambda _point: {"ok": True},
+            persist_result=lambda _payload: None,
+            config=MeasurementRunExecutorConfig(start_point_index=1),
         )
