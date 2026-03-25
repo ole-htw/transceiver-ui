@@ -507,7 +507,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if abs(scale - 1.0) < 0.01:
             return photo
 
-        ratio = MissionWorkflowWindow._best_fit_fraction(scale, max_denominator=256)
+        ratio = Fraction(scale).limit_denominator(32)
         preview = photo.zoom(ratio.numerator, ratio.numerator).subsample(ratio.denominator, ratio.denominator)
         preview_width = max(1, preview.width())
         preview_height = max(1, preview.height())
@@ -529,23 +529,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if max_safe_zoom > 1:
             return preview.zoom(max_safe_zoom, max_safe_zoom)
         return preview
-
-    @staticmethod
-    def _best_fit_fraction(scale: float, *, max_denominator: int) -> Fraction:
-        if scale <= 0.0:
-            return Fraction(1, 1)
-
-        best = Fraction(1, 1)
-        for denominator in range(1, max_denominator + 1):
-            numerator = int(math.floor(scale * denominator))
-            if numerator <= 0:
-                continue
-            candidate = Fraction(numerator, denominator)
-            if candidate > scale:
-                continue
-            if candidate > best:
-                best = candidate
-        return best
 
     def _select_map_config_file(self) -> None:
         selected_file = filedialog.askopenfilename(
