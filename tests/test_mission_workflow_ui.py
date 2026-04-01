@@ -34,6 +34,12 @@ def test_format_start_point_label_uses_index_and_name_without_id() -> None:
     assert label_with_name == "2: Messpunkt B"
 
 
+def test_format_one_based_index_converts_zero_based_values_for_ui() -> None:
+    assert MissionWorkflowWindow._format_one_based_index(0) == "1"
+    assert MissionWorkflowWindow._format_one_based_index(4) == "5"
+    assert MissionWorkflowWindow._format_one_based_index(-1) == "-1"
+
+
 class _FakeAdapter:
     def __init__(self, events):
         self.config = object()
