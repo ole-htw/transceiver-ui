@@ -578,3 +578,181 @@ def test_pose_stream_build_command_rejects_topic_override() -> None:
         assert False, "expected ValueError"
     except ValueError as exc:
         assert str(exc) == "Pose stream topic must be /amcl_pose"
+
+
+def test_pose_stream_reports_topic_visible_but_no_data(monkeypatch) -> None:
+    class _Stream:
+        def readline(self) -> str:
+            return ""
+
+    class _Process:
+        def __init__(self) -> None:
+            self.stdout = _Stream()
+            self.stderr = _Stream()
+
+        def poll(self):
+            return None
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self, timeout: float) -> int:
+            return 0
+
+    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
+    monkeypatch.setattr(Ros2CliPoseStreamTransport, "_NO_DATA_WARNING_AFTER_S", 0.0)
+
+    transport = Ros2CliPoseStreamTransport()
+    events: list[dict[str, object]] = []
+
+    def _on_event(payload: dict[str, object]) -> None:
+        events.append(payload)
+        event = payload.get("event") if isinstance(payload, dict) else None
+        if isinstance(event, dict) and event.get("type") == "stream_error":
+            transport._stop_event.set()
+
+    transport._run_loop(
+        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
+        on_event=_on_event,
+    )
+
+    error_messages = [
+        str(payload["event"]["message"])
+        for payload in events
+        if isinstance(payload.get("event"), dict) and payload["event"].get("type") == "stream_error"
+    ]
+    assert any("Topic sichtbar, aber keine Nachrichten" in message for message in error_messages)
+
+
+def test_pose_stream_reports_parse_error_excerpt(monkeypatch) -> None:
+    class _Stream:
+        def __init__(self, lines: list[str], rest: str = "") -> None:
+            self._lines = lines
+            self._idx = 0
+            self._rest = rest
+
+        def readline(self) -> str:
+            if self._idx >= len(self._lines):
+                return ""
+            line = self._lines[self._idx]
+            self._idx += 1
+            return line
+
+        def read(self) -> str:
+            return self._rest
+
+    class _Process:
+        def __init__(self) -> None:
+            self.stdout = _Stream(
+                [
+                    "header:\n",
+                    "  frame_id: map\n",
+                    "---\n",
+                ]
+            )
+            self.stderr = _Stream([], rest="")
+
+        def poll(self):
+            return 0 if self.stdout._idx >= len(self.stdout._lines) else None
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self, timeout: float) -> int:
+            return 0
+
+    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
+
+    transport = Ros2CliPoseStreamTransport()
+    events: list[dict[str, object]] = []
+
+    def _on_event(payload: dict[str, object]) -> None:
+        events.append(payload)
+        event = payload.get("event") if isinstance(payload, dict) else None
+        if isinstance(event, dict) and "nicht parsebar" in str(event.get("message")):
+            transport._stop_event.set()
+
+    transport._run_loop(
+        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
+        on_event=_on_event,
+    )
+
+    parse_errors = [
+        str(payload["event"]["message"])
+        for payload in events
+        if isinstance(payload.get("event"), dict)
+        and payload["event"].get("type") == "stream_error"
+        and "nicht parsebar" in str(payload["event"].get("message"))
+    ]
+    assert parse_errors
+    assert "raw=header:" in parse_errors[0]
+
+
+def test_pose_stream_reports_frame_id_mismatch(monkeypatch) -> None:
+    class _Stream:
+        def __init__(self, lines: list[str], rest: str = "") -> None:
+            self._lines = lines
+            self._idx = 0
+            self._rest = rest
+
+        def readline(self) -> str:
+            if self._idx >= len(self._lines):
+                return ""
+            line = self._lines[self._idx]
+            self._idx += 1
+            return line
+
+        def read(self) -> str:
+            return self._rest
+
+    class _Process:
+        def __init__(self) -> None:
+            self.stdout = _Stream(
+                [
+                    "header:\n",
+                    "  frame_id: odom\n",
+                    "pose:\n",
+                    "  pose:\n",
+                    "    position:\n",
+                    "      x: 1.0\n",
+                    "      y: 2.0\n",
+                    "---\n",
+                ]
+            )
+            self.stderr = _Stream([], rest="")
+
+        def poll(self):
+            return 0 if self.stdout._idx >= len(self.stdout._lines) else None
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self, timeout: float) -> int:
+            return 0
+
+    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
+
+    transport = Ros2CliPoseStreamTransport()
+    events: list[dict[str, object]] = []
+
+    def _on_event(payload: dict[str, object]) -> None:
+        events.append(payload)
+        event = payload.get("event") if isinstance(payload, dict) else None
+        if isinstance(event, dict) and "unerwarteter /amcl_pose frame_id" in str(event.get("message")):
+            transport._stop_event.set()
+
+    transport._run_loop(
+        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
+        on_event=_on_event,
+        expected_frame_id="map",
+    )
+
+    mismatch = [
+        str(payload["event"]["message"])
+        for payload in events
+        if isinstance(payload.get("event"), dict)
+        and payload["event"].get("type") == "stream_error"
+        and "unerwarteter /amcl_pose frame_id" in str(payload["event"].get("message"))
+    ]
+    assert mismatch
+    assert "erwartet=map, empfangen=odom" in mismatch[0]
