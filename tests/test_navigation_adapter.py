@@ -115,7 +115,7 @@ def test_build_command_uses_bash_lc_and_sources_ros_setup_when_configured() -> N
         robot_host="robot@10.0.0.2",
         ros2_namespace="robot1",
         ros2_action_name="navigate_to_pose",
-        remote_ros_setup="/opt/ros/humble/setup.bash",
+        remote_ros_setup="/opt/ros/jazzy/setup.bash",
     )
 
     cmd = Ros2CliNavigationTransport._build_command(NavigationPoint(1.0, 2.0), config)
@@ -123,7 +123,7 @@ def test_build_command_uses_bash_lc_and_sources_ros_setup_when_configured() -> N
     assert cmd[-3] == "bash"
     assert cmd[-2] == "-lc"
     remote_cmd = cmd[-1]
-    assert remote_cmd.startswith("set -euo pipefail; source /opt/ros/humble/setup.bash; echo '[transceiver] ROS env source=TRANSCEIVER_REMOTE_ROS_SETUP; FASTDDS profile not configured; namespace=robot1'; command -v ros2")
+    assert remote_cmd.startswith("set -euo pipefail; source /opt/ros/jazzy/setup.bash; echo '[transceiver] ROS env source=TRANSCEIVER_REMOTE_ROS_SETUP; FASTDDS profile not configured; namespace=robot1'; command -v ros2")
     assert "/robot1/navigate_to_pose" in remote_cmd
 
 
@@ -167,7 +167,7 @@ def test_build_command_prefers_explicit_remote_ros_env_cmd() -> None:
     config = NavigationAdapterConfig(
         robot_host="robot@10.0.0.2",
         remote_ros_env_cmd="source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash",
-        remote_ros_setup="/opt/ros/humble/setup.bash",
+        remote_ros_setup="/opt/ros/jazzy/setup.bash",
         ros2_namespace="robot1",
     )
 
@@ -179,13 +179,13 @@ def test_build_command_prefers_explicit_remote_ros_env_cmd() -> None:
     assert remote_cmd.startswith(
         "set -euo pipefail; source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash; echo '[transceiver] ROS env source=TRANSCEIVER_REMOTE_ROS_ENV_CMD; FASTDDS profile not configured; namespace=robot1'; command -v ros2"
     )
-    assert "source /opt/ros/humble/setup.bash" not in remote_cmd
+    assert "source /opt/ros/jazzy/setup.bash" not in remote_cmd
 
 
 def test_build_command_with_ros_setup_wraps_command_with_pipefail_and_send_goal() -> None:
     config = NavigationAdapterConfig(
         robot_host="robot@10.0.0.2",
-        remote_ros_setup="/opt/ros/humble/setup.bash",
+        remote_ros_setup="/opt/ros/jazzy/setup.bash",
         ros2_namespace="robot1",
     )
 
@@ -193,7 +193,7 @@ def test_build_command_with_ros_setup_wraps_command_with_pipefail_and_send_goal(
 
     remote_cmd = cmd[-1]
     assert "set -euo pipefail;" in remote_cmd
-    assert "source /opt/ros/humble/setup.bash;" in remote_cmd
+    assert "source /opt/ros/jazzy/setup.bash;" in remote_cmd
     assert "echo '[transceiver] ROS env source=TRANSCEIVER_REMOTE_ROS_SETUP; FASTDDS profile not configured; namespace=robot1'" in remote_cmd
     assert "ros2 interface show nav2_msgs/action/NavigateToPose" in remote_cmd
     assert "test -n \"${ROS_DOMAIN_ID:-}\"" in remote_cmd
@@ -234,14 +234,14 @@ def test_send_goal_formats_remote_command_failure_with_truncated_output(monkeypa
     transport = Ros2CliNavigationTransport()
     outcome = transport.send_goal(
         point=NavigationPoint(1.0, 2.0),
-        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2", remote_ros_setup="/opt/ros/humble/setup.bash", ros2_namespace="robot1"),
+        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2", remote_ros_setup="/opt/ros/jazzy/setup.bash", ros2_namespace="robot1"),
         on_feedback=lambda _feedback: None,
     )
 
     assert outcome.terminal_state == "connection_error"
     assert outcome.message is not None
     assert outcome.message.startswith("remote command failed: exit_code=42; stdout=")
-    assert "remote_cmd=set -euo pipefail; source /opt/ros/humble/setup.bash; echo '[transceiver] ROS env source=TRANSCEIVER_REMOTE_ROS_SETUP; FASTDDS profile not configured; namespace=robot1'; command -v ros2" in outcome.message
+    assert "remote_cmd=set -euo pipefail; source /opt/ros/jazzy/setup.bash; echo '[transceiver] ROS env source=TRANSCEIVER_REMOTE_ROS_SETUP; FASTDDS profile not configured; namespace=robot1'; command -v ros2" in outcome.message
     assert "\nline-1\n" not in f"\n{outcome.message}\n"
     assert "line-8" in outcome.message
     assert "line-27" in outcome.message
@@ -296,7 +296,7 @@ def test_send_goal_returns_precheck_error_message(monkeypatch) -> None:
         point=NavigationPoint(1.0, 2.0),
         config=NavigationAdapterConfig(
             robot_host="robot@10.0.0.2",
-            remote_ros_setup="/opt/ros/humble/setup.bash",
+            remote_ros_setup="/opt/ros/jazzy/setup.bash",
             ros2_namespace="robot1",
         ),
         on_feedback=lambda _feedback: None,
@@ -414,7 +414,7 @@ def test_cancel_current_goal_uses_server_side_cancel_before_signals(monkeypatch)
     transport._last_config = NavigationAdapterConfig(
         robot_host="robot@10.0.0.2",
         ros2_namespace="robot1",
-        remote_ros_setup="/opt/ros/humble/setup.bash",
+        remote_ros_setup="/opt/ros/jazzy/setup.bash",
     )
     transport._last_goal_id = "00000000-0000-0000-0000-000000000001"
 
@@ -464,7 +464,7 @@ def test_send_goal_maps_dead_transport_to_connection_error_even_after_accept(mon
         point=NavigationPoint(1.0, 2.0),
         config=NavigationAdapterConfig(
             robot_host="robot@10.0.0.2",
-            remote_ros_setup="/opt/ros/humble/setup.bash",
+            remote_ros_setup="/opt/ros/jazzy/setup.bash",
             ros2_namespace="robot1",
         ),
         on_feedback=lambda _feedback: None,
@@ -537,7 +537,7 @@ def test_send_goal_emits_parse_diagnostics_when_feedback_position_parse_fails(mo
         point=NavigationPoint(1.0, 2.0),
         config=NavigationAdapterConfig(
             robot_host="robot@10.0.0.2",
-            remote_ros_setup="/opt/ros/humble/setup.bash",
+            remote_ros_setup="/opt/ros/jazzy/setup.bash",
             ros2_namespace="robot1",
         ),
         on_feedback=lambda payload: feedback_payloads.append(payload),
@@ -554,7 +554,7 @@ def test_send_goal_emits_parse_diagnostics_when_feedback_position_parse_fails(mo
 def test_pose_stream_build_command_contains_ros2_prechecks_for_amcl_pose() -> None:
     config = NavigationAdapterConfig(
         robot_host="robot@10.0.0.2",
-        remote_ros_setup="/opt/ros/humble/setup.bash",
+        remote_ros_setup="/opt/ros/jazzy/setup.bash",
         ros2_namespace="robot1",
     )
 
@@ -562,7 +562,7 @@ def test_pose_stream_build_command_contains_ros2_prechecks_for_amcl_pose() -> No
 
     remote_cmd = cmd[-1]
     assert ">&2 echo '[transceiver] ROS env source=" in remote_cmd
-    assert "source /opt/ros/humble/setup.bash 1>&2" in remote_cmd
+    assert "source /opt/ros/jazzy/setup.bash 1>&2" in remote_cmd
     assert "command -v ros2 >/dev/null 2>&1" in remote_cmd
     assert "test -n \"${ROS_DOMAIN_ID:-}\"" in remote_cmd
     assert "ros2 topic list >/dev/null 2>&1" in remote_cmd
