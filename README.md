@@ -129,8 +129,6 @@ these values persistent across terminal sessions.
 - `TRANSCEIVER_NAV_RETRY_ATTEMPTS` (default `0`)
 - `TRANSCEIVER_LIDAR_TOPIC` (default `/scan`)
 - `TRANSCEIVER_LIDAR_REFERENCE_TIMEOUT_S` (default `15.0`)
-- `TRANSCEIVER_LIDAR_ROS_ENV_CMD` (optional; if set, this command is executed before `ros2 topic echo`)
-- `TRANSCEIVER_LIDAR_ROS_SETUP` (optional fallback; sourced if `TRANSCEIVER_LIDAR_ROS_ENV_CMD` is empty)
 
 SSH based ROS2 execution is configured for non-interactive operation (`BatchMode`,
 no password prompts, host key auto-accept for new hosts).
@@ -140,9 +138,10 @@ no password prompts, host key auto-accept for new hosts).
 Im Mission-Workflow wird vor jeder RX-Messung automatisch eine Referenzmessung
 mit dem konfigurierten LIDAR-Topic (Standard: `/scan`) erfasst.
 
-- Ausgeführter ROS2-Befehl: `bash -lc '... && ros2 topic echo <topic> --once'`
-  (mit konfigurierbarer ROS-Umgebung über `TRANSCEIVER_LIDAR_ROS_ENV_CMD`
-  bzw. `TRANSCEIVER_LIDAR_ROS_SETUP`)
+- Ausgeführter ROS2-Befehl: `ssh <robot-host> bash -lc '... && ros2 topic echo <topic> --once'`
+  im selben Remote-Kontext wie die Navigation (`TRANSCEIVER_ROBOT_HOST`,
+  `TRANSCEIVER_REMOTE_ROS_ENV_CMD` / `TRANSCEIVER_REMOTE_ROS_SETUP`,
+  optional `TRANSCEIVER_FASTDDS_PROFILES_FILE`)
 - Die Referenz wird als Textdatei neben der RX-Datei abgelegt:
   `signals/rx/mission/<mission-name>/point-<idx>-<timestamp>.lidar.scan.txt`
 
