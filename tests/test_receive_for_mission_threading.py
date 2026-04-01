@@ -4,6 +4,7 @@ import sys
 import threading
 import time
 import types
+import queue
 
 
 def _install_pyqtgraph_stub() -> None:
@@ -61,6 +62,69 @@ class _DummyWidget:
 
     def configure(self, **kwargs) -> None:
         self.calls.append(kwargs)
+
+
+def test_run_rx_thread_single_uses_shared_subprocess_executor_and_single_postprocessing(monkeypatch) -> None:
+    ui = object.__new__(TransceiverUI)
+    ui._out_queue = queue.Queue()
+    ui._cmd_running = True
+    ui._rx_running = True
+    ui._proc = object()
+    ui._ui = lambda callback: callback()
+    ui._reset_rx_buttons = lambda: None
+    displayed: list[tuple[object, float, str]] = []
+    ui._display_rx_plots = lambda data, rate, target_tab="Single": displayed.append((data, rate, target_tab))
+    executed: list[dict[str, object]] = []
+    ui._execute_rx_subprocess = (
+        lambda **kwargs: executed.append(kwargs) or 0
+    )
+    monkeypatch.setattr(
+        "transceiver.__main__.rx_convert.load_iq_file",
+        lambda *_args, **_kwargs: [1, 2, 3],
+    )
+
+    result = TransceiverUI._run_rx_thread(
+        ui,
+        ["--output-file", "signals/rx/single.bin"],
+        channels=1,
+        rate=1_000_000.0,
+        backend_only=False,
+        mission_mode=False,
+    )
+
+    assert result["ok"] is True
+    assert result["output_file"] == "signals/rx/single.bin"
+    assert len(executed) == 1
+    assert displayed and displayed[0][2] == "Single"
+
+
+def test_run_rx_thread_mission_uses_shared_subprocess_executor_without_single_ui_postprocessing() -> None:
+    ui = object.__new__(TransceiverUI)
+    ui._out_queue = queue.Queue()
+    ui._mission_rx_proc = object()
+    ui._mission_rx_running = True
+    ui._cleanup_mission_rx = lambda terminate=False: setattr(ui, "_mission_rx_running", False)
+    ui._ui = lambda callback: callback()
+    displayed: list[object] = []
+    ui._display_rx_plots = lambda *_args, **_kwargs: displayed.append("called")
+    executed: list[dict[str, object]] = []
+    ui._execute_rx_subprocess = (
+        lambda **kwargs: executed.append(kwargs) or 0
+    )
+
+    result = TransceiverUI._run_rx_thread(
+        ui,
+        ["--output-file", "signals/rx/mission.bin"],
+        channels=1,
+        rate=1_000_000.0,
+        backend_only=True,
+        mission_mode=True,
+    )
+
+    assert result["ok"] is True
+    assert result["output_file"] == "signals/rx/mission.bin"
+    assert len(executed) == 1
+    assert displayed == []
 
 
 def test_receive_for_mission_uses_worker_path_and_waits_for_result() -> None:

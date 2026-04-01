@@ -6499,47 +6499,34 @@ class TransceiverUI(ctk.CTk):
             "output_file": None,
             "started_at": time.time(),
         }
+        rx_mode = "mission" if mission_mode else "single"
+        output_file = self._extract_output_file_from_args(arg_list)
+        result["output_file"] = output_file
         try:
             point_index = getattr(point_context, "global_index", None)
-            _LOGGER.info(
-                "Mission RX args before parse_args (point=%s): %s",
+            _LOGGER.debug(
+                "RX mode=%s starting: point=%s caller_thread=%s output_file=%s args=%s",
+                rx_mode,
                 point_index if point_index is not None else "n/a",
+                threading.current_thread().name,
+                output_file,
                 arg_list,
             )
-            if backend_only:
-                args = None
-                command = [sys.executable, "-m", "transceiver.helpers.rx_to_file", *arg_list]
-                proc = subprocess.Popen(
-                    command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                )
-                if mission_mode:
-                    self._mission_rx_proc = proc
-                else:
-                    self._proc = proc
-                if proc.stdout is not None:
-                    for line in proc.stdout:
-                        self._out_queue.put(line)
-                return_code = proc.wait()
-                if return_code != 0:
-                    raise RuntimeError(f"rx_to_file exited with return code {return_code}")
-            else:
-                from .helpers import rx_to_file
-
-                args = rx_to_file.parse_args(arg_list)
-                rx_to_file.main(args=args)
+            self._execute_rx_subprocess(
+                arg_list=arg_list,
+                mission_mode=mission_mode,
+                point_context=point_context,
+                rx_mode=rx_mode,
+            )
         except Exception as exc:
             self._out_queue.put(f"Receive error: {exc}\n")
             result["error"] = str(exc)
-            args = None
         finally:
             if mission_mode:
                 self._cleanup_mission_rx()
                 point_index = getattr(point_context, "global_index", None)
                 _LOGGER.debug(
-                    "Mission RX cleanup complete: point=%s",
+                    "RX mode=mission cleanup complete: point=%s",
                     point_index if point_index is not None else "n/a",
                 )
             else:
@@ -6548,14 +6535,10 @@ class TransceiverUI(ctk.CTk):
                 self._proc = None
                 self._ui(self._reset_rx_buttons)
 
-        if backend_only:
-            result["ok"] = result.get("error") is None
-            result["output_file"] = self._extract_output_file_from_args(arg_list)
-        elif args is not None:
-            result["ok"] = True
-            result["output_file"] = str(args.output_file)
+        result["ok"] = result.get("error") is None
+        if result["ok"] and not backend_only and output_file is not None:
             try:
-                path = Path(args.output_file)
+                path = Path(output_file)
                 try:
                     data = rx_convert.load_iq_file(
                         path, channels=channels, layout="blocked"
@@ -6569,8 +6552,62 @@ class TransceiverUI(ctk.CTk):
                 )
             except Exception as exc:
                 self._out_queue.put(f"Receive plot error: {exc}\n")
+        _LOGGER.debug(
+            "RX mode=%s finished: output_file=%s ok=%s error=%s",
+            rx_mode,
+            output_file,
+            result.get("ok"),
+            result.get("error"),
+        )
         result["finished_at"] = time.time()
         return result
+
+    def _execute_rx_subprocess(
+        self,
+        *,
+        arg_list: list[str],
+        mission_mode: bool,
+        point_context=None,
+        rx_mode: str,
+    ) -> int:
+        command = [sys.executable, "-m", "transceiver.helpers.rx_to_file", *arg_list]
+        point_index = getattr(point_context, "global_index", None)
+        _LOGGER.debug(
+            "RX mode=%s subprocess start: point=%s command=%s",
+            rx_mode,
+            point_index if point_index is not None else "n/a",
+            command,
+        )
+        proc = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        if mission_mode:
+            self._mission_rx_proc = proc
+        else:
+            self._proc = proc
+        if proc.stdout is not None:
+            for line in proc.stdout:
+                self._out_queue.put(line)
+        return_code = proc.wait()
+        if mission_mode:
+            if self._mission_rx_proc is proc:
+                self._mission_rx_proc = None
+        else:
+            if self._proc is proc:
+                self._proc = None
+        _LOGGER.debug(
+            "RX mode=%s subprocess finished: point=%s returncode=%s output_file=%s",
+            rx_mode,
+            point_index if point_index is not None else "n/a",
+            return_code,
+            self._extract_output_file_from_args(arg_list),
+        )
+        if return_code != 0:
+            raise RuntimeError(f"rx_to_file exited with return code {return_code}")
+        return return_code
 
     def _extract_output_file_from_args(self, arg_list: list[str]) -> str | None:
         try:
@@ -6678,9 +6715,10 @@ class TransceiverUI(ctk.CTk):
         arg_list, channels, rate = self._build_receive_arg_list_for_worker(output_file=output_file)
         point_index = getattr(point_context, "global_index", None)
         _LOGGER.info(
-            "Mission RX start: point=%s caller_thread=%s rx_args=%s",
+            "RX mode=mission start: point=%s caller_thread=%s output_file=%s rx_args=%s",
             point_index if point_index is not None else "n/a",
             threading.current_thread().name,
+            output_file,
             arg_list,
         )
         self._cleanup_mission_rx(terminate=True)
@@ -6704,9 +6742,10 @@ class TransceiverUI(ctk.CTk):
         self._cleanup_mission_rx()
         result = dict(mission_result)
         _LOGGER.info(
-            "Mission RX finished: point=%s worker_thread=%s success=%s error=%s",
+            "RX mode=mission finished: point=%s worker_thread=%s output_file=%s success=%s error=%s",
             point_index if point_index is not None else "n/a",
             worker.name,
+            result.get("output_file"),
             result.get("ok"),
             result.get("error"),
         )
@@ -7836,8 +7875,9 @@ class TransceiverUI(ctk.CTk):
         if hasattr(self, "rx_button"):
             self.rx_button.configure(state="disabled")
         _LOGGER.debug(
-            "Single RX start: caller_thread=%s rx_args=%s",
+            "RX mode=single start: caller_thread=%s output_file=%s rx_args=%s",
             threading.current_thread().name,
+            self._extract_output_file_from_args(arg_list),
             arg_list,
         )
         self._start_rx_worker(
