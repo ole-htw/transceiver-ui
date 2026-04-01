@@ -203,6 +203,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._live_label_ticker_job: str | None = None
         self._live_label_ticker_active = False
         self.lidar_reference_enabled_var = tk.BooleanVar(value=True)
+        self.live_pose_stream_enabled_var = tk.BooleanVar(value=False)
+        self._live_pose_stream_active = False
 
         self._build_ui()
         self._restore_workflow_state()
@@ -406,6 +408,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             variable=self.lidar_reference_enabled_var,
             command=self._persist_workflow_state,
         ).grid(row=3, column=0, columnspan=2, padx=(8, 3), pady=(0, 4), sticky="w")
+        ctk.CTkSwitch(
+            controls,
+            text="Live-Position aktivieren",
+            variable=self.live_pose_stream_enabled_var,
+            command=self._on_live_pose_stream_switch_changed,
+        ).grid(row=3, column=2, columnspan=2, padx=(8, 8), pady=(0, 4), sticky="w")
 
         self.live_var = tk.StringVar(value="Punkt: - | Navigation: idle | Messung: idle | Verbleibend: - | Live-Status: Karte nicht geladen")
         ctk.CTkLabel(controls, textvariable=self.live_var, anchor="w", justify="left").grid(
@@ -797,6 +805,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _live_pose_diagnosis(self) -> tuple[str, str]:
         stale_threshold_s = 1.8
+        if not bool(self.live_pose_stream_enabled_var.get()):
+            return ("stream_disabled", "Live-Pose deaktiviert")
         if self._map_image_size is None:
             return ("map_not_loaded", "Karte nicht geladen")
 
@@ -1448,29 +1458,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         def _persist(payload: dict[str, Any]) -> None:
             self.after(0, self._on_record, payload)
 
-        nav_adapter = NavigationAdapter(
-            config=NavigationAdapterConfig(
-                robot_host=self._runtime_config.robot_host,
-                ros2_namespace=self._runtime_config.ros2_namespace,
-                ros2_action_name=self._runtime_config.ros2_action_name,
-                remote_ros_env_cmd=self._runtime_config.remote_ros_env_cmd,
-                remote_ros_setup=self._runtime_config.remote_ros_setup,
-                fastdds_profiles_file=self._runtime_config.fastdds_profiles_file,
-                goal_acceptance_timeout_s=self._runtime_config.goal_acceptance_timeout_s,
-                goal_reached_timeout_s=self._runtime_config.goal_reached_timeout_s,
-                retry_attempts=self._runtime_config.navigation_retry_attempts,
-            )
-        )
-
-        self._navigator = _UiNavigator(
-            adapter=nav_adapter,
-            on_status=self._on_stage_update,
-            on_operator_message=self._append_validation,
-        )
+        self._sync_live_pose_stream_state()
+        navigator = self._ensure_navigator()
 
         self._executor = MeasurementRunExecutor(
             mission=self._mission,
-            navigator=self._navigator,
+            navigator=navigator,
             measurement_service=MissionRxMeasurementService(
                 app=self.master,
                 on_status=self._on_stage_update,
@@ -1489,7 +1482,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             ),
         )
 
-        self._navigator.start_pose_stream(on_runtime_event=self._on_executor_runtime_event)
+        self._sync_live_pose_stream_state()
         self._start_live_label_ticker()
         self._set_run_buttons(running=True, paused=False)
         self._run_thread = threading.Thread(target=self._run_executor_thread, daemon=True)
@@ -1680,6 +1673,46 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 "TX-Referenzdaten für Crosscorrelation fehlen. Bitte TX laden (gleiche Quelle wie _get_crosscorr_reference)."
             )
         return len(reasons) == 0, reasons
+
+    def _create_navigation_adapter(self) -> NavigationAdapter:
+        return NavigationAdapter(
+            config=NavigationAdapterConfig(
+                robot_host=self._runtime_config.robot_host,
+                ros2_namespace=self._runtime_config.ros2_namespace,
+                ros2_action_name=self._runtime_config.ros2_action_name,
+                remote_ros_env_cmd=self._runtime_config.remote_ros_env_cmd,
+                remote_ros_setup=self._runtime_config.remote_ros_setup,
+                fastdds_profiles_file=self._runtime_config.fastdds_profiles_file,
+                goal_acceptance_timeout_s=self._runtime_config.goal_acceptance_timeout_s,
+                goal_reached_timeout_s=self._runtime_config.goal_reached_timeout_s,
+                retry_attempts=self._runtime_config.navigation_retry_attempts,
+            )
+        )
+
+    def _ensure_navigator(self) -> _UiNavigator:
+        if self._navigator is None:
+            self._navigator = _UiNavigator(
+                adapter=self._create_navigation_adapter(),
+                on_status=self._on_stage_update,
+                on_operator_message=self._append_validation,
+            )
+        return self._navigator
+
+    def _on_live_pose_stream_switch_changed(self) -> None:
+        self._sync_live_pose_stream_state()
+        self._update_live_label()
+
+    def _sync_live_pose_stream_state(self) -> None:
+        should_run = bool(self.live_pose_stream_enabled_var.get())
+        if should_run:
+            navigator = self._ensure_navigator()
+            if not self._live_pose_stream_active:
+                navigator.start_pose_stream(on_runtime_event=self._on_executor_runtime_event)
+                self._live_pose_stream_active = True
+            return
+        if self._navigator is not None and self._live_pose_stream_active:
+            self._navigator.stop_pose_stream()
+        self._live_pose_stream_active = False
 
     def _is_continuous_active(self) -> bool:
         cont_thread = getattr(self.master, "_cont_thread", None)
@@ -1898,9 +1931,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _on_run_finished(self, state: str) -> None:
         self._stop_live_label_ticker()
-        if self._navigator is not None:
-            self._navigator.stop_pose_stream()
-            self._navigator = None
+        self._sync_live_pose_stream_state()
         self._set_run_buttons(running=False, paused=False)
         completion_substatus = None
         if self._run_log_dir is not None:
@@ -1927,6 +1958,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if self._navigator is not None:
             self._navigator.stop_pose_stream()
             self._navigator = None
+        self._live_pose_stream_active = False
         self.destroy()
 
     def _export_logs(self) -> None:
