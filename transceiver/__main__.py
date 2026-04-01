@@ -6501,6 +6501,14 @@ class TransceiverUI(ctk.CTk):
         }
         rx_mode = "mission" if mission_mode else "single"
         output_file = self._extract_output_file_from_args(arg_list)
+        if output_file is None:
+            output_file = self._make_auto_rx_output_file_path()
+            arg_list = [*arg_list, "--output-file", output_file]
+            _LOGGER.debug(
+                "RX mode=%s auto-assigned output_file=%s",
+                rx_mode,
+                output_file,
+            )
         result["output_file"] = output_file
         try:
             point_index = getattr(point_context, "global_index", None)
@@ -6559,6 +6567,13 @@ class TransceiverUI(ctk.CTk):
             result.get("ok"),
             result.get("error"),
         )
+        if rx_mode == "single":
+            _LOGGER.info(
+                "RX mode=single finished: ok=%s error=%s output_file=%s",
+                result.get("ok"),
+                result.get("error"),
+                output_file,
+            )
         result["finished_at"] = time.time()
         return result
 
@@ -6617,6 +6632,12 @@ class TransceiverUI(ctk.CTk):
         if idx + 1 >= len(arg_list):
             return None
         return arg_list[idx + 1]
+
+    def _make_auto_rx_output_file_path(self) -> str:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = Path("signals/rx")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return str(output_dir / f"rx_auto_{stamp}.bin")
 
     def _cleanup_mission_rx(self, *, terminate: bool = False) -> None:
         proc = getattr(self, "_mission_rx_proc", None)
