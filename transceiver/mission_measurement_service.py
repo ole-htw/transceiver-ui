@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import shlex
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,8 @@ ALLOWED_REVIEW_REASONS = {
     REVIEW_REASON_REVIEW_EXCEPTION,
     REVIEW_REASON_OPERATOR_REJECTED,
 }
+
+LOGGER = logging.getLogger(__name__)
 
 
 def normalize_review_reason(raw_reason: Any, *, default: str = REVIEW_REASON_OPERATOR_REJECTED) -> str:
@@ -107,7 +110,7 @@ class MissionRxMeasurementService:
 
     def _capture_lidar_reference(self, output_file: Path) -> dict[str, Any]:
         ros2_command = f"ros2 topic echo {shlex.quote(self._lidar_topic)} --once"
-        shell_parts = ["set -euo pipefail"]
+        shell_parts = ["set -eo pipefail"]
         if self._lidar_ros_env_cmd:
             shell_parts.append(self._lidar_ros_env_cmd)
         elif self._lidar_ros_setup:
@@ -118,13 +121,27 @@ class MissionRxMeasurementService:
         shell_parts.append(ros2_command)
         shell_command = "; ".join(shell_parts)
         command = ["bash", "-lc", shell_command]
+        LOGGER.debug("LIDAR reference command (final): %s", shell_command)
         completed = subprocess.run(
             command,
-            check=True,
+            check=False,
             capture_output=True,
             text=True,
             timeout=self._lidar_timeout_s,
         )
+        LOGGER.debug(
+            "LIDAR reference result: returncode=%s stdout=%r stderr=%r",
+            completed.returncode,
+            completed.stdout,
+            completed.stderr,
+        )
+        if completed.returncode != 0:
+            raise subprocess.CalledProcessError(
+                completed.returncode,
+                command,
+                output=completed.stdout,
+                stderr=completed.stderr,
+            )
         payload = {
             "topic": self._lidar_topic,
             "command": shell_command,

@@ -105,7 +105,9 @@ def test_capture_lidar_reference_uses_bash_shell_with_configured_ros_env(monkeyp
         observed["kwargs"] = kwargs
 
         class _Completed:
+            returncode = 0
             stdout = "scan: ok\n"
+            stderr = ""
 
         return _Completed()
 
@@ -123,19 +125,19 @@ def test_capture_lidar_reference_uses_bash_shell_with_configured_ros_env(monkeyp
     assert observed["command"] == [
         "bash",
         "-lc",
-        "set -euo pipefail; source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash; "
+        "set -eo pipefail; source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash; "
         "command -v ros2 >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 CLI not found in PATH' >&2; exit 70; }; "
         "ros2 topic echo /scan --once",
     ]
     assert observed["kwargs"] == {
-        "check": True,
+        "check": False,
         "capture_output": True,
         "text": True,
         "timeout": 15.0,
     }
     assert output_file.read_text(encoding="utf-8") == "scan: ok\n"
     assert payload["topic"] == "/scan"
-    assert payload["command"].startswith("set -euo pipefail; source /opt/ros/jazzy/setup.bash")
+    assert payload["command"].startswith("set -eo pipefail; source /opt/ros/jazzy/setup.bash")
 
 
 def test_capture_lidar_reference_prefers_setup_file_when_ros_env_cmd_is_empty(monkeypatch, tmp_path: Path) -> None:
@@ -145,7 +147,9 @@ def test_capture_lidar_reference_prefers_setup_file_when_ros_env_cmd_is_empty(mo
         observed["command"] = command
 
         class _Completed:
+            returncode = 0
             stdout = "scan: ok\n"
+            stderr = ""
 
         return _Completed()
 
@@ -165,7 +169,7 @@ def test_capture_lidar_reference_prefers_setup_file_when_ros_env_cmd_is_empty(mo
     assert observed["command"] == [
         "bash",
         "-lc",
-        "set -euo pipefail; source /opt/ros/humble/setup.bash; "
+        "set -eo pipefail; source /opt/ros/humble/setup.bash; "
         "command -v ros2 >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 CLI not found in PATH' >&2; exit 70; }; "
         "ros2 topic echo /robot1/scan --once",
     ]
