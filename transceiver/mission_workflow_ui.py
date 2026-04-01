@@ -230,7 +230,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._labeled_entry(points_editor, row=0, column=2, label="X", variable=self.point_x_var, width=90)
         self._labeled_entry(points_editor, row=0, column=3, label="Y", variable=self.point_y_var, width=90)
         self._labeled_entry(points_editor, row=0, column=4, label="Z", variable=self.point_z_var, width=90)
-        self._labeled_entry(points_editor, row=0, column=5, label="Yaw", variable=self.point_yaw_var, width=90)
+        self._labeled_entry(points_editor, row=0, column=5, label="Yaw (° CW)", variable=self.point_yaw_var, width=90)
         ctk.CTkButton(points_editor, text="Punkt hinzufügen", command=self._add_point).grid(row=0, column=6, padx=(8, 3))
         ctk.CTkButton(points_editor, text="Auswahl entfernen", command=self._remove_selected_point).grid(row=0, column=7, padx=3)
         ctk.CTkButton(points_editor, text="▲", width=36, command=self._move_selected_point_up).grid(row=0, column=8, padx=3)
@@ -333,7 +333,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "x": "X",
             "y": "Y",
             "z": "Z",
-            "yaw": "Yaw",
+            "yaw": "Yaw (° CW)",
         }.items():
             self.points_table.heading(key, text=title)
             self.points_table.column(key, stretch=True, width=85 if key == "enabled" else 95)
@@ -476,6 +476,15 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             return bool(self.validation_box.winfo_exists())
         except tk.TclError:
             return False
+
+    @staticmethod
+    def _yaw_cw_degrees_to_internal_radians(yaw_cw_degrees: Any) -> float:
+        yaw_deg = float(yaw_cw_degrees)
+        return math.radians(-yaw_deg)
+
+    @staticmethod
+    def _yaw_internal_radians_to_cw_degrees(yaw_radians: float) -> float:
+        return -math.degrees(yaw_radians)
 
     def _refresh_map_section(self) -> None:
         self._map_image_original = None
@@ -934,13 +943,19 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             candidate_index += 1
 
     def _add_point(self) -> None:
+        try:
+            yaw_internal_radians = self._yaw_cw_degrees_to_internal_radians(self.point_yaw_var.get().strip())
+        except Exception:
+            messagebox.showwarning("Messpunkt ungültig", "Yaw muss eine Zahl in Grad (Uhrzeigersinn) sein.")
+            return
+
         point_payload = {
             "id": self._generate_unique_point_id(),
             "name": self.point_name_var.get().strip() or None,
             "x": self.point_x_var.get().strip(),
             "y": self.point_y_var.get().strip(),
             "z": self.point_z_var.get().strip() or 0.0,
-            "yaw": self.point_yaw_var.get().strip(),
+            "yaw": yaw_internal_radians,
             "enabled": True,
         }
         try:
@@ -957,7 +972,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._refresh_points_table()
         self._persist_workflow_state()
         self._append_validation(
-            f"✅ Punkt hinzugefügt: {point.id or point.name} (x={point.x:.2f}, y={point.y:.2f}, z={point.z:.2f}, yaw={point.yaw})"
+            f"✅ Punkt hinzugefügt: {point.id or point.name} "
+            f"(x={point.x:.2f}, y={point.y:.2f}, z={point.z:.2f}, yaw={self._yaw_internal_radians_to_cw_degrees(point.yaw):.2f}° CW)"
         )
 
     def _remove_selected_point(self) -> None:
@@ -1065,7 +1081,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                     f"{point.x:.3f}",
                     f"{point.y:.3f}",
                     f"{point.z:.3f}",
-                    "-" if point.yaw is None else f"{point.yaw:.3f}",
+                    "-" if point.yaw is None else f"{self._yaw_internal_radians_to_cw_degrees(point.yaw):.3f}",
                 ),
             )
         self._draw_map_preview()
