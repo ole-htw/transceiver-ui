@@ -369,15 +369,15 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
         controls = ctk.CTkFrame(side_panel)
         controls.grid(row=2, column=0, sticky="ew", padx=0, pady=0)
-        for col in range(4):
+        for col in range(5):
             controls.columnconfigure(col, weight=0)
-        controls.columnconfigure(3, weight=1)
+        controls.columnconfigure(4, weight=1)
         controls.rowconfigure(3, weight=1)
 
-        ctk.CTkLabel(controls, text="5) Laufsteuerung").grid(row=0, column=0, columnspan=4, sticky="w", padx=8, pady=(8, 4))
+        ctk.CTkLabel(controls, text="5) Laufsteuerung").grid(row=0, column=0, columnspan=5, sticky="w", padx=8, pady=(8, 4))
         self.review_ready_var = tk.StringVar(value="Review: nicht geprüft")
         ctk.CTkLabel(controls, textvariable=self.review_ready_var, anchor="w").grid(
-            row=0, column=3, padx=(8, 8), pady=(8, 4), sticky="e"
+            row=0, column=4, padx=(8, 8), pady=(8, 4), sticky="e"
         )
         self.start_btn = ctk.CTkButton(controls, text="Start", command=self._start_run)
         self.start_btn.grid(row=1, column=0, padx=(8, 3), pady=(0, 4), sticky="w")
@@ -391,7 +391,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             state="readonly",
             command=lambda _value: self._persist_workflow_state(),
         )
-        self.start_point_combo.grid(row=1, column=2, columnspan=2, padx=(0, 8), pady=(0, 4), sticky="w")
+        self.start_point_combo.grid(row=1, column=2, columnspan=3, padx=(0, 8), pady=(0, 4), sticky="w")
         self.reverse_point_order_var = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(
             controls,
@@ -406,7 +406,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.stop_btn = ctk.CTkButton(controls, text="Stop", command=self._stop_run, state="disabled")
         self.stop_btn.grid(row=2, column=2, padx=3, pady=3, sticky="w")
         ctk.CTkButton(controls, text="Run-Logs exportieren", command=self._export_logs).grid(
-            row=2, column=3, padx=(10, 8), pady=3, sticky="w"
+            row=2, column=4, padx=(10, 8), pady=3, sticky="w"
         )
         ctk.CTkCheckBox(
             controls,
@@ -419,11 +419,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             text="Live-Position aktivieren",
             variable=self.live_pose_stream_enabled_var,
             command=self._on_live_pose_stream_switch_changed,
-        ).grid(row=3, column=2, columnspan=2, padx=(8, 8), pady=(0, 4), sticky="w")
+        ).grid(row=3, column=2, columnspan=3, padx=(8, 8), pady=(0, 4), sticky="w")
 
         self.live_var = tk.StringVar(value="Punkt: - | Navigation: idle | Messung: idle | Verbleibend: - | Live-Status: Karte nicht geladen")
         ctk.CTkLabel(controls, textvariable=self.live_var, anchor="w", justify="left").grid(
-            row=4, column=0, columnspan=4, sticky="nsew", padx=8, pady=(4, 8)
+            row=4, column=0, columnspan=5, sticky="nsew", padx=8, pady=(4, 8)
         )
 
         table_frame = ctk.CTkFrame(self)
