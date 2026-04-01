@@ -812,6 +812,18 @@ def test_pose_stream_reports_raw_data_without_complete_block(monkeypatch) -> Non
         if isinstance(payload.get("event"), dict) and payload["event"].get("type") == "stream_error"
     ]
     assert any("noch kein kompletter Nachrichtenblock" in message for message in messages)
+    raw_block_errors = [
+        payload["event"]
+        for payload in events
+        if isinstance(payload.get("event"), dict)
+        and payload["event"].get("type") == "stream_error"
+        and "noch kein kompletter Nachrichtenblock" in str(payload["event"].get("message"))
+    ]
+    assert raw_block_errors
+    assert raw_block_errors[0]["raw_pose_excerpt"] == "header:\\n  frame_id: map"
+    assert raw_block_errors[0]["saw_separator"] is False
+    assert raw_block_errors[0]["saw_header"] is True
+    assert raw_block_errors[0]["buffer_line_count"] == 2
 
 
 def test_pose_stream_banner_only_is_not_counted_as_raw_amcl_data(monkeypatch) -> None:
@@ -962,6 +974,145 @@ def test_pose_stream_mixed_foreign_lines_and_valid_yaml_emits_position_update(mo
     assert updates[0]["x"] == 1.25
     assert updates[0]["y"] == 2.5
     assert not any("nicht parsebar" in message for message in errors)
+
+
+def test_pose_stream_flushes_previous_parseable_block_on_new_header_without_separator(monkeypatch) -> None:
+    class _Stream:
+        def __init__(self, lines: list[str], rest: str = "") -> None:
+            self._lines = lines
+            self._idx = 0
+            self._rest = rest
+
+        def readline(self) -> str:
+            if self._idx >= len(self._lines):
+                return ""
+            line = self._lines[self._idx]
+            self._idx += 1
+            return line
+
+        def read(self) -> str:
+            return self._rest
+
+    class _Process:
+        def __init__(self) -> None:
+            self.stdout = _Stream(
+                [
+                    "header:\n",
+                    "  frame_id: map\n",
+                    "pose:\n",
+                    "  pose:\n",
+                    "    position:\n",
+                    "      x: 1.0\n",
+                    "      y: 2.0\n",
+                    "header:\n",
+                    "  frame_id: map\n",
+                ]
+            )
+            self.stderr = _Stream([], rest="")
+
+        def poll(self):
+            return None
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self, timeout: float) -> int:
+            return 0
+
+    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
+
+    transport = Ros2CliPoseStreamTransport()
+    events: list[dict[str, object]] = []
+
+    def _on_event(payload: dict[str, object]) -> None:
+        events.append(payload)
+        event = payload.get("event") if isinstance(payload, dict) else None
+        if isinstance(event, dict) and event.get("type") == "position_update":
+            transport._stop_event.set()
+
+    transport._run_loop(
+        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
+        on_event=_on_event,
+    )
+
+    updates = [
+        payload["event"]
+        for payload in events
+        if isinstance(payload.get("event"), dict) and payload["event"].get("type") == "position_update"
+    ]
+    assert updates
+    assert updates[0]["position"]["x"] == 1.0
+    assert updates[0]["position"]["y"] == 2.0
+    assert updates[0]["block_flush_reason"] == "new_header"
+
+
+def test_pose_stream_idle_flushes_parseable_block_without_separator(monkeypatch) -> None:
+    class _Stream:
+        def __init__(self, lines: list[str], rest: str = "") -> None:
+            self._lines = lines
+            self._idx = 0
+            self._rest = rest
+
+        def readline(self) -> str:
+            if self._idx >= len(self._lines):
+                return ""
+            line = self._lines[self._idx]
+            self._idx += 1
+            return line
+
+        def read(self) -> str:
+            return self._rest
+
+    class _Process:
+        def __init__(self) -> None:
+            self.stdout = _Stream(
+                [
+                    "header:\n",
+                    "  frame_id: map\n",
+                    "pose:\n",
+                    "  pose:\n",
+                    "    position:\n",
+                    "      x: 3.0\n",
+                    "      y: 4.0\n",
+                ]
+            )
+            self.stderr = _Stream([], rest="")
+
+        def poll(self):
+            return None
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self, timeout: float) -> int:
+            return 0
+
+    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
+    monkeypatch.setattr(Ros2CliPoseStreamTransport, "_BLOCK_IDLE_FLUSH_AFTER_S", 0.0)
+
+    transport = Ros2CliPoseStreamTransport()
+    events: list[dict[str, object]] = []
+
+    def _on_event(payload: dict[str, object]) -> None:
+        events.append(payload)
+        event = payload.get("event") if isinstance(payload, dict) else None
+        if isinstance(event, dict) and event.get("type") == "position_update":
+            transport._stop_event.set()
+
+    transport._run_loop(
+        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
+        on_event=_on_event,
+    )
+
+    updates = [
+        payload["event"]
+        for payload in events
+        if isinstance(payload.get("event"), dict) and payload["event"].get("type") == "position_update"
+    ]
+    assert updates
+    assert updates[0]["position"]["x"] == 3.0
+    assert updates[0]["position"]["y"] == 4.0
+    assert updates[0]["block_flush_reason"] == "idle_flush"
 
 
 def test_pose_stream_parses_completed_block_without_separator(monkeypatch) -> None:
