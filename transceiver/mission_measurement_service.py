@@ -25,6 +25,7 @@ ALLOWED_REVIEW_REASONS = {
 }
 
 LOGGER = logging.getLogger(__name__)
+_STDOUT_TAIL_LINES = 20
 
 
 def normalize_review_reason(raw_reason: Any, *, default: str = REVIEW_REASON_OPERATOR_REJECTED) -> str:
@@ -115,6 +116,15 @@ class MissionRxMeasurementService:
             shell_parts.append(self._lidar_ros_env_cmd)
         elif self._lidar_ros_setup:
             shell_parts.append(f"source {shlex.quote(self._lidar_ros_setup)}")
+        shell_parts.extend(
+            [
+                "echo \"TRANSCEIVER_LIDAR_DIAG whoami=$(whoami 2>/dev/null || true)\"",
+                "echo \"TRANSCEIVER_LIDAR_DIAG HOME=${HOME:-}\"",
+                "echo \"TRANSCEIVER_LIDAR_DIAG PWD=$(pwd 2>/dev/null || true)\"",
+                "echo \"TRANSCEIVER_LIDAR_DIAG ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-<unset>}\"",
+                "echo \"TRANSCEIVER_LIDAR_DIAG ros2_path=$(command -v ros2 2>/dev/null || echo '<not-found>')\"",
+            ]
+        )
         shell_parts.append(
             "command -v ros2 >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 CLI not found in PATH' >&2; exit 70; }"
         )
@@ -151,6 +161,13 @@ class MissionRxMeasurementService:
         output_file.write_text(completed.stdout, encoding="utf-8")
         return payload
 
+    @staticmethod
+    def _stdout_tail(raw_output: str, *, max_lines: int = _STDOUT_TAIL_LINES) -> str:
+        lines = [line for line in raw_output.splitlines() if line.strip()]
+        if not lines:
+            return ""
+        return "\n".join(lines[-max_lines:])
+
     def trigger(self, point_context: PointExecutionContext) -> dict[str, Any]:
         self._on_status("measurement", "running")
         timestamp = datetime.now(timezone.utc)
@@ -167,6 +184,20 @@ class MissionRxMeasurementService:
         if self._enable_lidar_reference:
             try:
                 lidar_reference = self._collect_lidar_reference(lidar_reference_file)
+            except subprocess.CalledProcessError as exc:
+                self._on_status("measurement", "failed")
+                if self._on_operator_message is not None:
+                    stderr = (exc.stderr or "").strip() or "<leer>"
+                    stdout_tail = self._stdout_tail(exc.output or "")
+                    details = [
+                        f"LIDAR-Referenzmessung fehlgeschlagen bei Punkt {point_context.global_index}",
+                        f"returncode={exc.returncode}",
+                        f"stderr={stderr}",
+                    ]
+                    if stdout_tail:
+                        details.append(f"stdout_tail:\n{stdout_tail}")
+                    self._on_operator_message(" | ".join(details))
+                raise RuntimeError("lidar_reference_failed") from exc
             except Exception as exc:
                 self._on_status("measurement", "failed")
                 if self._on_operator_message is not None:

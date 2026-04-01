@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import time
 from pathlib import Path
 
@@ -126,6 +127,11 @@ def test_capture_lidar_reference_uses_bash_shell_with_configured_ros_env(monkeyp
         "bash",
         "-lc",
         "set -eo pipefail; source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash; "
+        "echo \"TRANSCEIVER_LIDAR_DIAG whoami=$(whoami 2>/dev/null || true)\"; "
+        "echo \"TRANSCEIVER_LIDAR_DIAG HOME=${HOME:-}\"; "
+        "echo \"TRANSCEIVER_LIDAR_DIAG PWD=$(pwd 2>/dev/null || true)\"; "
+        "echo \"TRANSCEIVER_LIDAR_DIAG ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-<unset>}\"; "
+        "echo \"TRANSCEIVER_LIDAR_DIAG ros2_path=$(command -v ros2 2>/dev/null || echo '<not-found>')\"; "
         "command -v ros2 >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 CLI not found in PATH' >&2; exit 70; }; "
         "ros2 topic echo /scan --once",
     ]
@@ -170,8 +176,43 @@ def test_capture_lidar_reference_prefers_setup_file_when_ros_env_cmd_is_empty(mo
         "bash",
         "-lc",
         "set -eo pipefail; source /opt/ros/humble/setup.bash; "
+        "echo \"TRANSCEIVER_LIDAR_DIAG whoami=$(whoami 2>/dev/null || true)\"; "
+        "echo \"TRANSCEIVER_LIDAR_DIAG HOME=${HOME:-}\"; "
+        "echo \"TRANSCEIVER_LIDAR_DIAG PWD=$(pwd 2>/dev/null || true)\"; "
+        "echo \"TRANSCEIVER_LIDAR_DIAG ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-<unset>}\"; "
+        "echo \"TRANSCEIVER_LIDAR_DIAG ros2_path=$(command -v ros2 2>/dev/null || echo '<not-found>')\"; "
         "command -v ros2 >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 CLI not found in PATH' >&2; exit 70; }; "
         "ros2 topic echo /robot1/scan --once",
     ]
     assert payload["topic"] == "/robot1/scan"
     assert payload["command"].endswith("ros2 topic echo /robot1/scan --once")
+
+
+def test_trigger_reports_lidar_called_process_error_details() -> None:
+    messages: list[str] = []
+    service = MissionRxMeasurementService(
+        app=_FakeApp(),
+        on_status=lambda *_args: None,
+        on_operator_message=messages.append,
+        collect_lidar_reference=lambda _output_file: (_ for _ in ()).throw(
+            subprocess.CalledProcessError(
+                returncode=1,
+                cmd=["bash", "-lc", "ros2 topic echo /scan --once"],
+                output="\n".join(f"line-{idx}" for idx in range(30)),
+                stderr="ros2 failed hard",
+            )
+        ),
+    )
+
+    try:
+        service.trigger(_point_context())
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert exc.args == ("lidar_reference_failed",)
+
+    assert len(messages) == 1
+    assert "returncode=1" in messages[0]
+    assert "stderr=ros2 failed hard" in messages[0]
+    assert "stdout_tail:\nline-10" in messages[0]
+    assert "line-29" in messages[0]
+    assert "line-9" not in messages[0]
