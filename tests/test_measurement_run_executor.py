@@ -276,6 +276,43 @@ def test_invalid_transitions_raise() -> None:
         executor.stop()
 
 
+def test_stop_returns_without_waiting_for_slow_cancel() -> None:
+    class SlowCancelNavigator(FakeNavigator):
+        def __init__(self) -> None:
+            super().__init__(["canceled"])
+            self._released = threading.Event()
+
+        def navigate_to_point(self, point, *, timeout_s: float, on_navigation_event=None):
+            self.calls.append((point.x, point.y, point.qz, timeout_s))
+            self._released.wait(timeout=1.0)
+            return "canceled"
+
+        def cancel_current_goal(self) -> None:
+            time.sleep(0.5)
+            super().cancel_current_goal()
+            self._released.set()
+
+    nav = SlowCancelNavigator()
+    executor = MeasurementRunExecutor(
+        mission=MeasurementMission(name="single", points=[_mission().points[0]], repeat=1),
+        navigator=nav,
+        trigger_measurement=lambda _point: {"ok": True},
+        persist_result=lambda _payload: None,
+    )
+
+    thread = threading.Thread(target=executor.start)
+    thread.start()
+    time.sleep(0.05)
+
+    started_at = time.perf_counter()
+    executor.stop()
+    elapsed = time.perf_counter() - started_at
+    thread.join(timeout=2)
+
+    assert elapsed < 0.2
+    assert nav.cancel_calls == 1
+
+
 def test_measurement_service_trigger_receives_point_context() -> None:
     nav = FakeNavigator(["succeeded"])
     observed: dict[str, object] = {}

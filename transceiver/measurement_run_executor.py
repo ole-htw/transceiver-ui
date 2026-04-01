@@ -334,10 +334,14 @@ class MeasurementRunExecutor:
             self._cancel_requested = True
             self._state = "stopping"
             self._pause_cond.notify_all()
-        try:
-            self.navigator.cancel_current_goal()
-        except Exception:
-            pass
+
+        def _cancel_goal() -> None:
+            try:
+                self.navigator.cancel_current_goal()
+            except Exception:
+                pass
+
+        threading.Thread(target=_cancel_goal, daemon=True).start()
 
     def _finalize_stop(self) -> ExecutorState:
         with self._state_lock:
