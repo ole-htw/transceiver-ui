@@ -475,6 +475,54 @@ def test_start_point_index_uses_active_point_order() -> None:
     assert summaries[0]["start_point_index"] == 1
 
 
+def test_reverse_point_order_executes_active_points_backwards() -> None:
+    nav = FakeNavigator(["succeeded", "succeeded"])
+    measured: list[str] = []
+    summaries: list[dict] = []
+    mission = MeasurementMission(
+        name="reverse-order",
+        points=[
+            MeasurementPoint(id="p1", name="A", x=1.0, y=2.0, yaw=0.0, enabled=True),
+            MeasurementPoint(id="p2", name="B", x=3.0, y=4.0, yaw=0.0, enabled=False),
+            MeasurementPoint(id="p3", name="C", x=5.0, y=6.0, yaw=0.0, enabled=True),
+        ],
+        repeat=1,
+    )
+
+    executor = MeasurementRunExecutor(
+        mission=mission,
+        navigator=nav,
+        trigger_measurement=lambda point: measured.append(point.id or "") or {"ok": True},
+        persist_result=lambda _payload: None,
+        persist_run_summary=summaries.append,
+        config=MeasurementRunExecutorConfig(reverse_point_order=True),
+    )
+
+    final_state = executor.start()
+
+    assert final_state == "completed"
+    assert measured == ["p3", "p1"]
+    assert summaries[0]["reverse_point_order"] is True
+
+
+def test_reverse_point_order_applies_to_start_point_index() -> None:
+    nav = FakeNavigator(["succeeded"])
+    measured: list[str] = []
+
+    executor = MeasurementRunExecutor(
+        mission=_mission(),
+        navigator=nav,
+        trigger_measurement=lambda point: measured.append(point.id or "") or {"ok": True},
+        persist_result=lambda _payload: None,
+        config=MeasurementRunExecutorConfig(start_point_index=1, reverse_point_order=True),
+    )
+
+    final_state = executor.start()
+
+    assert final_state == "completed"
+    assert measured == ["p1"]
+
+
 def test_start_fails_when_mission_has_no_active_points() -> None:
     nav = FakeNavigator(["succeeded"])
     summaries: list[dict] = []

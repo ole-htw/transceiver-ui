@@ -130,6 +130,7 @@ class MeasurementRunExecutorConfig:
     navigation_retry_attempts: int = 0
     on_point_error: OnPointError = "continue"
     start_point_index: int = 0
+    reverse_point_order: bool = False
 
 
 @dataclass(frozen=True)
@@ -197,7 +198,7 @@ class MeasurementRunExecutor:
     def start(self) -> ExecutorState:
         abort_reason: str | None = None
         completion_substatus: str | None = None
-        active_points = [point for point in self.mission.points if point.enabled]
+        active_points = self._ordered_active_points()
         points_per_cycle = len(active_points)
         repeats = self.mission.repeat or 1
         expected_points = max(0, points_per_cycle * repeats - self.config.start_point_index)
@@ -617,6 +618,7 @@ class MeasurementRunExecutor:
             "total_points": total,
             "expected_points": expected_points,
             "start_point_index": self.config.start_point_index,
+            "reverse_point_order": self.config.reverse_point_order,
             "succeeded_points": succeeded,
             "failed_points": failed,
             "skipped_points": skipped,
@@ -632,13 +634,19 @@ class MeasurementRunExecutor:
     def _validate_start_point_index(self) -> None:
         if self.config.start_point_index < 0:
             raise ValueError("start_point_index must be >= 0")
-        active_points = [point for point in self.mission.points if point.enabled]
+        active_points = self._ordered_active_points()
         if active_points and self.config.start_point_index >= len(active_points):
             raise ValueError(
                 "start_point_index must be smaller than number of active mission points"
             )
         if not active_points and self.config.start_point_index != 0:
             raise ValueError("start_point_index must be 0 when no active mission points exist")
+
+    def _ordered_active_points(self) -> list[MeasurementPoint]:
+        active_points = [point for point in self.mission.points if point.enabled]
+        if self.config.reverse_point_order:
+            return list(reversed(active_points))
+        return active_points
 
     @staticmethod
     def _to_navigation_point(point: MeasurementPoint) -> NavigationPoint:
