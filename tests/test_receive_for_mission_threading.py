@@ -66,11 +66,14 @@ class _DummyWidget:
 def test_receive_for_mission_uses_worker_path_and_waits_for_result() -> None:
     ui = object.__new__(TransceiverUI)
     ui._cmd_running = False
+    ui._mission_rx_running = False
+    ui._mission_rx_proc = None
     ui.rx_stop = _DummyWidget()
     ui.rx_button = _DummyWidget()
     ui._ui = lambda callback: callback()
     process_queue_calls: list[str] = []
     ui._process_queue = lambda: process_queue_calls.append("called")
+    ui._cleanup_mission_rx = lambda terminate=False: setattr(ui, "_mission_rx_running", False)
     ui._build_receive_arg_list_for_worker = (
         lambda *, output_file: (["-a", "type=b200"], 2, 2_000_000.0)
     )
@@ -117,19 +120,22 @@ def test_receive_for_mission_uses_worker_path_and_waits_for_result() -> None:
     assert captured["channels"] == 2
     assert captured["rate"] == 2_000_000.0
     assert captured["backend_only"] is True
-    assert process_queue_calls == ["called"]
+    assert process_queue_calls == []
     assert result == {"ok": True, "output_file": "signals/rx/mission/demo.bin"}
-    assert ui.rx_stop.calls == [{"state": "normal"}]
-    assert ui.rx_button.calls == [{"state": "disabled"}]
+    assert ui.rx_stop.calls == []
+    assert ui.rx_button.calls == []
 
 
 def test_receive_for_mission_can_run_multiple_times_sequentially() -> None:
     ui = object.__new__(TransceiverUI)
     ui._cmd_running = False
+    ui._mission_rx_running = False
+    ui._mission_rx_proc = None
     ui.rx_stop = _DummyWidget()
     ui.rx_button = _DummyWidget()
     ui._ui = lambda callback: callback()
     ui._process_queue = lambda: None
+    ui._cleanup_mission_rx = lambda terminate=False: setattr(ui, "_mission_rx_running", False)
     ui._build_receive_arg_list_for_worker = (
         lambda *, output_file: (["--output-file", output_file], 1, 1_000_000.0)
     )

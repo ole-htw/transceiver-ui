@@ -3400,6 +3400,8 @@ class TransceiverUI(ctk.CTk):
         self._cmd_running = False
         self._rx_running = False
         self._proc = None
+        self._mission_rx_running = False
+        self._mission_rx_proc = None
         self._stop_requested = False
         self._plot_win = None
         self.manual_xcorr_lags = {"los": None, "echo": None}
@@ -6489,6 +6491,7 @@ class TransceiverUI(ctk.CTk):
         *,
         point_context=None,
         backend_only: bool = False,
+        mission_mode: bool = False,
     ) -> dict[str, object]:
         result: dict[str, object] = {
             "ok": False,
@@ -6512,7 +6515,10 @@ class TransceiverUI(ctk.CTk):
                     stderr=subprocess.STDOUT,
                     text=True,
                 )
-                self._proc = proc
+                if mission_mode:
+                    self._mission_rx_proc = proc
+                else:
+                    self._proc = proc
                 if proc.stdout is not None:
                     for line in proc.stdout:
                         self._out_queue.put(line)
@@ -6529,10 +6535,18 @@ class TransceiverUI(ctk.CTk):
             result["error"] = str(exc)
             args = None
         finally:
-            self._cmd_running = False
-            self._rx_running = False
-            self._proc = None
-            self._ui(self._reset_rx_buttons)
+            if mission_mode:
+                self._cleanup_mission_rx()
+                point_index = getattr(point_context, "global_index", None)
+                _LOGGER.debug(
+                    "Mission RX cleanup complete: point=%s",
+                    point_index if point_index is not None else "n/a",
+                )
+            else:
+                self._cmd_running = False
+                self._rx_running = False
+                self._proc = None
+                self._ui(self._reset_rx_buttons)
 
         if backend_only:
             result["ok"] = result.get("error") is None
@@ -6567,10 +6581,27 @@ class TransceiverUI(ctk.CTk):
             return None
         return arg_list[idx + 1]
 
+    def _cleanup_mission_rx(self, *, terminate: bool = False) -> None:
+        proc = getattr(self, "_mission_rx_proc", None)
+        self._mission_rx_proc = None
+        if terminate and proc is not None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=2)
+                except Exception as exc:
+                    _LOGGER.warning("Mission RX kill failed: %s", exc)
+            except Exception as exc:
+                _LOGGER.warning("Mission RX terminate failed: %s", exc)
+        self._mission_rx_running = False
+
     def is_receive_active_for_mission(self) -> bool:
-        if bool(getattr(self, "_rx_running", False)):
+        if bool(getattr(self, "_mission_rx_running", False)):
             return True
-        proc = getattr(self, "_proc", None)
+        proc = getattr(self, "_mission_rx_proc", None)
         if proc is None:
             return False
         try:
@@ -6630,6 +6661,7 @@ class TransceiverUI(ctk.CTk):
                 rate,
                 point_context=point_context,
                 backend_only=backend_only,
+                mission_mode=backend_only,
             )
             if on_complete is not None:
                 on_complete(result)
@@ -6646,17 +6678,13 @@ class TransceiverUI(ctk.CTk):
         arg_list, channels, rate = self._build_receive_arg_list_for_worker(output_file=output_file)
         point_index = getattr(point_context, "global_index", None)
         _LOGGER.info(
-            "Workflow RX start: point=%s caller_thread=%s rx_args=%s",
+            "Mission RX start: point=%s caller_thread=%s rx_args=%s",
             point_index if point_index is not None else "n/a",
             threading.current_thread().name,
             arg_list,
         )
-        self._cmd_running = True
-        self._rx_running = True
-        if hasattr(self, "rx_stop"):
-            self._ui(lambda: self.rx_stop.configure(state="normal"))
-        if hasattr(self, "rx_button"):
-            self._ui(lambda: self.rx_button.configure(state="disabled"))
+        self._cleanup_mission_rx(terminate=True)
+        self._mission_rx_running = True
         done = threading.Event()
         mission_result: dict[str, object] = {}
 
@@ -6672,11 +6700,11 @@ class TransceiverUI(ctk.CTk):
             on_complete=_store_result,
             backend_only=True,
         )
-        self._process_queue()
         done.wait()
+        self._cleanup_mission_rx()
         result = dict(mission_result)
         _LOGGER.info(
-            "Workflow RX finished: point=%s worker_thread=%s success=%s error=%s",
+            "Mission RX finished: point=%s worker_thread=%s success=%s error=%s",
             point_index if point_index is not None else "n/a",
             worker.name,
             result.get("ok"),
@@ -7771,18 +7799,29 @@ class TransceiverUI(ctk.CTk):
         self.transmit()
 
     def stop_receive(self) -> None:
-        if self._proc:
-            try:
-                self._proc.terminate()
-                self._proc.wait(timeout=5)
-                self._proc = None
-            except Exception:
-                pass
+        proc = self._proc
+        self._proc = None
+        self._cmd_running = False
         self._rx_running = False
-        if hasattr(self, "rx_stop"):
-            self.rx_stop.configure(state="disabled")
-        if hasattr(self, "rx_button"):
-            self.rx_button.configure(state="normal")
+        if proc:
+            _LOGGER.debug("Single RX stop requested: terminating process pid=%s", proc.pid)
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                _LOGGER.warning(
+                    "Single RX process did not terminate in time, killing pid=%s",
+                    proc.pid,
+                )
+                try:
+                    proc.kill()
+                    proc.wait(timeout=2)
+                except Exception as exc:
+                    _LOGGER.warning("Single RX kill failed: pid=%s error=%s", proc.pid, exc)
+            except Exception as exc:
+                _LOGGER.warning("Single RX terminate failed: pid=%s error=%s", proc.pid, exc)
+        _LOGGER.debug("Single RX cleanup complete")
+        self._reset_rx_buttons()
 
     def receive(self):
         try:
