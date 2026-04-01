@@ -55,6 +55,10 @@ class MissionRuntimeConfig:
     remote_ros_env_cmd: str = ""
     remote_ros_setup: str = ""
     fastdds_profiles_file: str = ""
+    lidar_topic: str = "/scan"
+    lidar_reference_timeout_s: float = 15.0
+    lidar_ros_env_cmd: str = ""
+    lidar_ros_setup: str = ""
     goal_acceptance_timeout_s: float = 8.0
     goal_reached_timeout_s: float = 120.0
     navigation_retry_attempts: int = 0
@@ -71,6 +75,19 @@ class MissionRuntimeConfig:
             fastdds_profiles_file=os.getenv(
                 "TRANSCEIVER_FASTDDS_PROFILES_FILE",
                 cls.fastdds_profiles_file,
+            ),
+            lidar_topic=os.getenv("TRANSCEIVER_LIDAR_TOPIC", cls.lidar_topic),
+            lidar_reference_timeout_s=_env_float(
+                "TRANSCEIVER_LIDAR_REFERENCE_TIMEOUT_S",
+                cls.lidar_reference_timeout_s,
+            ),
+            lidar_ros_env_cmd=os.getenv(
+                "TRANSCEIVER_LIDAR_ROS_ENV_CMD",
+                cls.lidar_ros_env_cmd,
+            ),
+            lidar_ros_setup=os.getenv(
+                "TRANSCEIVER_LIDAR_ROS_SETUP",
+                cls.lidar_ros_setup,
             ),
             goal_acceptance_timeout_s=_env_float(
                 "TRANSCEIVER_NAV_GOAL_ACCEPT_TIMEOUT_S",

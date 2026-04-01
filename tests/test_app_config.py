@@ -48,3 +48,23 @@ def test_mission_runtime_config_reads_fastdds_profile_from_env(monkeypatch) -> N
     config = MissionRuntimeConfig.from_env()
 
     assert config.fastdds_profiles_file == "/etc/nav2/fastdds/nav2.xml"
+
+
+def test_mission_runtime_config_reads_lidar_ros_env_values_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("TRANSCEIVER_LIDAR_TOPIC", "/robot1/scan")
+    monkeypatch.setenv("TRANSCEIVER_LIDAR_REFERENCE_TIMEOUT_S", "21")
+    monkeypatch.setenv(
+        "TRANSCEIVER_LIDAR_ROS_ENV_CMD",
+        "source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash",
+    )
+    monkeypatch.setenv("TRANSCEIVER_LIDAR_ROS_SETUP", "/opt/ros/humble/setup.bash")
+
+    config = MissionRuntimeConfig.from_env()
+
+    assert config.lidar_topic == "/robot1/scan"
+    assert config.lidar_reference_timeout_s == 21.0
+    assert config.lidar_ros_setup == "/opt/ros/humble/setup.bash"
+    assert (
+        config.lidar_ros_env_cmd
+        == "source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash"
+    )
