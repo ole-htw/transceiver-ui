@@ -604,6 +604,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
     def _select_map_config_file(self) -> None:
         selected_file = filedialog.askopenfilename(
             title="Map-Config auswählen",
+            parent=self,
             filetypes=[
                 ("Map-Dateien", "*.yaml *.yml *.json"),
                 ("YAML", "*.yaml *.yml"),
@@ -618,7 +619,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         try:
             map_config = self._load_map_config_from_file(map_config_path)
         except Exception as exc:
-            messagebox.showwarning("Map-Config ungültig", str(exc))
+            messagebox.showwarning("Map-Config ungültig", str(exc), parent=self)
             return
 
         self._selected_map_config = map_config
@@ -983,7 +984,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         try:
             yaw_internal_radians = self._yaw_cw_degrees_to_internal_radians(self.point_yaw_var.get().strip())
         except Exception:
-            messagebox.showwarning("Messpunkt ungültig", "Yaw muss eine Zahl in Grad (Uhrzeigersinn) sein.")
+            messagebox.showwarning(
+                "Messpunkt ungültig",
+                "Yaw muss eine Zahl in Grad (Uhrzeigersinn) sein.",
+                parent=self,
+            )
             return
 
         point_payload = {
@@ -1000,7 +1005,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 {"name": "point-check", "points": [point_payload], "repeat": 1}
             )
         except Exception as exc:
-            messagebox.showwarning("Messpunkt ungültig", str(exc))
+            messagebox.showwarning("Messpunkt ungültig", str(exc), parent=self)
             return
 
         point = mission.points[0]
@@ -1408,17 +1413,29 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             parsed_x = float(self.rx_antenna_x_var.get().strip().replace(",", "."))
             parsed_y = float(self.rx_antenna_y_var.get().strip().replace(",", "."))
         except ValueError:
-            messagebox.showwarning("RX-Antenne", "RX-Antennenposition muss numerisch sein (X/Y).")
+            messagebox.showwarning(
+                "RX-Antenne",
+                "RX-Antennenposition muss numerisch sein (X/Y).",
+                parent=self,
+            )
             return
         if not math.isfinite(parsed_x) or not math.isfinite(parsed_y):
-            messagebox.showwarning("RX-Antenne", "RX-Antennenposition enthält ungültige Zahlen.")
+            messagebox.showwarning(
+                "RX-Antenne",
+                "RX-Antennenposition enthält ungültige Zahlen.",
+                parent=self,
+            )
             return
         self._set_rx_antenna_position(x=parsed_x, y=parsed_y)
         self._append_validation(f"✅ RX-Antenne gesetzt: x={parsed_x:.3f}, y={parsed_y:.3f}")
 
     def _start_run(self) -> None:
         if self._mission is None:
-            messagebox.showwarning("Mission", "Bitte zuerst eine gültige Mission anlegen und validieren.")
+            messagebox.showwarning(
+                "Mission",
+                "Bitte zuerst eine gültige Mission anlegen und validieren.",
+                parent=self,
+            )
             return
         if self._run_thread and self._run_thread.is_alive():
             return
@@ -1434,6 +1451,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                         "Continuous-Modus konnte nicht automatisch gestoppt werden.\n"
                         "Bitte Continuous-Modus zuerst stoppen und erneut starten.\n\n"
                         f"Details: {exc}",
+                        parent=self,
                     )
                     self._append_validation(
                         "❌ Run-Start blockiert: Continuous-Modus zuerst stoppen (Auto-Stop fehlgeschlagen)."
@@ -1448,6 +1466,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 "Run-Start blockiert",
                 "Der Run kann nicht gestartet werden, da Voraussetzungen fehlen:\n\n"
                 f"{details}\n\nBitte Voraussetzungen erfüllen und erneut starten.",
+                parent=self,
             )
             self._append_validation("❌ Run-Start blockiert: " + " | ".join(reasons))
             return
@@ -1523,6 +1542,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "Ja: Transmitter aktivieren und auf 'TX (Replay): playback started.' warten.\n"
             "Nein: Mission trotzdem ohne aktiven Transmitter starten.\n"
             "Abbrechen: Run-Start abbrechen.",
+            parent=self,
         )
         if decision is None:
             self._append_validation("ℹ️ Run-Start abgebrochen: Transmitter-Entscheidung abgebrochen.")
@@ -1536,6 +1556,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             messagebox.showerror(
                 "Transmitter-Start fehlgeschlagen",
                 "Transmitter konnte nicht automatisch aktiviert werden (Funktion nicht verfügbar).",
+                parent=self,
             )
             self._append_validation("❌ Run-Start blockiert: TX-Aktivierung ist im Hauptfenster nicht verfügbar.")
             return False
@@ -1547,6 +1568,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 "Transmitter-Start fehlgeschlagen",
                 "Transmitter konnte nicht rechtzeitig aktiviert werden.\n\n"
                 f"Details: {detail}",
+                parent=self,
             )
             self._append_validation(f"❌ Run-Start blockiert: TX-Aktivierung fehlgeschlagen ({detail}).")
             return False
@@ -1780,7 +1802,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._executor.pause()
             self._set_run_buttons(running=True, paused=True)
         except RuntimeError as exc:
-            messagebox.showwarning("Pause", str(exc))
+            messagebox.showwarning("Pause", str(exc), parent=self)
 
     def _resume_run(self) -> None:
         if not self._executor:
@@ -1789,7 +1811,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._executor.resume()
             self._set_run_buttons(running=True, paused=False)
         except RuntimeError as exc:
-            messagebox.showwarning("Fortsetzen", str(exc))
+            messagebox.showwarning("Fortsetzen", str(exc), parent=self)
 
     def _stop_run(self) -> None:
         if not self._executor:
@@ -1797,7 +1819,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         try:
             self._executor.stop()
         except RuntimeError as exc:
-            messagebox.showwarning("Stop", str(exc))
+            messagebox.showwarning("Stop", str(exc), parent=self)
             return
         self._append_validation(
             "Stop angefordert: warte auf serverseitige Cancel-Bestätigung für das laufende Goal."
@@ -1989,11 +2011,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _export_logs(self) -> None:
         if self._run_log_dir is None or not self._run_log_dir.exists():
-            messagebox.showinfo("Export", "Noch keine Run-Logs vorhanden.")
+            messagebox.showinfo("Export", "Noch keine Run-Logs vorhanden.", parent=self)
             return
 
         destination = filedialog.asksaveasfilename(
             title="Run-Logs exportieren",
+            parent=self,
             defaultextension=".zip",
             initialfile=f"{self._run_log_dir.name}.zip",
             filetypes=[("ZIP", "*.zip")],
@@ -2004,4 +2027,4 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for path in sorted(self._run_log_dir.glob("*.json")):
                 zf.write(path, arcname=path.name)
-        messagebox.showinfo("Export", f"Exportiert nach:\n{destination}")
+        messagebox.showinfo("Export", f"Exportiert nach:\n{destination}", parent=self)
