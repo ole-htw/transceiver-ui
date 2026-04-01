@@ -7,6 +7,7 @@ from pathlib import Path
 from transceiver.measurement_mission import MeasurementPoint
 from transceiver.measurement_run_executor import PointExecutionContext
 from transceiver.mission_measurement_service import MissionRxMeasurementService
+from transceiver.navigation_adapter import Ros2CliNavigationTransport
 
 
 class _FakeApp:
@@ -98,7 +99,7 @@ def test_trigger_skips_lidar_reference_when_disabled() -> None:
     assert "lidar_reference" not in payload
 
 
-def test_capture_lidar_reference_uses_bash_shell_with_configured_ros_env(monkeypatch, tmp_path: Path) -> None:
+def test_capture_lidar_reference_uses_navigation_remote_ssh_ros_context(monkeypatch, tmp_path: Path) -> None:
     observed: dict[str, object] = {}
 
     def _fake_run(command, **kwargs):
@@ -117,24 +118,27 @@ def test_capture_lidar_reference_uses_bash_shell_with_configured_ros_env(monkeyp
     service = MissionRxMeasurementService(
         app=_FakeApp(),
         on_status=lambda *_args: None,
-        lidar_ros_env_cmd="source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash",
+        robot_host="robot@10.0.0.2",
+        remote_ros_env_cmd="source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash",
+        fastdds_profiles_file="/etc/nav2/fastdds/nav2.xml",
     )
 
     output_file = tmp_path / "scan.txt"
     payload = service._capture_lidar_reference(output_file)
 
-    assert observed["command"] == [
-        "bash",
-        "-lc",
-        "set -eo pipefail; source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash; "
-        "echo \"TRANSCEIVER_LIDAR_DIAG whoami=$(whoami 2>/dev/null || true)\"; "
-        "echo \"TRANSCEIVER_LIDAR_DIAG HOME=${HOME:-}\"; "
-        "echo \"TRANSCEIVER_LIDAR_DIAG PWD=$(pwd 2>/dev/null || true)\"; "
-        "echo \"TRANSCEIVER_LIDAR_DIAG ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-<unset>}\"; "
-        "echo \"TRANSCEIVER_LIDAR_DIAG ros2_path=$(command -v ros2 2>/dev/null || echo '<not-found>')\"; "
-        "command -v ros2 >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 CLI not found in PATH' >&2; exit 70; }; "
-        "ros2 topic echo /scan --once",
-    ]
+    command = observed["command"]
+    assert command[0:2] == ["ssh", "-o"]
+    assert "robot@10.0.0.2" in command
+    assert "BatchMode=yes" in command
+    assert "ConnectTimeout=15" in command
+    assert command[-3:] and command[-3] == "bash" and command[-2] == "-lc"
+    remote_cmd = command[-1]
+    assert "source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash" in remote_cmd
+    assert "export FASTDDS_DEFAULT_PROFILES_FILE=/etc/nav2/fastdds/nav2.xml" in remote_cmd
+    assert "export FASTRTPS_DEFAULT_PROFILES_FILE=/etc/nav2/fastdds/nav2.xml" in remote_cmd
+    assert "test -n \"${ROS_DOMAIN_ID:-}\"" in remote_cmd
+    assert "ros2 topic info /scan >/dev/null 2>&1" in remote_cmd
+    assert "ros2 topic echo /scan --once" in remote_cmd
     assert observed["kwargs"] == {
         "check": False,
         "capture_output": True,
@@ -143,10 +147,10 @@ def test_capture_lidar_reference_uses_bash_shell_with_configured_ros_env(monkeyp
     }
     assert output_file.read_text(encoding="utf-8") == "scan: ok\n"
     assert payload["topic"] == "/scan"
-    assert payload["command"].startswith("set -eo pipefail; source /opt/ros/jazzy/setup.bash")
+    assert payload["command"].startswith("set -euo pipefail; export FASTDDS_DEFAULT_PROFILES_FILE=")
 
 
-def test_capture_lidar_reference_prefers_setup_file_when_ros_env_cmd_is_empty(monkeypatch, tmp_path: Path) -> None:
+def test_capture_lidar_reference_uses_same_ssh_transport_builder_as_navigation(monkeypatch, tmp_path: Path) -> None:
     observed: dict[str, object] = {}
 
     def _fake_run(command, **kwargs):
@@ -164,7 +168,8 @@ def test_capture_lidar_reference_prefers_setup_file_when_ros_env_cmd_is_empty(mo
     service = MissionRxMeasurementService(
         app=_FakeApp(),
         on_status=lambda *_args: None,
-        lidar_ros_setup="/opt/ros/humble/setup.bash",
+        robot_host="robot@10.0.0.2",
+        remote_ros_setup="/opt/ros/humble/setup.bash",
         lidar_topic="/robot1/scan",
         lidar_timeout_s=20.0,
     )
@@ -172,20 +177,48 @@ def test_capture_lidar_reference_prefers_setup_file_when_ros_env_cmd_is_empty(mo
     output_file = tmp_path / "scan.txt"
     payload = service._capture_lidar_reference(output_file)
 
-    assert observed["command"] == [
-        "bash",
-        "-lc",
-        "set -eo pipefail; source /opt/ros/humble/setup.bash; "
-        "echo \"TRANSCEIVER_LIDAR_DIAG whoami=$(whoami 2>/dev/null || true)\"; "
-        "echo \"TRANSCEIVER_LIDAR_DIAG HOME=${HOME:-}\"; "
-        "echo \"TRANSCEIVER_LIDAR_DIAG PWD=$(pwd 2>/dev/null || true)\"; "
-        "echo \"TRANSCEIVER_LIDAR_DIAG ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-<unset>}\"; "
-        "echo \"TRANSCEIVER_LIDAR_DIAG ros2_path=$(command -v ros2 2>/dev/null || echo '<not-found>')\"; "
-        "command -v ros2 >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 CLI not found in PATH' >&2; exit 70; }; "
-        "ros2 topic echo /robot1/scan --once",
-    ]
+    command = observed["command"]
+    assert command[0:2] == ["ssh", "-o"]
+    remote_cmd = command[-1]
+    assert "source /opt/ros/humble/setup.bash" in remote_cmd
     assert payload["topic"] == "/robot1/scan"
     assert payload["command"].endswith("ros2 topic echo /robot1/scan --once")
+    assert "ros2 topic info /robot1/scan >/dev/null 2>&1" in payload["command"]
+
+    expected = Ros2CliNavigationTransport._build_remote_ssh_command(
+        robot_host="robot@10.0.0.2",
+        connect_timeout_s=20.0,
+        remote_ros_env_cmd="",
+        remote_ros_setup="/opt/ros/humble/setup.bash",
+        fastdds_profiles_file="",
+        remote_command="ros2 topic echo /robot1/scan --once",
+        diagnostics_label="lidar_topic=/robot1/scan",
+        preflight_checks=[
+            "echo \"TRANSCEIVER_LIDAR_DIAG whoami=$(whoami 2>/dev/null || true)\"",
+            "echo \"TRANSCEIVER_LIDAR_DIAG HOME=${HOME:-}\"",
+            "echo \"TRANSCEIVER_LIDAR_DIAG PWD=$(pwd 2>/dev/null || true)\"",
+            "echo \"TRANSCEIVER_LIDAR_DIAG ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-<unset>}\"",
+            "echo \"TRANSCEIVER_LIDAR_DIAG ros2_path=$(command -v ros2 2>/dev/null || echo '<not-found>')\"",
+            "command -v ros2 >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 CLI not found in PATH' >&2; exit 70; }",
+            "test -n \"${ROS_DOMAIN_ID:-}\" || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ROS_DOMAIN_ID is not set' >&2; exit 72; }",
+            "ros2 topic info /robot1/scan >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 topic info /robot1/scan failed' >&2; exit 74; }",
+        ],
+    )
+    assert command == expected
+
+
+def test_capture_lidar_reference_requires_robot_host(tmp_path: Path) -> None:
+    service = MissionRxMeasurementService(
+        app=_FakeApp(),
+        on_status=lambda *_args: None,
+        robot_host="",
+    )
+
+    try:
+        service._capture_lidar_reference(tmp_path / "scan.txt")
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert exc.args == ("TRANSCEIVER_ROBOT_HOST is not configured",)
 
 
 def test_trigger_reports_lidar_called_process_error_details() -> None:

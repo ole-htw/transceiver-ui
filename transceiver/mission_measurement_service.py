@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .measurement_run_executor import PointExecutionContext
+from .navigation_adapter import Ros2CliNavigationTransport
 
 _LOS_ECHO_SAMPLE_TO_M = 1.5
 REVIEW_REASON_REVIEW_UNAVAILABLE = "review_unavailable"
@@ -95,8 +96,10 @@ class MissionRxMeasurementService:
         enable_lidar_reference: bool = True,
         lidar_topic: str = "/scan",
         lidar_timeout_s: float = 15.0,
-        lidar_ros_env_cmd: str = "",
-        lidar_ros_setup: str = "",
+        robot_host: str = "",
+        remote_ros_env_cmd: str = "",
+        remote_ros_setup: str = "",
+        fastdds_profiles_file: str = "",
     ) -> None:
         self._app = app
         self._on_status = on_status
@@ -104,33 +107,38 @@ class MissionRxMeasurementService:
         self._review_measurement = review_measurement
         self._lidar_topic = lidar_topic.strip() or "/scan"
         self._lidar_timeout_s = max(1.0, float(lidar_timeout_s))
-        self._lidar_ros_env_cmd = lidar_ros_env_cmd.strip()
-        self._lidar_ros_setup = lidar_ros_setup.strip()
+        self._robot_host = robot_host.strip()
+        self._remote_ros_env_cmd = remote_ros_env_cmd.strip()
+        self._remote_ros_setup = remote_ros_setup.strip()
+        self._fastdds_profiles_file = fastdds_profiles_file.strip()
         self._collect_lidar_reference = collect_lidar_reference or self._capture_lidar_reference
         self._enable_lidar_reference = enable_lidar_reference
 
     def _capture_lidar_reference(self, output_file: Path) -> dict[str, Any]:
+        if not self._robot_host:
+            raise RuntimeError("TRANSCEIVER_ROBOT_HOST is not configured")
         ros2_command = f"ros2 topic echo {shlex.quote(self._lidar_topic)} --once"
-        shell_parts = ["set -eo pipefail"]
-        if self._lidar_ros_env_cmd:
-            shell_parts.append(self._lidar_ros_env_cmd)
-        elif self._lidar_ros_setup:
-            shell_parts.append(f"source {shlex.quote(self._lidar_ros_setup)}")
-        shell_parts.extend(
-            [
-                "echo \"TRANSCEIVER_LIDAR_DIAG whoami=$(whoami 2>/dev/null || true)\"",
-                "echo \"TRANSCEIVER_LIDAR_DIAG HOME=${HOME:-}\"",
-                "echo \"TRANSCEIVER_LIDAR_DIAG PWD=$(pwd 2>/dev/null || true)\"",
-                "echo \"TRANSCEIVER_LIDAR_DIAG ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-<unset>}\"",
-                "echo \"TRANSCEIVER_LIDAR_DIAG ros2_path=$(command -v ros2 2>/dev/null || echo '<not-found>')\"",
-            ]
+        preflight_checks = [
+            "echo \"TRANSCEIVER_LIDAR_DIAG whoami=$(whoami 2>/dev/null || true)\"",
+            "echo \"TRANSCEIVER_LIDAR_DIAG HOME=${HOME:-}\"",
+            "echo \"TRANSCEIVER_LIDAR_DIAG PWD=$(pwd 2>/dev/null || true)\"",
+            "echo \"TRANSCEIVER_LIDAR_DIAG ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-<unset>}\"",
+            "echo \"TRANSCEIVER_LIDAR_DIAG ros2_path=$(command -v ros2 2>/dev/null || echo '<not-found>')\"",
+            "command -v ros2 >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 CLI not found in PATH' >&2; exit 70; }",
+            "test -n \"${ROS_DOMAIN_ID:-}\" || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ROS_DOMAIN_ID is not set' >&2; exit 72; }",
+            f"ros2 topic info {shlex.quote(self._lidar_topic)} >/dev/null 2>&1 || {{ echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 topic info {self._lidar_topic} failed' >&2; exit 74; }}",
+        ]
+        command = Ros2CliNavigationTransport._build_remote_ssh_command(
+            robot_host=self._robot_host,
+            connect_timeout_s=self._lidar_timeout_s,
+            remote_ros_env_cmd=self._remote_ros_env_cmd,
+            remote_ros_setup=self._remote_ros_setup,
+            fastdds_profiles_file=self._fastdds_profiles_file,
+            remote_command=ros2_command,
+            diagnostics_label=f"lidar_topic={self._lidar_topic}",
+            preflight_checks=preflight_checks,
         )
-        shell_parts.append(
-            "command -v ros2 >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 CLI not found in PATH' >&2; exit 70; }"
-        )
-        shell_parts.append(ros2_command)
-        shell_command = "; ".join(shell_parts)
-        command = ["bash", "-lc", shell_command]
+        shell_command = command[-1]
         LOGGER.debug("LIDAR reference command (final): %s", shell_command)
         completed = subprocess.run(
             command,

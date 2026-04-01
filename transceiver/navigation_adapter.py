@@ -236,6 +236,71 @@ class Ros2CliNavigationTransport:
             return "TRANSCEIVER_REMOTE_ROS_SETUP"
         return "none"
 
+    @staticmethod
+    def _build_remote_ssh_command(
+        *,
+        robot_host: str,
+        connect_timeout_s: float,
+        remote_ros_env_cmd: str,
+        remote_ros_setup: str,
+        fastdds_profiles_file: str,
+        remote_command: str,
+        diagnostics_label: str,
+        preflight_checks: list[str] | None = None,
+    ) -> list[str]:
+        env_exports: list[str] = []
+        if fastdds_profiles_file:
+            quoted_profile = shlex.quote(fastdds_profiles_file)
+            env_exports.extend(
+                [
+                    f"export FASTDDS_DEFAULT_PROFILES_FILE={quoted_profile}",
+                    f"export FASTRTPS_DEFAULT_PROFILES_FILE={quoted_profile}",
+                ]
+            )
+
+        env_source_label = "none"
+        if remote_ros_env_cmd:
+            env_source_label = "TRANSCEIVER_REMOTE_ROS_ENV_CMD"
+        elif remote_ros_setup:
+            env_source_label = "TRANSCEIVER_REMOTE_ROS_SETUP"
+        profile_source_label = (
+            "FASTDDS profile configured"
+            if fastdds_profiles_file
+            else "FASTDDS profile not configured"
+        )
+
+        shell_parts: list[str] = ["set -euo pipefail"]
+        shell_parts.extend(env_exports)
+        if remote_ros_env_cmd:
+            shell_parts.append(remote_ros_env_cmd)
+        elif remote_ros_setup:
+            shell_parts.append(f"source {shlex.quote(remote_ros_setup)}")
+        shell_parts.append(
+            f"echo {shlex.quote(f'[transceiver] ROS env source={env_source_label}; {profile_source_label}; {diagnostics_label}') }"
+        )
+        shell_parts.extend(preflight_checks or [])
+        shell_parts.append(remote_command)
+        remote_cmd = "; ".join(shell_parts)
+        return [
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "PasswordAuthentication=no",
+            "-o",
+            "KbdInteractiveAuthentication=no",
+            "-o",
+            "NumberOfPasswordPrompts=0",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            f"ConnectTimeout={int(max(1.0, connect_timeout_s))}",
+            robot_host,
+            "bash",
+            "-lc",
+            remote_cmd,
+        ]
+
     @classmethod
     def _build_command(cls, point: NavigationPoint, config: NavigationAdapterConfig) -> list[str]:
         resolved_namespace = config.ros2_namespace.strip("/")
@@ -260,57 +325,22 @@ class Ros2CliNavigationTransport:
         remote_setup = config.remote_ros_setup.strip()
         fastdds_profiles_file = config.fastdds_profiles_file.strip()
 
-        env_exports: list[str] = []
-        if fastdds_profiles_file:
-            quoted_profile = shlex.quote(fastdds_profiles_file)
-            env_exports.extend(
-                [
-                    f"export FASTDDS_DEFAULT_PROFILES_FILE={quoted_profile}",
-                    f"export FASTRTPS_DEFAULT_PROFILES_FILE={quoted_profile}",
-                ]
-            )
-
-        env_source_label = cls._build_env_source_label(config)
-        profile_source_label = "FASTDDS profile configured" if fastdds_profiles_file else "FASTDDS profile not configured"
-
         preflight_checks = [
             "command -v ros2 >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 CLI not found in PATH' >&2; exit 70; }",
             "ros2 interface show nav2_msgs/action/NavigateToPose >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: nav2_msgs/action/NavigateToPose is not available' >&2; exit 71; }",
             "test -n \"${ROS_DOMAIN_ID:-}\" || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ROS_DOMAIN_ID is not set' >&2; exit 72; }",
             "ros2 action list >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 action list failed' >&2; exit 73; }",
         ]
-
-        shell_parts: list[str] = ["set -euo pipefail"]
-        shell_parts.extend(env_exports)
-        if remote_ros_env_cmd:
-            shell_parts.append(remote_ros_env_cmd)
-        elif remote_setup:
-            shell_parts.append(f"source {shlex.quote(remote_setup)}")
-        shell_parts.append(
-            f"echo {shlex.quote(f'[transceiver] ROS env source={env_source_label}; {profile_source_label}; namespace={resolved_namespace}') }"
+        return cls._build_remote_ssh_command(
+            robot_host=config.robot_host,
+            connect_timeout_s=config.goal_acceptance_timeout_s,
+            remote_ros_env_cmd=remote_ros_env_cmd,
+            remote_ros_setup=remote_setup,
+            fastdds_profiles_file=fastdds_profiles_file,
+            remote_command=ros2_cmd,
+            diagnostics_label=f"namespace={resolved_namespace}",
+            preflight_checks=preflight_checks,
         )
-        shell_parts.extend(preflight_checks)
-        shell_parts.append(ros2_cmd)
-        remote_cmd = "; ".join(shell_parts)
-        return [
-            "ssh",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "PasswordAuthentication=no",
-            "-o",
-            "KbdInteractiveAuthentication=no",
-            "-o",
-            "NumberOfPasswordPrompts=0",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "-o",
-            f"ConnectTimeout={int(max(1.0, config.goal_acceptance_timeout_s))}",
-            config.robot_host,
-            "bash",
-            "-lc",
-            remote_cmd,
-        ]
 
     def cancel_current_goal(self) -> None:
         process = self._last_process
@@ -379,15 +409,13 @@ class Ros2CliNavigationTransport:
             namespace=config.ros2_namespace,
             action_name=config.ros2_action_name,
         )
-        remote_ros_env_cmd = config.remote_ros_env_cmd.strip()
-        remote_setup = config.remote_ros_setup.strip()
-        shell_parts: list[str] = ["set -euo pipefail"]
-        if remote_ros_env_cmd:
-            shell_parts.append(remote_ros_env_cmd)
-        elif remote_setup:
-            shell_parts.append(f"source {shlex.quote(remote_setup)}")
-        shell_parts.append(
-            " ".join(
+        return cls._build_remote_ssh_command(
+            robot_host=config.robot_host,
+            connect_timeout_s=config.goal_acceptance_timeout_s,
+            remote_ros_env_cmd=config.remote_ros_env_cmd.strip(),
+            remote_ros_setup=config.remote_ros_setup.strip(),
+            fastdds_profiles_file="",
+            remote_command=" ".join(
                 [
                     "ros2",
                     "action",
@@ -396,28 +424,9 @@ class Ros2CliNavigationTransport:
                     "--goal-id",
                     shlex.quote(goal_id),
                 ]
-            )
+            ),
+            diagnostics_label=f"cancel_action={resolved_action}",
         )
-        remote_cmd = "; ".join(shell_parts)
-        return [
-            "ssh",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "PasswordAuthentication=no",
-            "-o",
-            "KbdInteractiveAuthentication=no",
-            "-o",
-            "NumberOfPasswordPrompts=0",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "-o",
-            f"ConnectTimeout={int(max(1.0, config.goal_acceptance_timeout_s))}",
-            config.robot_host,
-            "bash",
-            "-lc",
-            remote_cmd,
-        ]
 
     def send_goal(
         self,

@@ -1504,14 +1504,10 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 enable_lidar_reference=bool(self.lidar_reference_enabled_var.get()),
                 lidar_topic=self._runtime_config.lidar_topic,
                 lidar_timeout_s=self._runtime_config.lidar_reference_timeout_s,
-                lidar_ros_env_cmd=(
-                    self._runtime_config.lidar_ros_env_cmd
-                    or self._runtime_config.remote_ros_env_cmd
-                ),
-                lidar_ros_setup=(
-                    self._runtime_config.lidar_ros_setup
-                    or self._runtime_config.remote_ros_setup
-                ),
+                robot_host=self._runtime_config.robot_host,
+                remote_ros_env_cmd=self._runtime_config.remote_ros_env_cmd,
+                remote_ros_setup=self._runtime_config.remote_ros_setup,
+                fastdds_profiles_file=self._runtime_config.fastdds_profiles_file,
             ),
             persist_result=_persist,
             run_log_store=store,
