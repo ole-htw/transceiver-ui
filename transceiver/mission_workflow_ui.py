@@ -1482,6 +1482,16 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 on_operator_message=self._append_validation,
                 review_measurement=self._review_measurement,
                 enable_lidar_reference=bool(self.lidar_reference_enabled_var.get()),
+                lidar_topic=self._runtime_config.lidar_topic,
+                lidar_timeout_s=self._runtime_config.lidar_reference_timeout_s,
+                lidar_ros_env_cmd=(
+                    self._runtime_config.lidar_ros_env_cmd
+                    or self._runtime_config.remote_ros_env_cmd
+                ),
+                lidar_ros_setup=(
+                    self._runtime_config.lidar_ros_setup
+                    or self._runtime_config.remote_ros_setup
+                ),
             ),
             persist_result=_persist,
             run_log_store=store,

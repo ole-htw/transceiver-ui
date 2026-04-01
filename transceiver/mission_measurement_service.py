@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import shlex
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -88,27 +89,46 @@ class MissionRxMeasurementService:
         review_measurement=None,
         collect_lidar_reference=None,
         enable_lidar_reference: bool = True,
+        lidar_topic: str = "/scan",
+        lidar_timeout_s: float = 15.0,
+        lidar_ros_env_cmd: str = "",
+        lidar_ros_setup: str = "",
     ) -> None:
         self._app = app
         self._on_status = on_status
         self._on_operator_message = on_operator_message
         self._review_measurement = review_measurement
+        self._lidar_topic = lidar_topic.strip() or "/scan"
+        self._lidar_timeout_s = max(1.0, float(lidar_timeout_s))
+        self._lidar_ros_env_cmd = lidar_ros_env_cmd.strip()
+        self._lidar_ros_setup = lidar_ros_setup.strip()
         self._collect_lidar_reference = collect_lidar_reference or self._capture_lidar_reference
         self._enable_lidar_reference = enable_lidar_reference
 
-    @staticmethod
-    def _capture_lidar_reference(output_file: Path) -> dict[str, Any]:
-        command = ["ros2", "topic", "echo", "/scan", "--once"]
+    def _capture_lidar_reference(self, output_file: Path) -> dict[str, Any]:
+        ros2_command = f"ros2 topic echo {shlex.quote(self._lidar_topic)} --once"
+        shell_parts = ["set -euo pipefail"]
+        if self._lidar_ros_env_cmd:
+            shell_parts.append(self._lidar_ros_env_cmd)
+        elif self._lidar_ros_setup:
+            shell_parts.append(f"source {shlex.quote(self._lidar_ros_setup)}")
+        shell_parts.append(
+            "command -v ros2 >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 CLI not found in PATH' >&2; exit 70; }"
+        )
+        shell_parts.append(ros2_command)
+        shell_command = "; ".join(shell_parts)
+        command = ["bash", "-lc", shell_command]
         completed = subprocess.run(
             command,
             check=True,
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=self._lidar_timeout_s,
         )
         payload = {
-            "topic": "/scan",
-            "command": " ".join(command),
+            "topic": self._lidar_topic,
+            "command": shell_command,
+            "shell_command": command,
             "output_file": str(output_file),
         }
         output_file.write_text(completed.stdout, encoding="utf-8")

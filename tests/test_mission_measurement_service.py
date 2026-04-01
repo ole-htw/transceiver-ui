@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 from transceiver.measurement_mission import MeasurementPoint
 from transceiver.measurement_run_executor import PointExecutionContext
@@ -94,3 +95,79 @@ def test_trigger_skips_lidar_reference_when_disabled() -> None:
 
     assert lidar_calls == []
     assert "lidar_reference" not in payload
+
+
+def test_capture_lidar_reference_uses_bash_shell_with_configured_ros_env(monkeypatch, tmp_path: Path) -> None:
+    observed: dict[str, object] = {}
+
+    def _fake_run(command, **kwargs):
+        observed["command"] = command
+        observed["kwargs"] = kwargs
+
+        class _Completed:
+            stdout = "scan: ok\n"
+
+        return _Completed()
+
+    monkeypatch.setattr("subprocess.run", _fake_run)
+
+    service = MissionRxMeasurementService(
+        app=_FakeApp(),
+        on_status=lambda *_args: None,
+        lidar_ros_env_cmd="source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash",
+    )
+
+    output_file = tmp_path / "scan.txt"
+    payload = service._capture_lidar_reference(output_file)
+
+    assert observed["command"] == [
+        "bash",
+        "-lc",
+        "set -euo pipefail; source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash; "
+        "command -v ros2 >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 CLI not found in PATH' >&2; exit 70; }; "
+        "ros2 topic echo /scan --once",
+    ]
+    assert observed["kwargs"] == {
+        "check": True,
+        "capture_output": True,
+        "text": True,
+        "timeout": 15.0,
+    }
+    assert output_file.read_text(encoding="utf-8") == "scan: ok\n"
+    assert payload["topic"] == "/scan"
+    assert payload["command"].startswith("set -euo pipefail; source /opt/ros/jazzy/setup.bash")
+
+
+def test_capture_lidar_reference_prefers_setup_file_when_ros_env_cmd_is_empty(monkeypatch, tmp_path: Path) -> None:
+    observed: dict[str, object] = {}
+
+    def _fake_run(command, **kwargs):
+        observed["command"] = command
+
+        class _Completed:
+            stdout = "scan: ok\n"
+
+        return _Completed()
+
+    monkeypatch.setattr("subprocess.run", _fake_run)
+
+    service = MissionRxMeasurementService(
+        app=_FakeApp(),
+        on_status=lambda *_args: None,
+        lidar_ros_setup="/opt/ros/humble/setup.bash",
+        lidar_topic="/robot1/scan",
+        lidar_timeout_s=20.0,
+    )
+
+    output_file = tmp_path / "scan.txt"
+    payload = service._capture_lidar_reference(output_file)
+
+    assert observed["command"] == [
+        "bash",
+        "-lc",
+        "set -euo pipefail; source /opt/ros/humble/setup.bash; "
+        "command -v ros2 >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 CLI not found in PATH' >&2; exit 70; }; "
+        "ros2 topic echo /robot1/scan --once",
+    ]
+    assert payload["topic"] == "/robot1/scan"
+    assert payload["command"].endswith("ros2 topic echo /robot1/scan --once")
