@@ -627,6 +627,19 @@ class Ros2CliPoseStreamTransport:
     _NO_DATA_WARNING_AFTER_S = 5.0
     _DEFAULT_EXPECTED_FRAME_ID = "map"
     _TRANSCEIVER_BANNER_PREFIX = "[transceiver]"
+    _POSE_STREAM_TOP_LEVEL_KEYS = frozenset(
+        {
+            "header",
+            "stamp",
+            "frame_id",
+            "pose",
+            "position",
+            "orientation",
+            "covariance",
+        }
+    )
+    _POSE_STREAM_NESTED_KEYS = frozenset({"x", "y", "z", "w", "sec", "nanosec"})
+    _ENV_ASSIGNMENT_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
     def __init__(self) -> None:
         self._thread: threading.Thread | None = None
@@ -664,11 +677,11 @@ class Ros2CliPoseStreamTransport:
         shell_parts: list[str] = ["set -euo pipefail"]
         shell_parts.extend(env_exports)
         if remote_ros_env_cmd:
-            shell_parts.append(remote_ros_env_cmd)
+            shell_parts.append(f"{{ {remote_ros_env_cmd}; }} 1>&2")
         elif remote_setup:
-            shell_parts.append(f"source {shlex.quote(remote_setup)}")
+            shell_parts.append(f"source {shlex.quote(remote_setup)} 1>&2")
         shell_parts.append(
-            f"echo {shlex.quote(f'[transceiver] ROS env source={env_source_label}; {profile_source_label}; pose_topic={topic}') }"
+            f">&2 echo {shlex.quote(f'[transceiver] ROS env source={env_source_label}; {profile_source_label}; pose_topic={topic}') }"
         )
         shell_parts.extend(
             [
@@ -791,6 +804,25 @@ class Ros2CliPoseStreamTransport:
         lowered = stripped_line.lower()
         return lowered == "header:"
 
+    @classmethod
+    def _is_pose_stream_data_line(cls, line: str) -> bool:
+        stripped = line.strip()
+        if not stripped:
+            return False
+        if stripped == "---":
+            return True
+        if cls._is_transceiver_banner_line(stripped):
+            return False
+        if cls._ENV_ASSIGNMENT_PATTERN.match(stripped):
+            return False
+        if ":" not in stripped:
+            return False
+        key = stripped.split(":", 1)[0].strip().lower()
+        indent = len(line) - len(line.lstrip(" "))
+        if indent == 0:
+            return key in cls._POSE_STREAM_TOP_LEVEL_KEYS
+        return key in cls._POSE_STREAM_TOP_LEVEL_KEYS or key in cls._POSE_STREAM_NESTED_KEYS
+
     def _stop_process(self) -> None:
         with self._lock:
             process = self._process
@@ -876,7 +908,7 @@ class Ros2CliPoseStreamTransport:
                 has_reported_stream_stall_warning = False
                 has_reported_frame_mismatch = False
                 has_seen_any_stdout_data = False
-                has_seen_transceiver_banner = False
+                has_seen_foreign_stdout_data = False
                 has_seen_pose_raw_data = False
                 has_seen_complete_message_block = False
                 has_seen_parse_error_block = False
@@ -954,9 +986,14 @@ class Ros2CliPoseStreamTransport:
                         has_seen_any_stdout_data = True
                         stripped = raw_line.strip()
                         if stripped and self._is_transceiver_banner_line(stripped):
-                            has_seen_transceiver_banner = True
+                            has_seen_foreign_stdout_data = True
+                            continue
+                        if stripped and not self._is_pose_stream_data_line(raw_line.rstrip("\n")):
+                            has_seen_foreign_stdout_data = True
                             continue
                         if stripped == "---":
+                            if not block_lines:
+                                continue
                             raw_block = "\n".join(block_lines)
                             block_lines = []
                             _handle_completed_block(raw_block)
@@ -978,9 +1015,9 @@ class Ros2CliPoseStreamTransport:
                                 "keine /amcl_pose-Daten empfangen: Topic sichtbar, aber keine Nachrichten "
                                 f"(>{self._NO_DATA_WARNING_AFTER_S:.0f}s nach Verbindungsaufbau)"
                             )
-                        elif has_seen_transceiver_banner and not has_seen_pose_raw_data:
+                        elif has_seen_foreign_stdout_data and not has_seen_pose_raw_data:
                             message = (
-                                "nur Transceiver-Statusbanner empfangen, aber noch keine /amcl_pose-Nachrichten "
+                                "nur Fremd-/Setup-Ausgaben empfangen, aber noch keine /amcl_pose-Nachrichten "
                                 f"(>{self._NO_DATA_WARNING_AFTER_S:.0f}s nach Verbindungsaufbau)"
                             )
                         elif has_seen_pose_raw_data and not has_seen_complete_message_block:
