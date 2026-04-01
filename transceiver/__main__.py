@@ -5417,7 +5417,42 @@ class TransceiverUI(ctk.CTk):
 
     def _get_crosscorr_reference(self) -> tuple[np.ndarray, str]:
         """Return TX reference data and a label for cross-correlation."""
-        return getattr(self, "tx_data", np.array([], dtype=np.complex64)), "TX"
+        current = np.asarray(getattr(self, "tx_data", np.array([], dtype=np.complex64)))
+        if current.size > 0:
+            return current, "TX"
+        fallback = self._load_tx_reference_data()
+        if fallback.size > 0:
+            self.tx_data = fallback
+            return fallback, "TX"
+        return current, "TX"
+
+    def _load_tx_reference_data(self) -> np.ndarray:
+        """Load TX IQ samples from configured TX file and cache the result."""
+        tx_reference_path = _strip_zeros_tx_filename(self.tx_file.get())
+        if tx_reference_path == self._cached_tx_path:
+            return np.asarray(self._cached_tx_data)
+
+        try:
+            raw = np.fromfile(tx_reference_path, dtype=np.int16)
+            if raw.size % 2:
+                raw = raw[:-1]
+            raw = raw.reshape(-1, 2).astype(np.float32)
+            tx_data = raw[:, 0] + 1j * raw[:, 1]
+        except Exception as exc:
+            tx_data = np.array([], dtype=np.complex64)
+            if self._cached_tx_load_error_path != tx_reference_path:
+                logging.warning(
+                    "TX-Referenzdatei konnte nicht geladen werden (%s): %s",
+                    tx_reference_path,
+                    exc,
+                )
+                self._cached_tx_load_error_path = tx_reference_path
+        else:
+            self._cached_tx_load_error_path = None
+
+        self._cached_tx_path = tx_reference_path
+        self._cached_tx_data = tx_data
+        return tx_data
 
     def _display_rx_plots(
         self,
@@ -5484,35 +5519,7 @@ class TransceiverUI(ctk.CTk):
             if self.trim_var.get():
                 data = self._trim_data(data)
 
-            def _load_tx_samples(path: str) -> np.ndarray:
-                raw = np.fromfile(path, dtype=np.int16)
-                if raw.size % 2:
-                    raw = raw[:-1]
-                raw = raw.reshape(-1, 2).astype(np.float32)
-                return raw[:, 0] + 1j * raw[:, 1]
-
-            tx_reference_path = _strip_zeros_tx_filename(self.tx_file.get())
-            if tx_reference_path == self._cached_tx_path:
-                self.tx_data = self._cached_tx_data
-            else:
-                try:
-                    tx_data = _load_tx_samples(tx_reference_path)
-                except Exception as exc:
-                    self.tx_data = np.array([], dtype=np.complex64)
-                    self._cached_tx_path = tx_reference_path
-                    self._cached_tx_data = self.tx_data
-                    if self._cached_tx_load_error_path != tx_reference_path:
-                        logging.warning(
-                            "TX-Referenzdatei konnte nicht geladen werden (%s): %s",
-                            tx_reference_path,
-                            exc,
-                        )
-                        self._cached_tx_load_error_path = tx_reference_path
-                else:
-                    self.tx_data = tx_data
-                    self._cached_tx_path = tx_reference_path
-                    self._cached_tx_data = tx_data
-                    self._cached_tx_load_error_path = None
+            self.tx_data = self._load_tx_reference_data()
             ref_data, ref_label = self._get_crosscorr_reference()
             if self.rx_magnitude_enable.get():
                 data = np.abs(data)
