@@ -443,7 +443,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "measurement_idx": "Messung",
             "idx": "Punktindex",
             "nav": "Navigation",
-            "measurement": "Messung",
+            "measurement": "Status",
             "echo_delays": "LOS->Echo",
             "status": "Gesamtstatus",
             "error": "Fehler",
