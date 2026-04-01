@@ -414,6 +414,7 @@ class MeasurementRunExecutor:
             )
             self._persist_point_log(
                 point=point,
+                point_index=point_index,
                 cycle=cycle,
                 global_index=global_index,
                 navigation_state=nav_state,
@@ -440,6 +441,7 @@ class MeasurementRunExecutor:
             )
             self._persist_point_log(
                 point=point,
+                point_index=point_index,
                 cycle=cycle,
                 global_index=global_index,
                 navigation_state="canceled",
@@ -495,6 +497,7 @@ class MeasurementRunExecutor:
             )
             self._persist_point_log(
                 point=point,
+                point_index=point_index,
                 cycle=cycle,
                 global_index=global_index,
                 navigation_state=nav_state,
@@ -509,6 +512,7 @@ class MeasurementRunExecutor:
 
         self._persist_point_log(
             point=point,
+            point_index=point_index,
             cycle=cycle,
             global_index=global_index,
             navigation_state=nav_state,
@@ -543,6 +547,7 @@ class MeasurementRunExecutor:
         self,
         *,
         point: MeasurementPoint,
+        point_index: int,
         cycle: int,
         global_index: int,
         navigation_state: TerminalNavigationState | None,
@@ -559,6 +564,7 @@ class MeasurementRunExecutor:
             "mission": self.mission.name,
             "cycle": cycle,
             "global_index": global_index,
+            "point_index": point_index,
             "point": {
                 "id": point.id,
                 "name": point.name,

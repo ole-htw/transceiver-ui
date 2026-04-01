@@ -436,12 +436,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
-        columns = ("idx", "point", "nav", "measurement", "echo_delays", "status", "error")
+        columns = ("measurement_idx", "idx", "nav", "measurement", "echo_delays", "status", "error")
         self.results_table = ttk.Treeview(table_frame, columns=columns, show="headings", height=14)
         self.results_table.grid(row=0, column=0, sticky="nsew")
         headings = {
+            "measurement_idx": "Messung",
             "idx": "Punktindex",
-            "point": "Punkt",
             "nav": "Navigation",
             "measurement": "Messung",
             "echo_delays": "LOS->Echo",
@@ -451,6 +451,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         for key, title in headings.items():
             self.results_table.heading(key, text=title)
             self.results_table.column(key, stretch=True, width=110)
+        self.results_table.column("measurement_idx", width=80)
         self.results_table.column("echo_delays", width=190)
         self.results_table.column("error", width=260)
 
@@ -1931,7 +1932,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _on_record(self, payload: dict[str, Any]) -> None:
         self._records.append(payload)
-        point = payload.get("point", {})
         nav = payload.get("navigation", {})
         meas = payload.get("measurement", {})
         result = meas.get("result", {}) if isinstance(meas.get("result"), dict) else {}
@@ -1949,7 +1949,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "end",
             values=(
                 payload.get("global_index", ""),
-                point.get("id") or point.get("name") or "-",
+                payload.get("point_index", ""),
                 nav.get("state", "-"),
                 meas.get("status", "-"),
                 echo_delays_text,
