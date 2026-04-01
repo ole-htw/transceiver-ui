@@ -1117,7 +1117,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 "",
                 "end",
                 values=(
-                    idx,
+                    idx + 1,
                     "✓" if point.enabled else "✗",
                     point.name or "-",
                     f"{point.x:.3f}",
@@ -1897,7 +1897,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
     def _update_live_label(self, *, stage: str | None = None, status: str | None = None) -> None:
         total = len(self._mission.points) * (self._mission.repeat or 1) if self._mission else 0
         done = len(self._records)
-        current_idx = done if done < total else max(0, total - 1)
+        current_idx = min(done + 1, total) if total > 0 else 0
 
         nav_status = "idle"
         meas_status = "idle"
@@ -1924,7 +1924,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             pose_age_s = max(0.0, time.time() - self._live_position_received_at)
             pose_age_text = f"{pose_age_s:.1f}s"
         self.live_var.set(
-            f"Punktindex: {current_idx}/{max(total - 1, 0)} | "
+            f"Punktindex: {current_idx}/{total} | "
             f"Navigation: {nav_status} | Messung: {meas_status} | "
             f"Verbleibend: {remaining} | ETA: {eta} | "
             f"Pose-Alter: {pose_age_text} | Live-Status: {diagnosis_text}"
@@ -1949,7 +1949,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "end",
             values=(
                 payload.get("global_index", ""),
-                payload.get("point_index", ""),
+                self._format_one_based_index(payload.get("point_index")),
                 nav.get("state", "-"),
                 meas.get("status", "-"),
                 echo_delays_text,
@@ -1958,6 +1958,14 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             ),
         )
         self._update_live_label()
+
+    @staticmethod
+    def _format_one_based_index(value: Any) -> str:
+        if isinstance(value, bool):
+            return str(value)
+        if isinstance(value, int):
+            return str(value + 1) if value >= 0 else str(value)
+        return str(value) if value is not None else ""
 
     @staticmethod
     def _format_echo_delays_for_table(value: Any) -> str:
