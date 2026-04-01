@@ -709,6 +709,7 @@ class Ros2CliPoseStreamTransport:
                     "topic",
                     "echo",
                     shlex.quote(topic),
+                    "2>/dev/null",
                 ]
             )
         )
