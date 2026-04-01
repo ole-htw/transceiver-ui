@@ -169,7 +169,7 @@ def test_capture_lidar_reference_uses_same_ssh_transport_builder_as_navigation(m
         app=_FakeApp(),
         on_status=lambda *_args: None,
         robot_host="robot@10.0.0.2",
-        remote_ros_setup="/opt/ros/humble/setup.bash",
+        remote_ros_setup="/opt/ros/jazzy/setup.bash",
         lidar_topic="/robot1/scan",
         lidar_timeout_s=20.0,
     )
@@ -180,7 +180,7 @@ def test_capture_lidar_reference_uses_same_ssh_transport_builder_as_navigation(m
     command = observed["command"]
     assert command[0:2] == ["ssh", "-o"]
     remote_cmd = command[-1]
-    assert "source /opt/ros/humble/setup.bash" in remote_cmd
+    assert "source /opt/ros/jazzy/setup.bash" in remote_cmd
     assert payload["topic"] == "/robot1/scan"
     assert payload["command"].endswith("ros2 topic echo /robot1/scan --once")
     assert "ros2 topic info /robot1/scan >/dev/null 2>&1" in payload["command"]
@@ -189,7 +189,7 @@ def test_capture_lidar_reference_uses_same_ssh_transport_builder_as_navigation(m
         robot_host="robot@10.0.0.2",
         connect_timeout_s=20.0,
         remote_ros_env_cmd="",
-        remote_ros_setup="/opt/ros/humble/setup.bash",
+        remote_ros_setup="/opt/ros/jazzy/setup.bash",
         fastdds_profiles_file="",
         remote_command="ros2 topic echo /robot1/scan --once",
         diagnostics_label="lidar_topic=/robot1/scan",
