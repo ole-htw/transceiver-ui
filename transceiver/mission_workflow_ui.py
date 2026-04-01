@@ -89,13 +89,24 @@ class _UiNavigator:
         self._on_status = on_status
         self._on_operator_message = on_operator_message
         self._pose_stream = Ros2CliPoseStreamTransport()
+        self._latest_pose_lock = threading.Lock()
+        self._latest_pose_from_stream: dict[str, Any] | None = None
 
     def start_pose_stream(
         self,
         *,
         on_runtime_event: Callable[[dict[str, Any]], None],
     ) -> None:
-        self._pose_stream.start(config=self._adapter.config, on_event=on_runtime_event)
+        def _on_pose_stream_event(payload: dict[str, Any]) -> None:
+            if payload.get("type") == "pose_stream":
+                event = payload.get("event")
+                if isinstance(event, dict) and event.get("type") == "position_update":
+                    position = event.get("position")
+                    with self._latest_pose_lock:
+                        self._latest_pose_from_stream = position if isinstance(position, dict) else None
+            on_runtime_event(payload)
+
+        self._pose_stream.start(config=self._adapter.config, on_event=_on_pose_stream_event)
 
     def stop_pose_stream(self) -> None:
         self._pose_stream.stop()
@@ -109,7 +120,12 @@ class _UiNavigator:
     ):
         self._on_status("navigation", "running")
         latest_position_lock = threading.Lock()
-        latest_position: dict[str, Any] | None = None
+        with self._latest_pose_lock:
+            latest_position: dict[str, Any] | None = (
+                dict(self._latest_pose_from_stream)
+                if isinstance(self._latest_pose_from_stream, dict)
+                else None
+            )
         polling_active = threading.Event()
         polling_active.set()
 
@@ -148,10 +164,10 @@ class _UiNavigator:
             if event.type == "succeeded":
                 self._on_status("navigation", "succeeded")
             if event.type in {"feedback", "position"}:
-                payload = event.data if isinstance(event.data, dict) else {}
-                position = payload if event.type == "position" else payload.get("position")
+                with self._latest_pose_lock:
+                    stream_position = self._latest_pose_from_stream
                 with latest_position_lock:
-                    latest_position = position if isinstance(position, dict) else None
+                    latest_position = dict(stream_position) if isinstance(stream_position, dict) else None
 
         state = self._adapter.navigate_to_point(point, timeout_s=timeout_s, on_event=_on_event)
         polling_active.clear()
