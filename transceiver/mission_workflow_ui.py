@@ -96,6 +96,7 @@ class _UiNavigator:
         self,
         *,
         on_runtime_event: Callable[[dict[str, Any]], None],
+        expected_frame_id: str | None = None,
     ) -> None:
         def _on_pose_stream_event(payload: dict[str, Any]) -> None:
             if payload.get("type") == "pose_stream":
@@ -106,7 +107,11 @@ class _UiNavigator:
                         self._latest_pose_from_stream = position if isinstance(position, dict) else None
             on_runtime_event(payload)
 
-        self._pose_stream.start(config=self._adapter.config, on_event=_on_pose_stream_event)
+        self._pose_stream.start(
+            config=self._adapter.config,
+            on_event=_on_pose_stream_event,
+            expected_frame_id=expected_frame_id,
+        )
 
     def stop_pose_stream(self) -> None:
         self._pose_stream.stop()
@@ -1715,7 +1720,10 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if should_run:
             navigator = self._ensure_navigator()
             if not self._live_pose_stream_active:
-                navigator.start_pose_stream(on_runtime_event=self._on_executor_runtime_event)
+                navigator.start_pose_stream(
+                    on_runtime_event=self._on_executor_runtime_event,
+                    expected_frame_id=self._expected_live_frame_id(),
+                )
                 self._live_pose_stream_active = True
             return
         if self._navigator is not None and self._live_pose_stream_active:

@@ -625,6 +625,7 @@ class Ros2CliPoseStreamTransport:
     _STAMP_NANOSEC_PATTERN = re.compile(r"\bnanosec\s*:\s*(\d+)\b", re.IGNORECASE)
     _NUMERIC_PATTERN = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
     _NO_DATA_WARNING_AFTER_S = 5.0
+    _DEFAULT_EXPECTED_FRAME_ID = "map"
 
     def __init__(self) -> None:
         self._thread: threading.Thread | None = None
@@ -776,6 +777,10 @@ class Ros2CliPoseStreamTransport:
             "timestamp": timestamp,
         }
 
+    @staticmethod
+    def _tail_text(text: str, *, max_lines: int = 6) -> str:
+        return Ros2CliNavigationTransport._tail_text(text, max_lines=max_lines)
+
     def _stop_process(self) -> None:
         with self._lock:
             process = self._process
@@ -798,12 +803,17 @@ class Ros2CliPoseStreamTransport:
         *,
         config: NavigationAdapterConfig,
         on_event: Callable[[dict[str, Any]], None],
+        expected_frame_id: str | None = None,
     ) -> None:
         self.stop()
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run_loop,
-            kwargs={"config": config, "on_event": on_event},
+            kwargs={
+                "config": config,
+                "on_event": on_event,
+                "expected_frame_id": expected_frame_id,
+            },
             daemon=True,
         )
         self._thread.start()
@@ -821,7 +831,13 @@ class Ros2CliPoseStreamTransport:
         *,
         config: NavigationAdapterConfig,
         on_event: Callable[[dict[str, Any]], None],
+        expected_frame_id: str | None = None,
     ) -> None:
+        expected_frame = (
+            expected_frame_id.strip()
+            if isinstance(expected_frame_id, str) and expected_frame_id.strip()
+            else self._DEFAULT_EXPECTED_FRAME_ID
+        )
         reconnect_attempt = 0
         while not self._stop_event.is_set():
             reconnect_attempt += 1
@@ -848,6 +864,9 @@ class Ros2CliPoseStreamTransport:
                 block_lines: list[str] = []
                 connected_at = time.time()
                 has_reported_no_data_warning = False
+                has_reported_frame_mismatch = False
+                has_seen_any_message_block = False
+                has_seen_valid_payload = False
                 while not self._stop_event.is_set():
                     raw_line = ""
                     if process.stdout is not None and hasattr(process.stdout, "fileno"):
@@ -859,16 +878,57 @@ class Ros2CliPoseStreamTransport:
                     if raw_line:
                         stripped = raw_line.strip()
                         if stripped == "---":
-                            payload = self._extract_pose_payload("\n".join(block_lines))
+                            raw_block = "\n".join(block_lines)
+                            has_seen_any_message_block = has_seen_any_message_block or bool(raw_block.strip())
+                            payload = self._extract_pose_payload(raw_block)
                             block_lines = []
                             if payload is not None:
                                 has_reported_no_data_warning = True
+                                has_seen_valid_payload = True
+                                received_frame = payload.get("frame_id")
+                                if (
+                                    not has_reported_frame_mismatch
+                                    and isinstance(received_frame, str)
+                                    and received_frame.strip()
+                                    and received_frame != expected_frame
+                                ):
+                                    has_reported_frame_mismatch = True
+                                    on_event(
+                                        {
+                                            "type": "pose_stream",
+                                            "event": {
+                                                "type": "stream_error",
+                                                "message": (
+                                                    "unerwarteter /amcl_pose frame_id: "
+                                                    f"erwartet={expected_frame}, empfangen={received_frame}"
+                                                ),
+                                                "attempt": reconnect_attempt,
+                                                "timestamp": time.time(),
+                                            },
+                                        }
+                                    )
                                 on_event(
                                     {
                                         "type": "pose_stream",
                                         "event": {
                                             "type": "position_update",
                                             "position": payload,
+                                        },
+                                    }
+                                )
+                            elif raw_block.strip():
+                                has_reported_no_data_warning = True
+                                on_event(
+                                    {
+                                        "type": "pose_stream",
+                                        "event": {
+                                            "type": "stream_error",
+                                            "message": (
+                                                "amcl_pose-Nachricht empfangen, aber nicht parsebar "
+                                                f"(x/y fehlen oder ungültig); raw={self._tail_text(raw_block, max_lines=5)}"
+                                            ),
+                                            "attempt": reconnect_attempt,
+                                            "timestamp": time.time(),
                                         },
                                     }
                                 )
@@ -884,14 +944,14 @@ class Ros2CliPoseStreamTransport:
                         on_event(
                             {
                                 "type": "pose_stream",
-                                "event": {
-                                    "type": "stream_error",
-                                    "message": (
-                                        "keine /amcl_pose-Nachrichten empfangen "
+                                    "event": {
+                                        "type": "stream_error",
+                                        "message": (
+                                        "keine /amcl_pose-Daten empfangen: Topic sichtbar, aber keine Nachrichten "
                                         f"(>{self._NO_DATA_WARNING_AFTER_S:.0f}s nach Verbindungsaufbau)"
-                                    ),
-                                    "attempt": reconnect_attempt,
-                                    "timestamp": time.time(),
+                                        ),
+                                        "attempt": reconnect_attempt,
+                                        "timestamp": time.time(),
                                 },
                             }
                         )
@@ -915,7 +975,17 @@ class Ros2CliPoseStreamTransport:
                         )
                         message = f"ROS environment precheck failed before starting pose stream: {reason}"
                     else:
-                        message = f"pose stream disconnected (exit_code={exit_code}); stderr={stderr_tail}"
+                        stderr_part = f"; stderr={stderr_tail}" if stderr_tail else ""
+                        if has_seen_any_message_block and not has_seen_valid_payload:
+                            message = (
+                                "pose stream disconnected after unparseable /amcl_pose data "
+                                f"(exit_code={exit_code}){stderr_part}"
+                            )
+                        else:
+                            message = (
+                                "pose stream disconnected after connection "
+                                f"(exit_code={exit_code}; had_data={has_seen_valid_payload}){stderr_part}"
+                            )
                     on_event(
                         {
                             "type": "pose_stream",
