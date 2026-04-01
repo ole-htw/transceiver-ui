@@ -626,6 +626,7 @@ class Ros2CliPoseStreamTransport:
     _NUMERIC_PATTERN = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
     _NO_DATA_WARNING_AFTER_S = 5.0
     _DEFAULT_EXPECTED_FRAME_ID = "map"
+    _TRANSCEIVER_BANNER_PREFIX = "[transceiver]"
 
     def __init__(self) -> None:
         self._thread: threading.Thread | None = None
@@ -781,6 +782,15 @@ class Ros2CliPoseStreamTransport:
     def _tail_text(text: str, *, max_lines: int = 6) -> str:
         return Ros2CliNavigationTransport._tail_text(text, max_lines=max_lines)
 
+    @classmethod
+    def _is_transceiver_banner_line(cls, stripped_line: str) -> bool:
+        return stripped_line.startswith(cls._TRANSCEIVER_BANNER_PREFIX)
+
+    @staticmethod
+    def _is_likely_new_message_start(stripped_line: str) -> bool:
+        lowered = stripped_line.lower()
+        return lowered == "header:"
+
     def _stop_process(self) -> None:
         with self._lock:
             process = self._process
@@ -866,8 +876,72 @@ class Ros2CliPoseStreamTransport:
                 has_reported_stream_stall_warning = False
                 has_reported_frame_mismatch = False
                 has_seen_any_stdout_data = False
-                has_seen_any_message_block = False
+                has_seen_transceiver_banner = False
+                has_seen_pose_raw_data = False
+                has_seen_complete_message_block = False
+                has_seen_parse_error_block = False
                 has_seen_valid_payload = False
+
+                def _handle_completed_block(raw_block: str) -> None:
+                    nonlocal has_seen_complete_message_block
+                    nonlocal has_seen_valid_payload
+                    nonlocal has_seen_parse_error_block
+                    nonlocal has_reported_frame_mismatch
+                    cleaned_block = raw_block.strip()
+                    if not cleaned_block:
+                        return
+                    has_seen_complete_message_block = True
+                    payload = self._extract_pose_payload(cleaned_block)
+                    if payload is not None:
+                        has_seen_valid_payload = True
+                        received_frame = payload.get("frame_id")
+                        if (
+                            not has_reported_frame_mismatch
+                            and isinstance(received_frame, str)
+                            and received_frame.strip()
+                            and received_frame != expected_frame
+                        ):
+                            has_reported_frame_mismatch = True
+                            on_event(
+                                {
+                                    "type": "pose_stream",
+                                    "event": {
+                                        "type": "stream_error",
+                                        "message": (
+                                            "unerwarteter /amcl_pose frame_id: "
+                                            f"erwartet={expected_frame}, empfangen={received_frame}"
+                                        ),
+                                        "attempt": reconnect_attempt,
+                                        "timestamp": time.time(),
+                                    },
+                                }
+                            )
+                        on_event(
+                            {
+                                "type": "pose_stream",
+                                "event": {
+                                    "type": "position_update",
+                                    "position": payload,
+                                },
+                            }
+                        )
+                        return
+                    has_seen_parse_error_block = True
+                    on_event(
+                        {
+                            "type": "pose_stream",
+                            "event": {
+                                "type": "stream_error",
+                                "message": (
+                                    "amcl_pose-Nachricht empfangen, aber nicht parsebar "
+                                    f"(x/y fehlen oder ungültig); raw={self._tail_text(cleaned_block, max_lines=5)}"
+                                ),
+                                "attempt": reconnect_attempt,
+                                "timestamp": time.time(),
+                            },
+                        }
+                    )
+
                 while not self._stop_event.is_set():
                     raw_line = ""
                     if process.stdout is not None and hasattr(process.stdout, "fileno"):
@@ -879,61 +953,19 @@ class Ros2CliPoseStreamTransport:
                     if raw_line:
                         has_seen_any_stdout_data = True
                         stripped = raw_line.strip()
+                        if stripped and self._is_transceiver_banner_line(stripped):
+                            has_seen_transceiver_banner = True
+                            continue
                         if stripped == "---":
                             raw_block = "\n".join(block_lines)
-                            has_seen_any_message_block = has_seen_any_message_block or bool(raw_block.strip())
-                            payload = self._extract_pose_payload(raw_block)
                             block_lines = []
-                            if payload is not None:
-                                has_seen_valid_payload = True
-                                received_frame = payload.get("frame_id")
-                                if (
-                                    not has_reported_frame_mismatch
-                                    and isinstance(received_frame, str)
-                                    and received_frame.strip()
-                                    and received_frame != expected_frame
-                                ):
-                                    has_reported_frame_mismatch = True
-                                    on_event(
-                                        {
-                                            "type": "pose_stream",
-                                            "event": {
-                                                "type": "stream_error",
-                                                "message": (
-                                                    "unerwarteter /amcl_pose frame_id: "
-                                                    f"erwartet={expected_frame}, empfangen={received_frame}"
-                                                ),
-                                                "attempt": reconnect_attempt,
-                                                "timestamp": time.time(),
-                                            },
-                                        }
-                                    )
-                                on_event(
-                                    {
-                                        "type": "pose_stream",
-                                        "event": {
-                                            "type": "position_update",
-                                            "position": payload,
-                                        },
-                                    }
-                                )
-                            elif raw_block.strip():
-                                on_event(
-                                    {
-                                        "type": "pose_stream",
-                                        "event": {
-                                            "type": "stream_error",
-                                            "message": (
-                                                "amcl_pose-Nachricht empfangen, aber nicht parsebar "
-                                                f"(x/y fehlen oder ungültig); raw={self._tail_text(raw_block, max_lines=5)}"
-                                            ),
-                                            "attempt": reconnect_attempt,
-                                            "timestamp": time.time(),
-                                        },
-                                    }
-                                )
+                            _handle_completed_block(raw_block)
                             continue
                         if stripped:
+                            if self._is_likely_new_message_start(stripped) and block_lines:
+                                _handle_completed_block("\n".join(block_lines))
+                                block_lines = []
+                            has_seen_pose_raw_data = True
                             block_lines.append(raw_line.rstrip("\n"))
                         continue
                     if (
@@ -946,10 +978,20 @@ class Ros2CliPoseStreamTransport:
                                 "keine /amcl_pose-Daten empfangen: Topic sichtbar, aber keine Nachrichten "
                                 f"(>{self._NO_DATA_WARNING_AFTER_S:.0f}s nach Verbindungsaufbau)"
                             )
-                        elif not has_seen_any_message_block:
+                        elif has_seen_transceiver_banner and not has_seen_pose_raw_data:
+                            message = (
+                                "nur Transceiver-Statusbanner empfangen, aber noch keine /amcl_pose-Nachrichten "
+                                f"(>{self._NO_DATA_WARNING_AFTER_S:.0f}s nach Verbindungsaufbau)"
+                            )
+                        elif has_seen_pose_raw_data and not has_seen_complete_message_block:
                             message = (
                                 "amcl_pose-Rohdaten empfangen, aber noch kein kompletter Nachrichtenblock "
-                                f"(fehlender '---'-Blocktrenner nach >{self._NO_DATA_WARNING_AFTER_S:.0f}s)"
+                                f"(nach >{self._NO_DATA_WARNING_AFTER_S:.0f}s; warte auf Blockabschluss)"
+                            )
+                        elif has_seen_parse_error_block and not has_seen_valid_payload:
+                            message = (
+                                "kompletter /amcl_pose-Block empfangen, aber Parsing fehlgeschlagen "
+                                f"(nach >{self._NO_DATA_WARNING_AFTER_S:.0f}s noch kein gültiger Pose-Block)"
                             )
                         else:
                             message = ""
@@ -973,6 +1015,9 @@ class Ros2CliPoseStreamTransport:
                     if poll is not None:
                         break
                 if not self._stop_event.is_set():
+                    if block_lines:
+                        _handle_completed_block("\n".join(block_lines))
+                        block_lines = []
                     exit_code = process.poll()
                     stderr_tail = ""
                     if process.stderr is not None:
@@ -990,7 +1035,7 @@ class Ros2CliPoseStreamTransport:
                         message = f"ROS environment precheck failed before starting pose stream: {reason}"
                     else:
                         stderr_part = f"; stderr={stderr_tail}" if stderr_tail else ""
-                        if has_seen_any_message_block and not has_seen_valid_payload:
+                        if has_seen_complete_message_block and not has_seen_valid_payload:
                             message = (
                                 "pose stream disconnected after unparseable /amcl_pose data "
                                 f"(exit_code={exit_code}){stderr_part}"

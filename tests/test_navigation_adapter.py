@@ -812,6 +812,134 @@ def test_pose_stream_reports_raw_data_without_complete_block(monkeypatch) -> Non
     assert any("noch kein kompletter Nachrichtenblock" in message for message in messages)
 
 
+def test_pose_stream_banner_only_is_not_counted_as_raw_amcl_data(monkeypatch) -> None:
+    class _Stream:
+        def __init__(self, lines: list[str], rest: str = "") -> None:
+            self._lines = lines
+            self._idx = 0
+            self._rest = rest
+
+        def readline(self) -> str:
+            if self._idx >= len(self._lines):
+                return ""
+            line = self._lines[self._idx]
+            self._idx += 1
+            return line
+
+        def read(self) -> str:
+            return self._rest
+
+    class _Process:
+        def __init__(self) -> None:
+            self.stdout = _Stream(
+                [
+                    "[transceiver] ROS env source=TRANSCEIVER_REMOTE_ROS_ENV_CMD; pose_topic=/amcl_pose\n",
+                ]
+            )
+            self.stderr = _Stream([], rest="")
+
+        def poll(self):
+            return None
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self, timeout: float) -> int:
+            return 0
+
+    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
+    monkeypatch.setattr(Ros2CliPoseStreamTransport, "_NO_DATA_WARNING_AFTER_S", 0.0)
+
+    transport = Ros2CliPoseStreamTransport()
+    events: list[dict[str, object]] = []
+
+    def _on_event(payload: dict[str, object]) -> None:
+        events.append(payload)
+        event = payload.get("event") if isinstance(payload, dict) else None
+        if isinstance(event, dict) and "nur Transceiver-Statusbanner" in str(event.get("message")):
+            transport._stop_event.set()
+
+    transport._run_loop(
+        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
+        on_event=_on_event,
+    )
+
+    messages = [
+        str(payload["event"]["message"])
+        for payload in events
+        if isinstance(payload.get("event"), dict) and payload["event"].get("type") == "stream_error"
+    ]
+    assert any("nur Transceiver-Statusbanner" in message for message in messages)
+    assert not any("noch kein kompletter Nachrichtenblock" in message for message in messages)
+
+
+def test_pose_stream_parses_completed_block_without_separator(monkeypatch) -> None:
+    class _Stream:
+        def __init__(self, lines: list[str], rest: str = "") -> None:
+            self._lines = lines
+            self._idx = 0
+            self._rest = rest
+
+        def readline(self) -> str:
+            if self._idx >= len(self._lines):
+                return ""
+            line = self._lines[self._idx]
+            self._idx += 1
+            return line
+
+        def read(self) -> str:
+            return self._rest
+
+    class _Process:
+        def __init__(self) -> None:
+            self.stdout = _Stream(
+                [
+                    "header:\n",
+                    "  frame_id: map\n",
+                    "pose:\n",
+                    "  pose:\n",
+                    "    position:\n",
+                    "      x: 1.0\n",
+                    "      y: 2.0\n",
+                ]
+            )
+            self.stderr = _Stream([], rest="")
+
+        def poll(self):
+            return 0 if self.stdout._idx >= len(self.stdout._lines) else None
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self, timeout: float) -> int:
+            return 0
+
+    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
+
+    transport = Ros2CliPoseStreamTransport()
+    events: list[dict[str, object]] = []
+
+    def _on_event(payload: dict[str, object]) -> None:
+        events.append(payload)
+        event = payload.get("event") if isinstance(payload, dict) else None
+        if isinstance(event, dict) and event.get("type") == "position_update":
+            transport._stop_event.set()
+
+    transport._run_loop(
+        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
+        on_event=_on_event,
+    )
+
+    updates = [
+        payload["event"]["position"]
+        for payload in events
+        if isinstance(payload.get("event"), dict) and payload["event"].get("type") == "position_update"
+    ]
+    assert updates
+    assert updates[0]["x"] == 1.0
+    assert updates[0]["y"] == 2.0
+
+
 def test_pose_stream_reports_frame_id_mismatch(monkeypatch) -> None:
     class _Stream:
         def __init__(self, lines: list[str], rest: str = "") -> None:
