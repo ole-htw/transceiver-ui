@@ -127,6 +127,39 @@ def test_run_rx_thread_mission_uses_shared_subprocess_executor_without_single_ui
     assert displayed == []
 
 
+def test_run_rx_thread_single_without_explicit_output_file_sets_result_output_file(monkeypatch) -> None:
+    ui = object.__new__(TransceiverUI)
+    ui._out_queue = queue.Queue()
+    ui._cmd_running = True
+    ui._rx_running = True
+    ui._proc = object()
+    ui._ui = lambda callback: callback()
+    ui._reset_rx_buttons = lambda: None
+    captured_args: list[list[str]] = []
+    ui._execute_rx_subprocess = lambda **kwargs: captured_args.append(list(kwargs["arg_list"])) or 0
+    monkeypatch.setattr(
+        "transceiver.__main__.rx_convert.load_iq_file",
+        lambda *_args, **_kwargs: [1, 2, 3],
+    )
+
+    result = TransceiverUI._run_rx_thread(
+        ui,
+        ["-a", "type=b200"],
+        channels=1,
+        rate=1_000_000.0,
+        backend_only=True,
+        mission_mode=False,
+    )
+
+    assert result["ok"] is True
+    assert isinstance(result["output_file"], str)
+    assert str(result["output_file"]).startswith("signals/rx/rx_auto_")
+    assert str(result["output_file"]).endswith(".bin")
+    assert captured_args and "--output-file" in captured_args[0]
+    out_idx = captured_args[0].index("--output-file")
+    assert captured_args[0][out_idx + 1] == result["output_file"]
+
+
 def test_receive_for_mission_uses_worker_path_and_waits_for_result() -> None:
     ui = object.__new__(TransceiverUI)
     ui._cmd_running = False
