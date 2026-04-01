@@ -340,13 +340,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         points_table_frame.columnconfigure(0, weight=1)
         points_table_frame.rowconfigure(1, weight=1)
         ctk.CTkLabel(points_table_frame, text="3) Wegpunkte").grid(row=0, column=0, sticky="w", padx=8, pady=(8, 2))
-        point_columns = ("idx", "enabled", "id", "name", "x", "y", "z", "yaw")
+        point_columns = ("idx", "enabled", "name", "x", "y", "z", "yaw")
         self.points_table = ttk.Treeview(points_table_frame, columns=point_columns, show="headings", height=6)
         self.points_table.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
         for key, title in {
             "idx": "#",
             "enabled": "Aktiv",
-            "id": "ID",
             "name": "Name",
             "x": "X",
             "y": "Y",
@@ -393,6 +392,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             command=lambda _value: self._persist_workflow_state(),
         )
         self.start_point_combo.grid(row=1, column=2, columnspan=2, padx=(0, 8), pady=(0, 4), sticky="w")
+        self.reverse_point_order_var = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            controls,
+            text="Reihenfolge umdrehen",
+            variable=self.reverse_point_order_var,
+            command=self._persist_workflow_state,
+        ).grid(row=2, column=3, padx=(10, 8), pady=3, sticky="w")
         self.pause_btn = ctk.CTkButton(controls, text="Pause", command=self._pause_run, state="disabled")
         self.pause_btn.grid(row=2, column=0, padx=(8, 3), pady=3, sticky="w")
         self.resume_btn = ctk.CTkButton(controls, text="Fortsetzen", command=self._resume_run, state="disabled")
@@ -1102,7 +1108,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 values=(
                     idx,
                     "✓" if point.enabled else "✗",
-                    point.id or "-",
                     point.name or "-",
                     f"{point.x:.3f}",
                     f"{point.y:.3f}",
@@ -1128,7 +1133,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     @staticmethod
     def _format_start_point_label(index: int, point: MeasurementPoint) -> str:
-        display_name = point.name or point.id or f"Punkt {index + 1}"
+        display_name = point.name or f"Punkt {index + 1}"
         return f"{index + 1}: {display_name}"
 
     def _active_start_points(self) -> list[tuple[int, MeasurementPoint]]:
@@ -1276,6 +1281,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "map_config_file": self._selected_map_config_file,
             "rx_antenna_global_position": self._serialize_rx_antenna_global_position(),
             "lidar_reference_enabled": bool(self.lidar_reference_enabled_var.get()),
+            "reverse_point_order": bool(self.reverse_point_order_var.get()),
         }
 
     def _serialize_rx_antenna_global_position(self) -> dict[str, float] | None:
@@ -1353,6 +1359,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             else:
                 self._set_rx_antenna_position(x=rx_position[0], y=rx_position[1], persist=False)
             self.lidar_reference_enabled_var.set(bool(payload.get("lidar_reference_enabled", True)))
+            self.reverse_point_order_var.set(bool(payload.get("reverse_point_order", False)))
             self._refresh_points_table()
             self._refresh_map_section()
             persisted_start_point = payload.get("start_point_index")
@@ -1479,6 +1486,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 goal_reached_timeout_s=self._runtime_config.goal_reached_timeout_s,
                 navigation_retry_attempts=self._runtime_config.navigation_retry_attempts,
                 start_point_index=start_point_index,
+                reverse_point_order=bool(self.reverse_point_order_var.get()),
             ),
         )
 
