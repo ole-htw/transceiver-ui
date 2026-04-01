@@ -259,3 +259,87 @@ def test_review_measurement_for_mission_applies_same_interpolation_as_single_rec
     np.testing.assert_allclose(captured_ctx_input["data"], np.array([2.0, 4.0]))
     np.testing.assert_allclose(captured_ctx_input["ref_data"], np.array([9.0, 12.0]))
     assert outcome["approved"] is False
+
+
+def test_review_measurement_for_mission_uses_persisted_tx_reference_without_single_rx(
+    monkeypatch, tmp_path
+) -> None:
+    import numpy as np
+    import queue
+    import transceiver.__main__ as app_module
+
+    tx_path = tmp_path / "persisted_tx.bin"
+    np.array([10, 20, 30, 40], dtype=np.int16).tofile(tx_path)
+
+    ui = object.__new__(TransceiverUI)
+    ui._ui = lambda callback: callback()
+    ui._out_queue = queue.Queue()
+    ui.latest_fs = 10.0
+    ui.tx_data = np.array([], dtype=np.complex64)
+    ui._cached_tx_path = None
+    ui._cached_tx_data = np.array([], dtype=np.complex64)
+    ui._cached_tx_load_error_path = None
+    ui.tx_file = types.SimpleNamespace(get=lambda: str(tx_path))
+    ui.rx_channel_2 = types.SimpleNamespace(get=lambda: False)
+    ui.rx_xcorr_normalized_enable = types.SimpleNamespace(get=lambda: False)
+    ui.rx_interpolation_enable = types.SimpleNamespace(get=lambda: False)
+    ui._select_rx_display_data = lambda loaded: (loaded, "CH0")
+    ui._apply_crosscorr_interpolation = (
+        lambda data, fs, ref_data, crosscorr_compare=None, **_kwargs: (data, ref_data, crosscorr_compare, fs)
+    )
+
+    monkeypatch.setattr(
+        app_module.rx_convert,
+        "load_iq_file",
+        lambda *_args, **_kwargs: np.array([1.0, 2.0], dtype=float),
+    )
+
+    class _DummyApp:
+        def activeWindow(self):
+            return None
+
+    monkeypatch.setattr(app_module.pg, "mkQApp", lambda: _DummyApp())
+    monkeypatch.setattr(app_module.QtWidgets.QApplication, "topLevelWidgets", lambda: [], raising=False)
+    monkeypatch.setattr(app_module.messagebox, "showerror", lambda *_args, **_kwargs: None)
+
+    captured_ctx_input: dict[str, np.ndarray] = {}
+
+    def _fake_build_ctx(data, ref_data, **_kwargs):
+        captured_ctx_input["ref_data"] = np.asarray(ref_data)
+        return {
+            "lags": np.array([0.0]),
+            "mag": np.array([1.0]),
+            "los_idx": 0,
+            "echo_indices": [],
+        }
+
+    monkeypatch.setattr(app_module, "_build_crosscorr_ctx", _fake_build_ctx)
+
+    class _DummyDialog:
+        def __init__(self, **_kwargs):
+            self.confirmed = False
+            self.selected_los_idx = None
+            self.selected_echo_indices = []
+            self.manual_lags = {}
+            self.echo_delays = []
+
+        def raise_(self):
+            return None
+
+        def activateWindow(self):
+            return None
+
+        def exec(self):
+            return 0
+
+    monkeypatch.setattr(app_module, "MissionMeasurementReviewDialog", _DummyDialog)
+
+    outcome = TransceiverUI.review_measurement_for_mission(
+        ui,
+        point_label="P1",
+        output_file="signals/rx/mission/demo.bin",
+    )
+
+    np.testing.assert_allclose(captured_ctx_input["ref_data"], np.array([10.0 + 20.0j, 30.0 + 40.0j]))
+    assert ui.tx_data.size == 2
+    assert outcome["reason"] != "missing_tx_reference"
