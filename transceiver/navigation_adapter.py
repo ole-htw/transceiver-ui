@@ -863,8 +863,9 @@ class Ros2CliPoseStreamTransport:
                 )
                 block_lines: list[str] = []
                 connected_at = time.time()
-                has_reported_no_data_warning = False
+                has_reported_stream_stall_warning = False
                 has_reported_frame_mismatch = False
+                has_seen_any_stdout_data = False
                 has_seen_any_message_block = False
                 has_seen_valid_payload = False
                 while not self._stop_event.is_set():
@@ -876,6 +877,7 @@ class Ros2CliPoseStreamTransport:
                     elif process.stdout is not None:
                         raw_line = process.stdout.readline()
                     if raw_line:
+                        has_seen_any_stdout_data = True
                         stripped = raw_line.strip()
                         if stripped == "---":
                             raw_block = "\n".join(block_lines)
@@ -883,7 +885,6 @@ class Ros2CliPoseStreamTransport:
                             payload = self._extract_pose_payload(raw_block)
                             block_lines = []
                             if payload is not None:
-                                has_reported_no_data_warning = True
                                 has_seen_valid_payload = True
                                 received_frame = payload.get("frame_id")
                                 if (
@@ -917,7 +918,6 @@ class Ros2CliPoseStreamTransport:
                                     }
                                 )
                             elif raw_block.strip():
-                                has_reported_no_data_warning = True
                                 on_event(
                                     {
                                         "type": "pose_stream",
@@ -937,21 +937,35 @@ class Ros2CliPoseStreamTransport:
                             block_lines.append(raw_line.rstrip("\n"))
                         continue
                     if (
-                        not has_reported_no_data_warning
+                        not has_reported_stream_stall_warning
                         and (time.time() - connected_at) >= self._NO_DATA_WARNING_AFTER_S
                     ):
-                        has_reported_no_data_warning = True
+                        has_reported_stream_stall_warning = True
+                        if not has_seen_any_stdout_data:
+                            message = (
+                                "keine /amcl_pose-Daten empfangen: Topic sichtbar, aber keine Nachrichten "
+                                f"(>{self._NO_DATA_WARNING_AFTER_S:.0f}s nach Verbindungsaufbau)"
+                            )
+                        elif not has_seen_any_message_block:
+                            message = (
+                                "amcl_pose-Rohdaten empfangen, aber noch kein kompletter Nachrichtenblock "
+                                f"(fehlender '---'-Blocktrenner nach >{self._NO_DATA_WARNING_AFTER_S:.0f}s)"
+                            )
+                        else:
+                            message = ""
+                        if not message:
+                            poll = process.poll()
+                            if poll is not None:
+                                break
+                            continue
                         on_event(
                             {
                                 "type": "pose_stream",
-                                    "event": {
-                                        "type": "stream_error",
-                                        "message": (
-                                        "keine /amcl_pose-Daten empfangen: Topic sichtbar, aber keine Nachrichten "
-                                        f"(>{self._NO_DATA_WARNING_AFTER_S:.0f}s nach Verbindungsaufbau)"
-                                        ),
-                                        "attempt": reconnect_attempt,
-                                        "timestamp": time.time(),
+                                "event": {
+                                    "type": "stream_error",
+                                    "message": message,
+                                    "attempt": reconnect_attempt,
+                                    "timestamp": time.time(),
                                 },
                             }
                         )

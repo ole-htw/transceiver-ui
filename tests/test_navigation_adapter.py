@@ -688,6 +688,130 @@ def test_pose_stream_reports_parse_error_excerpt(monkeypatch) -> None:
     assert "raw=header:" in parse_errors[0]
 
 
+def test_pose_stream_parse_error_does_not_emit_no_data_warning(monkeypatch) -> None:
+    class _Stream:
+        def __init__(self, lines: list[str], rest: str = "") -> None:
+            self._lines = lines
+            self._idx = 0
+            self._rest = rest
+
+        def readline(self) -> str:
+            if self._idx >= len(self._lines):
+                return ""
+            line = self._lines[self._idx]
+            self._idx += 1
+            return line
+
+        def read(self) -> str:
+            return self._rest
+
+    class _Process:
+        def __init__(self) -> None:
+            self.stdout = _Stream(
+                [
+                    "header:\n",
+                    "  frame_id: map\n",
+                    "---\n",
+                ]
+            )
+            self.stderr = _Stream([], rest="")
+
+        def poll(self):
+            return 0 if self.stdout._idx >= len(self.stdout._lines) else None
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self, timeout: float) -> int:
+            return 0
+
+    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
+    monkeypatch.setattr(Ros2CliPoseStreamTransport, "_NO_DATA_WARNING_AFTER_S", 0.0)
+
+    transport = Ros2CliPoseStreamTransport()
+    events: list[dict[str, object]] = []
+
+    def _on_event(payload: dict[str, object]) -> None:
+        events.append(payload)
+        event = payload.get("event") if isinstance(payload, dict) else None
+        if isinstance(event, dict) and "nicht parsebar" in str(event.get("message")):
+            transport._stop_event.set()
+
+    transport._run_loop(
+        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
+        on_event=_on_event,
+    )
+
+    messages = [
+        str(payload["event"]["message"])
+        for payload in events
+        if isinstance(payload.get("event"), dict) and payload["event"].get("type") == "stream_error"
+    ]
+    assert any("nicht parsebar" in message for message in messages)
+    assert not any("Topic sichtbar, aber keine Nachrichten" in message for message in messages)
+
+
+def test_pose_stream_reports_raw_data_without_complete_block(monkeypatch) -> None:
+    class _Stream:
+        def __init__(self, lines: list[str], rest: str = "") -> None:
+            self._lines = lines
+            self._idx = 0
+            self._rest = rest
+
+        def readline(self) -> str:
+            if self._idx >= len(self._lines):
+                return ""
+            line = self._lines[self._idx]
+            self._idx += 1
+            return line
+
+        def read(self) -> str:
+            return self._rest
+
+    class _Process:
+        def __init__(self) -> None:
+            self.stdout = _Stream(
+                [
+                    "header:\n",
+                    "  frame_id: map\n",
+                ]
+            )
+            self.stderr = _Stream([], rest="")
+
+        def poll(self):
+            return None
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self, timeout: float) -> int:
+            return 0
+
+    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
+    monkeypatch.setattr(Ros2CliPoseStreamTransport, "_NO_DATA_WARNING_AFTER_S", 0.0)
+
+    transport = Ros2CliPoseStreamTransport()
+    events: list[dict[str, object]] = []
+
+    def _on_event(payload: dict[str, object]) -> None:
+        events.append(payload)
+        event = payload.get("event") if isinstance(payload, dict) else None
+        if isinstance(event, dict) and "noch kein kompletter Nachrichtenblock" in str(event.get("message")):
+            transport._stop_event.set()
+
+    transport._run_loop(
+        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
+        on_event=_on_event,
+    )
+
+    messages = [
+        str(payload["event"]["message"])
+        for payload in events
+        if isinstance(payload.get("event"), dict) and payload["event"].get("type") == "stream_error"
+    ]
+    assert any("noch kein kompletter Nachrichtenblock" in message for message in messages)
+
+
 def test_pose_stream_reports_frame_id_mismatch(monkeypatch) -> None:
     class _Stream:
         def __init__(self, lines: list[str], rest: str = "") -> None:
