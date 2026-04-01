@@ -625,6 +625,7 @@ class Ros2CliPoseStreamTransport:
     _STAMP_NANOSEC_PATTERN = re.compile(r"\bnanosec\s*:\s*(\d+)\b", re.IGNORECASE)
     _NUMERIC_PATTERN = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
     _NO_DATA_WARNING_AFTER_S = 5.0
+    _BLOCK_IDLE_FLUSH_AFTER_S = 0.35
     _DEFAULT_EXPECTED_FRAME_ID = "map"
     _TRANSCEIVER_BANNER_PREFIX = "[transceiver]"
     _POSE_STREAM_TOP_LEVEL_KEYS = frozenset(
@@ -791,6 +792,18 @@ class Ros2CliPoseStreamTransport:
             "timestamp": timestamp,
         }
 
+    @classmethod
+    def _looks_like_complete_pose_block(cls, block_lines: list[str]) -> bool:
+        if not block_lines:
+            return False
+        block_text = "\n".join(line for line in block_lines if line.strip())
+        if not block_text:
+            return False
+        lowered = block_text.lower()
+        if "position:" not in lowered:
+            return False
+        return cls._extract_position_xy(block_text) is not None
+
     @staticmethod
     def _tail_text(text: str, *, max_lines: int = 6) -> str:
         return Ros2CliNavigationTransport._tail_text(text, max_lines=max_lines)
@@ -913,16 +926,22 @@ class Ros2CliPoseStreamTransport:
                 has_seen_complete_message_block = False
                 has_seen_parse_error_block = False
                 has_seen_valid_payload = False
+                has_seen_parseable_unflushed_block = False
+                saw_separator = False
+                saw_header = False
+                last_pose_line_at: float | None = None
 
-                def _handle_completed_block(raw_block: str) -> None:
+                def _handle_completed_block(raw_block: str, *, flush_reason: str) -> None:
                     nonlocal has_seen_complete_message_block
                     nonlocal has_seen_valid_payload
                     nonlocal has_seen_parse_error_block
                     nonlocal has_reported_frame_mismatch
+                    nonlocal has_seen_parseable_unflushed_block
                     cleaned_block = raw_block.strip()
                     if not cleaned_block:
                         return
                     has_seen_complete_message_block = True
+                    has_seen_parseable_unflushed_block = False
                     payload = self._extract_pose_payload(cleaned_block)
                     if payload is not None:
                         has_seen_valid_payload = True
@@ -954,6 +973,7 @@ class Ros2CliPoseStreamTransport:
                                 "event": {
                                     "type": "position_update",
                                     "position": payload,
+                                    "block_flush_reason": flush_reason,
                                 },
                             }
                         )
@@ -964,13 +984,15 @@ class Ros2CliPoseStreamTransport:
                             "type": "pose_stream",
                             "event": {
                                 "type": "stream_error",
-                                "message": (
-                                    "amcl_pose-Nachricht empfangen, aber nicht parsebar "
-                                    f"(x/y fehlen oder ungültig); raw={self._tail_text(cleaned_block, max_lines=5)}"
-                                ),
-                                "attempt": reconnect_attempt,
-                                "timestamp": time.time(),
-                            },
+                                    "message": (
+                                        "amcl_pose-Nachricht empfangen, aber nicht parsebar "
+                                        f"(x/y fehlen oder ungültig); raw={self._tail_text(cleaned_block, max_lines=5)}"
+                                    ),
+                                    "raw_pose_excerpt": self._tail_text(cleaned_block, max_lines=5),
+                                    "block_flush_reason": flush_reason,
+                                    "attempt": reconnect_attempt,
+                                    "timestamp": time.time(),
+                                },
                         }
                     )
 
@@ -985,30 +1007,53 @@ class Ros2CliPoseStreamTransport:
                     if raw_line:
                         has_seen_any_stdout_data = True
                         stripped = raw_line.strip()
+                        if stripped == "---":
+                            saw_separator = True
+                            if not block_lines:
+                                continue
+                            raw_block = "\n".join(block_lines)
+                            block_lines = []
+                            _handle_completed_block(raw_block, flush_reason="separator")
+                            continue
                         if stripped and self._is_transceiver_banner_line(stripped):
                             has_seen_foreign_stdout_data = True
                             continue
                         if stripped and not self._is_pose_stream_data_line(raw_line.rstrip("\n")):
                             has_seen_foreign_stdout_data = True
                             continue
-                        if stripped == "---":
-                            if not block_lines:
-                                continue
-                            raw_block = "\n".join(block_lines)
-                            block_lines = []
-                            _handle_completed_block(raw_block)
-                            continue
                         if stripped:
+                            if self._is_likely_new_message_start(stripped):
+                                saw_header = True
                             if self._is_likely_new_message_start(stripped) and block_lines:
-                                _handle_completed_block("\n".join(block_lines))
+                                _handle_completed_block(
+                                    "\n".join(block_lines),
+                                    flush_reason="new_header",
+                                )
                                 block_lines = []
                             has_seen_pose_raw_data = True
                             block_lines.append(raw_line.rstrip("\n"))
+                            has_seen_parseable_unflushed_block = self._looks_like_complete_pose_block(
+                                block_lines
+                            )
+                            last_pose_line_at = time.time()
+                        continue
+                    if (
+                        block_lines
+                        and has_seen_parseable_unflushed_block
+                        and last_pose_line_at is not None
+                        and (time.time() - last_pose_line_at) >= self._BLOCK_IDLE_FLUSH_AFTER_S
+                    ):
+                        _handle_completed_block("\n".join(block_lines), flush_reason="idle_flush")
+                        block_lines = []
                         continue
                     if (
                         not has_reported_stream_stall_warning
                         and (time.time() - connected_at) >= self._NO_DATA_WARNING_AFTER_S
                     ):
+                        if block_lines and has_seen_parseable_unflushed_block:
+                            _handle_completed_block("\n".join(block_lines), flush_reason="idle_flush")
+                            block_lines = []
+                            continue
                         has_reported_stream_stall_warning = True
                         if not has_seen_any_stdout_data:
                             message = (
@@ -1019,6 +1064,11 @@ class Ros2CliPoseStreamTransport:
                             message = (
                                 "nur Fremd-/Setup-Ausgaben empfangen, aber noch keine /amcl_pose-Nachrichten "
                                 f"(>{self._NO_DATA_WARNING_AFTER_S:.0f}s nach Verbindungsaufbau)"
+                            )
+                        elif has_seen_pose_raw_data and has_seen_parseable_unflushed_block:
+                            message = (
+                                "parsebarer /amcl_pose-Block liegt im Buffer, wurde aber noch nicht geflusht "
+                                f"(nach >{self._NO_DATA_WARNING_AFTER_S:.0f}s)"
                             )
                         elif has_seen_pose_raw_data and not has_seen_complete_message_block:
                             message = (
@@ -1043,6 +1093,13 @@ class Ros2CliPoseStreamTransport:
                                 "event": {
                                     "type": "stream_error",
                                     "message": message,
+                                    "raw_pose_excerpt": self._tail_text("\n".join(block_lines), max_lines=6),
+                                    "saw_separator": saw_separator,
+                                    "saw_header": saw_header,
+                                    "buffer_line_count": len(block_lines),
+                                    "block_flush_reason": "idle_flush"
+                                    if has_seen_parseable_unflushed_block
+                                    else ("separator" if saw_separator else ("new_header" if saw_header else "")),
                                     "attempt": reconnect_attempt,
                                     "timestamp": time.time(),
                                 },
@@ -1053,7 +1110,7 @@ class Ros2CliPoseStreamTransport:
                         break
                 if not self._stop_event.is_set():
                     if block_lines:
-                        _handle_completed_block("\n".join(block_lines))
+                        _handle_completed_block("\n".join(block_lines), flush_reason="idle_flush")
                         block_lines = []
                     exit_code = process.poll()
                     stderr_tail = ""
