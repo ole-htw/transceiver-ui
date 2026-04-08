@@ -224,6 +224,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
         self._build_ui()
         self._restore_workflow_state()
+        self._sync_live_pose_stream_state()
         self.after_idle(self._stabilize_initial_geometry)
         self.after_idle(self._open_maximized)
 
@@ -1811,6 +1812,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "lidar_reference_enabled": bool(self.lidar_reference_enabled_var.get()),
             "manual_review_enabled": bool(self.manual_review_enabled_var.get()),
             "reverse_point_order": bool(self.reverse_point_order_var.get()),
+            "live_pose_stream_enabled": bool(self.live_pose_stream_enabled_var.get()),
         }
 
     def _serialize_rx_antenna_global_position(self) -> dict[str, float] | None:
@@ -1890,6 +1892,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self.lidar_reference_enabled_var.set(bool(payload.get("lidar_reference_enabled", True)))
             self.manual_review_enabled_var.set(bool(payload.get("manual_review_enabled", True)))
             self.reverse_point_order_var.set(bool(payload.get("reverse_point_order", False)))
+            self.live_pose_stream_enabled_var.set(bool(payload.get("live_pose_stream_enabled", False)))
             self._refresh_points_table()
             self._refresh_map_section()
             persisted_start_point = payload.get("start_point_index")
@@ -2273,6 +2276,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._refresh_review_ready_indicator()
 
     def _on_live_pose_stream_switch_changed(self) -> None:
+        self._persist_workflow_state()
         self._sync_live_pose_stream_state()
         self._update_live_label()
 

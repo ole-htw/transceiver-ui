@@ -366,3 +366,15 @@ def test_check_run_prerequisites_skips_review_requirements_when_manual_review_di
 
     assert ok is True
     assert reasons == []
+
+
+def test_on_live_pose_stream_switch_changed_persists_and_syncs() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    calls: list[str] = []
+    window._persist_workflow_state = lambda: calls.append("persist")
+    window._sync_live_pose_stream_state = lambda: calls.append("sync")
+    window._update_live_label = lambda: calls.append("label")
+
+    window._on_live_pose_stream_switch_changed()
+
+    assert calls == ["persist", "sync", "label"]
