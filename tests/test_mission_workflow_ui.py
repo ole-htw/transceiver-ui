@@ -208,6 +208,7 @@ def test_ui_navigator_navigation_succeeds_without_feedback_position(monkeypatch)
 
 def test_on_map_canvas_click_ignores_click_when_pick_mode_disabled() -> None:
     window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._waypoint_map_pick_mode_enabled = False
     window._rx_antenna_map_pick_mode_enabled = False
     window._preview_pixel_to_world = lambda **_kwargs: (1.0, 2.0)
     calls: list[tuple[float, float]] = []
@@ -222,6 +223,7 @@ def test_on_map_canvas_click_ignores_click_when_pick_mode_disabled() -> None:
 
 def test_on_map_canvas_click_sets_position_and_disables_pick_mode() -> None:
     window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._waypoint_map_pick_mode_enabled = False
     window._rx_antenna_map_pick_mode_enabled = True
     window._preview_pixel_to_world = lambda **_kwargs: (3.5, -2.5)
     set_calls: list[tuple[float, float]] = []
@@ -233,4 +235,49 @@ def test_on_map_canvas_click_sets_position_and_disables_pick_mode() -> None:
     window._on_map_canvas_click(SimpleNamespace(x=10, y=20))
 
     assert set_calls == [(3.5, -2.5)]
+    assert mode_calls == [False]
+
+
+def test_on_map_canvas_click_starts_waypoint_pick_preview() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._waypoint_map_pick_mode_enabled = True
+    window._preview_pixel_to_world = lambda **_kwargs: (1.5, 2.5)
+    window._draw_map_preview = lambda: None
+
+    window._on_map_canvas_click(SimpleNamespace(x=15, y=25))
+
+    assert window._pending_waypoint_world_position == (1.5, 2.5)
+    assert window._waypoint_drag_start_preview == (15.0, 25.0)
+    assert window._pending_waypoint_yaw_radians == 0.0
+    assert window._waypoint_drag_active is False
+
+
+def test_on_map_canvas_drag_updates_pending_waypoint_yaw() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._waypoint_map_pick_mode_enabled = True
+    window._pending_waypoint_world_position = (1.0, 1.0)
+    window._waypoint_drag_start_preview = (10.0, 10.0)
+    window._draw_map_preview = lambda: None
+
+    window._on_map_canvas_drag(SimpleNamespace(x=20, y=10))
+
+    assert window._waypoint_drag_active is True
+    assert window._pending_waypoint_yaw_radians == 0.0
+
+
+def test_on_map_canvas_release_creates_waypoint_and_disables_pick_mode() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._waypoint_map_pick_mode_enabled = True
+    window._pending_waypoint_world_position = (4.0, -3.0)
+    window._waypoint_drag_active = True
+    window._pending_waypoint_yaw_radians = 1.2
+    add_calls: list[tuple[float, float, float]] = []
+    mode_calls: list[bool] = []
+    window._add_point_from_values = lambda *, x, y, yaw_internal_radians, name=None: add_calls.append((x, y, yaw_internal_radians))
+    window._clear_pending_waypoint_marker = lambda: None
+    window._set_waypoint_map_pick_mode = lambda enabled: mode_calls.append(enabled)
+
+    window._on_map_canvas_release(SimpleNamespace(x=4, y=2))
+
+    assert add_calls == [(4.0, -3.0, 1.2)]
     assert mode_calls == [False]
