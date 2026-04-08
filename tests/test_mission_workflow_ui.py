@@ -108,6 +108,48 @@ def test_extract_lidar_ranges_from_scan_text_supports_list_style() -> None:
     assert values[2] == 3.4
 
 
+def test_draw_lidar_scan_overlay_deduplicates_dense_endpoints() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._map_image_original = SimpleNamespace(width=lambda: 200, height=lambda: 120)
+    window._map_preview_scale = (1.0, 1.0)
+    window._map_preview_offset = (0.0, 0.0)
+    window._world_to_map_pixel = lambda *, x, y, image_height: (x, y)
+    window._is_pixel_inside_map = lambda *_args, **_kwargs: True
+    line_calls: list[tuple[float, float, float, float]] = []
+    window.map_preview_canvas = SimpleNamespace(
+        create_oval=lambda *_args, **_kwargs: None,
+        create_line=lambda sx, sy, ex, ey, **_kwargs: line_calls.append((sx, sy, ex, ey)),
+    )
+
+    window._draw_lidar_scan_overlay_for_point(
+        point=MeasurementPoint(id="p1", name="P1", x=10.0, y=20.0, yaw=0.0),
+        scan={"angle_min": 0.0, "angle_increment": 0.0, "ranges": [2.0] * 1800},
+    )
+
+    assert len(line_calls) == 1
+
+
+def test_draw_lidar_scan_overlay_adapts_stride_for_large_scan() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._map_image_original = SimpleNamespace(width=lambda: 3000, height=lambda: 3000)
+    window._map_preview_scale = (1.0, 1.0)
+    window._map_preview_offset = (0.0, 0.0)
+    window._world_to_map_pixel = lambda *, x, y, image_height: (x, y)
+    window._is_pixel_inside_map = lambda *_args, **_kwargs: True
+    line_calls: list[tuple[float, float, float, float]] = []
+    window.map_preview_canvas = SimpleNamespace(
+        create_oval=lambda *_args, **_kwargs: None,
+        create_line=lambda sx, sy, ex, ey, **_kwargs: line_calls.append((sx, sy, ex, ey)),
+    )
+
+    window._draw_lidar_scan_overlay_for_point(
+        point=MeasurementPoint(id="p2", name="P2", x=0.0, y=0.0, yaw=0.0),
+        scan={"angle_min": 0.0, "angle_increment": 0.01, "ranges": [500.0] * 2000},
+    )
+
+    assert len(line_calls) <= 700
+
+
 def test_build_waypoint_arrow_polygon_points_to_positive_x_for_zero_yaw() -> None:
     points = MissionWorkflowWindow._build_waypoint_arrow_polygon(
         center_x=100.0,
