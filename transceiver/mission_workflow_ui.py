@@ -42,6 +42,8 @@ from .window_utils import configure_child_window
 MISSION_WORKFLOW_STATE_FILE = Path(__file__).with_name("mission_workflow_state.json")
 LIVE_LABEL_TICKER_INTERVAL_MS = 250
 AUTO_STOP_CONTINUOUS_BEFORE_RUN = True
+ECHO_OVERLAY_COLORS = ("#ef5350", "#42a5f5", "#66bb6a", "#ffca28", "#ab47bc")
+ECHO_HEADING_MARKERS = ("🟥", "🟦", "🟩", "🟨", "🟪")
 
 
 def _load_json_dict(path: Path) -> dict[str, Any]:
@@ -493,11 +495,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         headings = {
             "measurement_idx": "Messung",
             "idx": "Punktindex",
-            "echo_1_m": "E1",
-            "echo_2_m": "E2",
-            "echo_3_m": "E3",
-            "echo_4_m": "E4",
-            "echo_5_m": "E5",
+            "echo_1_m": f"{ECHO_HEADING_MARKERS[0]} E1",
+            "echo_2_m": f"{ECHO_HEADING_MARKERS[1]} E2",
+            "echo_3_m": f"{ECHO_HEADING_MARKERS[2]} E3",
+            "echo_4_m": f"{ECHO_HEADING_MARKERS[3]} E4",
+            "echo_5_m": f"{ECHO_HEADING_MARKERS[4]} E5",
             "status": "Status",
         }
         for key, title in headings.items():
@@ -885,6 +887,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._draw_mission_markers()
         self._draw_pending_waypoint_marker()
         self._draw_rx_antenna_marker()
+        self._draw_selected_echo_overlay()
         self._draw_selected_lidar_reference_overlay()
         self._draw_live_marker()
 
@@ -1132,9 +1135,124 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._selected_result_index = selected_index if selected_index >= 0 else None
         self._draw_map_preview()
 
+    def _draw_selected_echo_overlay(self) -> None:
+        record = self._selected_record_payload()
+        point = self._selected_record_point(record)
+        if record is None or point is None:
+            return
+        rx_position = self._rx_antenna_global_position
+        if rx_position is None:
+            return
+        measurement = record.get("measurement")
+        if not isinstance(measurement, dict):
+            return
+        result = measurement.get("result")
+        if not isinstance(result, dict):
+            return
+        echo_distances = self._extract_echo_distances(result.get("echo_delays"), limit=len(ECHO_OVERLAY_COLORS))
+        if not echo_distances:
+            return
+        for echo_index, echo_distance in enumerate(echo_distances):
+            color = ECHO_OVERLAY_COLORS[echo_index % len(ECHO_OVERLAY_COLORS)]
+            self._draw_echo_ellipse_for_overlay(
+                rx_position=rx_position,
+                point=point,
+                echo_distance_m=echo_distance,
+                color=color,
+            )
+
+    def _selected_record_point(self, record: dict[str, Any] | None) -> MeasurementPoint | None:
+        if record is None:
+            return None
+        point_index = record.get("point_index")
+        if not isinstance(point_index, int) or point_index < 0 or point_index >= len(self._mission_points):
+            return None
+        return self._mission_points[point_index]
+
+    @staticmethod
+    def _extract_echo_distances(value: Any, *, limit: int) -> list[float]:
+        if not isinstance(value, list) or limit <= 0:
+            return []
+        distances: list[float] = []
+        for item in value[:limit]:
+            if not isinstance(item, dict):
+                continue
+            distance_m = item.get("distance_m")
+            if not isinstance(distance_m, (int, float)):
+                continue
+            numeric = float(distance_m)
+            if not math.isfinite(numeric) or numeric <= 0.0:
+                continue
+            distances.append(numeric)
+        return distances
+
+    def _draw_echo_ellipse_for_overlay(
+        self,
+        *,
+        rx_position: tuple[float, float],
+        point: MeasurementPoint,
+        echo_distance_m: float,
+        color: str,
+    ) -> None:
+        mission = self._mission
+        original = self._map_image_original
+        if mission is None or mission.map_config is None or original is None:
+            return
+        resolution = mission.map_config.resolution
+        if not math.isfinite(resolution) or resolution <= 0.0:
+            return
+        rx_x, rx_y = rx_position
+        distance_rx_to_point = math.hypot(point.x - rx_x, point.y - rx_y)
+        if not math.isfinite(distance_rx_to_point):
+            return
+        echo_radius = abs(distance_rx_to_point - echo_distance_m)
+        semi_focal_distance = distance_rx_to_point / 2.0
+        semi_major_axis = semi_focal_distance + echo_radius
+        if semi_major_axis <= semi_focal_distance:
+            semi_major_axis = semi_focal_distance + 0.05
+        semi_minor_squared = max(0.0, semi_major_axis * semi_major_axis - semi_focal_distance * semi_focal_distance)
+        semi_minor_axis = max(0.05, math.sqrt(semi_minor_squared))
+        center_x = (rx_x + point.x) / 2.0
+        center_y = (rx_y + point.y) / 2.0
+        angle = math.atan2(point.y - rx_y, point.x - rx_x)
+        cos_angle = math.cos(angle)
+        sin_angle = math.sin(angle)
+        samples = 64
+        preview_points: list[float] = []
+        for idx in range(samples + 1):
+            t = (2.0 * math.pi * idx) / samples
+            local_x = semi_major_axis * math.cos(t)
+            local_y = semi_minor_axis * math.sin(t)
+            world_x = center_x + local_x * cos_angle - local_y * sin_angle
+            world_y = center_y + local_x * sin_angle + local_y * cos_angle
+            map_pixel = self._world_to_map_pixel(x=world_x, y=world_y, image_height=original.height())
+            if map_pixel is None:
+                continue
+            scale_x, scale_y = self._map_preview_scale
+            offset_x, offset_y = self._map_preview_offset
+            preview_points.extend(
+                (
+                    map_pixel[0] * scale_x + offset_x,
+                    map_pixel[1] * scale_y + offset_y,
+                )
+            )
+        if len(preview_points) < 6:
+            return
+        line_width = max(1, int(round((echo_radius / resolution) * self._map_preview_scale[0] * 0.03)))
+        self.map_preview_canvas.create_line(
+            *preview_points,
+            fill=color,
+            width=line_width,
+            smooth=True,
+            dash=(4, 4),
+        )
+
     def _draw_selected_lidar_reference_overlay(self) -> None:
         record = self._selected_record_payload()
         if record is None:
+            return
+        point = self._selected_record_point(record)
+        if point is None:
             return
         measurement = record.get("measurement")
         if not isinstance(measurement, dict):
@@ -1148,10 +1266,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         lidar_file = lidar_reference.get("output_file")
         if not isinstance(lidar_file, str) or not lidar_file.strip():
             return
-        point_index = record.get("point_index")
-        if not isinstance(point_index, int) or point_index < 0 or point_index >= len(self._mission_points):
-            return
-        point = self._mission_points[point_index]
         scan = self._load_lidar_scan_for_overlay(lidar_file)
         if scan is None:
             return
