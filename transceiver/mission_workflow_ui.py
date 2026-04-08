@@ -275,6 +275,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             text="Aktivieren/Deaktivieren",
             command=self._toggle_selected_point_enabled,
         ).grid(row=0, column=9, padx=(3, 8), sticky="w")
+        self.waypoint_map_pick_mode_btn = ctk.CTkButton(
+            points_editor,
+            text="🖱️",
+            command=self._toggle_waypoint_map_pick_mode,
+            width=42,
+        )
+        self.waypoint_map_pick_mode_btn.grid(row=0, column=10, padx=(3, 0), sticky="w")
 
         map_controls_row = ctk.CTkFrame(self, fg_color="transparent")
         map_controls_row.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 6))
@@ -304,6 +311,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.map_preview_canvas.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
         self.map_preview_canvas.bind("<Configure>", self._on_map_canvas_resize)
         self.map_preview_canvas.bind("<Button-1>", self._on_map_canvas_click)
+        self.map_preview_canvas.bind("<B1-Motion>", self._on_map_canvas_drag)
+        self.map_preview_canvas.bind("<ButtonRelease-1>", self._on_map_canvas_release)
         self._map_image_original: tk.PhotoImage | None = None
         self._map_image_preview: tk.PhotoImage | None = None
         self._map_preview_scale: tuple[float, float] = (1.0, 1.0)
@@ -320,6 +329,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._emit_live_diagnostics_to_validation = True
         self._rx_antenna_global_position: tuple[float, float] | None = None
         self._rx_antenna_map_pick_mode_enabled = False
+        self._waypoint_map_pick_mode_enabled = False
+        self._waypoint_drag_start_preview: tuple[float, float] | None = None
+        self._pending_waypoint_world_position: tuple[float, float] | None = None
+        self._pending_waypoint_yaw_radians = 0.0
+        self._waypoint_drag_active = False
         self.rx_antenna_x_var = tk.StringVar(value="")
         self.rx_antenna_y_var = tk.StringVar(value="")
 
@@ -653,6 +667,16 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._draw_map_preview()
 
     def _on_map_canvas_click(self, event: tk.Event) -> None:
+        if self._waypoint_map_pick_mode_enabled:
+            world_position = self._preview_pixel_to_world(preview_x=float(event.x), preview_y=float(event.y))
+            if world_position is None:
+                return
+            self._pending_waypoint_world_position = world_position
+            self._waypoint_drag_start_preview = (float(event.x), float(event.y))
+            self._pending_waypoint_yaw_radians = 0.0
+            self._waypoint_drag_active = False
+            self._draw_map_preview()
+            return
         if not self._rx_antenna_map_pick_mode_enabled:
             return
         world_position = self._preview_pixel_to_world(preview_x=float(event.x), preview_y=float(event.y))
@@ -664,14 +688,95 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             f"✅ RX-Antenne auf Karte gesetzt: x={world_position[0]:.3f}, y={world_position[1]:.3f}"
         )
 
+    def _on_map_canvas_drag(self, event: tk.Event) -> None:
+        if not self._waypoint_map_pick_mode_enabled:
+            return
+        if self._pending_waypoint_world_position is None or self._waypoint_drag_start_preview is None:
+            return
+        start_x, start_y = self._waypoint_drag_start_preview
+        delta_x = float(event.x) - start_x
+        delta_y = float(event.y) - start_y
+        if abs(delta_x) < 2.0 and abs(delta_y) < 2.0:
+            return
+        self._waypoint_drag_active = True
+        self._pending_waypoint_yaw_radians = math.atan2(-delta_y, delta_x)
+        self._draw_map_preview()
+
+    def _on_map_canvas_release(self, _event: tk.Event) -> None:
+        if not self._waypoint_map_pick_mode_enabled:
+            return
+        world_position = self._pending_waypoint_world_position
+        if world_position is None:
+            return
+        yaw_radians = self._pending_waypoint_yaw_radians if self._waypoint_drag_active else 0.0
+        self._add_point_from_values(x=world_position[0], y=world_position[1], yaw_internal_radians=yaw_radians)
+        self._clear_pending_waypoint_marker()
+        self._set_waypoint_map_pick_mode(False)
+
+    def _clear_pending_waypoint_marker(self) -> None:
+        self._waypoint_drag_start_preview = None
+        self._pending_waypoint_world_position = None
+        self._pending_waypoint_yaw_radians = 0.0
+        self._waypoint_drag_active = False
+
+    def _draw_pending_waypoint_marker(self) -> None:
+        world_position = self._pending_waypoint_world_position
+        original = self._map_image_original
+        if world_position is None or original is None:
+            return
+        map_pixel = self._world_to_map_pixel(x=world_position[0], y=world_position[1], image_height=original.height())
+        if map_pixel is None:
+            return
+        if not self._is_pixel_inside_map(map_pixel[0], map_pixel[1], width=original.width(), height=original.height()):
+            return
+        scale_x, scale_y = self._map_preview_scale
+        offset_x, offset_y = self._map_preview_offset
+        px = map_pixel[0] * scale_x + offset_x
+        py = map_pixel[1] * scale_y + offset_y
+        marker_points = self._build_waypoint_arrow_polygon(
+            center_x=px,
+            center_y=py,
+            yaw_radians=float(self._pending_waypoint_yaw_radians),
+            arrow_length=10.0,
+            tail_length=4.0,
+            tail_width=8.0,
+        )
+        self.map_preview_canvas.create_polygon(
+            marker_points,
+            fill="#7ee6a8",
+            outline="#0d1016",
+            width=1,
+            dash=(3, 2),
+        )
+
     def _set_rx_antenna_map_pick_mode(self, enabled: bool) -> None:
         self._rx_antenna_map_pick_mode_enabled = enabled
+        if enabled:
+            self._set_waypoint_map_pick_mode(False)
         button_text = "✕" if enabled else "🖱️"
         self.rx_antenna_map_pick_mode_btn.configure(text=button_text)
-        self.map_preview_canvas.configure(cursor="crosshair" if enabled else "")
+        self._update_map_canvas_cursor()
 
     def _toggle_rx_antenna_map_pick_mode(self) -> None:
         self._set_rx_antenna_map_pick_mode(not self._rx_antenna_map_pick_mode_enabled)
+
+    def _set_waypoint_map_pick_mode(self, enabled: bool) -> None:
+        self._waypoint_map_pick_mode_enabled = enabled
+        if enabled:
+            self._rx_antenna_map_pick_mode_enabled = False
+            self.rx_antenna_map_pick_mode_btn.configure(text="🖱️")
+        else:
+            self._clear_pending_waypoint_marker()
+        self.waypoint_map_pick_mode_btn.configure(text="✕" if enabled else "🖱️")
+        self._update_map_canvas_cursor()
+        self._draw_map_preview()
+
+    def _toggle_waypoint_map_pick_mode(self) -> None:
+        self._set_waypoint_map_pick_mode(not self._waypoint_map_pick_mode_enabled)
+
+    def _update_map_canvas_cursor(self) -> None:
+        pick_mode_active = self._rx_antenna_map_pick_mode_enabled or self._waypoint_map_pick_mode_enabled
+        self.map_preview_canvas.configure(cursor="crosshair" if pick_mode_active else "")
 
     @staticmethod
     def _resize_photo_to_contain(photo: tk.PhotoImage, *, target_width: int, target_height: int) -> tk.PhotoImage:
@@ -773,6 +878,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.map_preview_canvas.delete("all")
         self._map_canvas_image_id = self.map_preview_canvas.create_image(offset_x, offset_y, anchor="nw", image=preview)
         self._draw_mission_markers()
+        self._draw_pending_waypoint_marker()
         self._draw_rx_antenna_marker()
         self._draw_selected_lidar_reference_overlay()
         self._draw_live_marker()
@@ -1263,12 +1369,26 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             )
             return
         self.point_yaw_var.set(self._format_yaw_degrees(yaw_internal_radians))
+        self._add_point_from_values(
+            x=self.point_x_var.get().strip(),
+            y=self.point_y_var.get().strip(),
+            yaw_internal_radians=yaw_internal_radians,
+            name=self.point_name_var.get().strip() or None,
+        )
 
+    def _add_point_from_values(
+        self,
+        *,
+        x: float | str,
+        y: float | str,
+        yaw_internal_radians: float,
+        name: str | None = None,
+    ) -> None:
         point_payload = {
             "id": self._generate_unique_point_id(),
-            "name": self.point_name_var.get().strip() or None,
-            "x": self.point_x_var.get().strip(),
-            "y": self.point_y_var.get().strip(),
+            "name": name,
+            "x": x,
+            "y": y,
             "z": 0.0,
             "yaw": yaw_internal_radians,
             "enabled": True,
