@@ -220,6 +220,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._build_ui()
         self._restore_workflow_state()
         self.after_idle(self._stabilize_initial_geometry)
+        self.after_idle(self._open_maximized)
 
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
@@ -480,6 +481,25 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         required_width = max(self.winfo_reqwidth(), 980)
         required_height = max(self.winfo_reqheight(), 640)
         self.geometry(f"{required_width}x{required_height}")
+
+    def _open_maximized(self) -> None:
+        """Open the workflow window maximized across supported window managers."""
+        try:
+            self.state("zoomed")
+            return
+        except tk.TclError:
+            pass
+
+        try:
+            self.attributes("-zoomed", True)
+            return
+        except tk.TclError:
+            pass
+
+        self.update_idletasks()
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        self.geometry(f"{screen_width}x{screen_height}+0+0")
 
     @staticmethod
     def _labeled_entry(
