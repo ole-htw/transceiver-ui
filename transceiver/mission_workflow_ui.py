@@ -351,18 +351,19 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         points_table_frame.columnconfigure(0, weight=1)
         points_table_frame.rowconfigure(1, weight=1)
         ctk.CTkLabel(points_table_frame, text="3) Wegpunkte").grid(row=0, column=0, sticky="w", padx=8, pady=(8, 2))
-        point_columns = ("idx", "enabled", "x", "y", "yaw")
+        point_columns = ("idx", "x", "y", "yaw")
         self.points_table = ttk.Treeview(points_table_frame, columns=point_columns, show="headings", height=6)
         self.points_table.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
         for key, title in {
             "idx": "#",
-            "enabled": "Aktiv",
             "x": "X",
             "y": "Y",
             "yaw": "Yaw (° CW)",
         }.items():
             self.points_table.heading(key, text=title)
-            self.points_table.column(key, stretch=True, width=85 if key == "enabled" else 95)
+            self.points_table.column(key, stretch=True, width=95)
+        self.points_table.tag_configure("active", foreground="#000000")
+        self.points_table.tag_configure("inactive", foreground="#808080")
         self.points_table.bind("<<TreeviewSelect>>", self._on_points_table_select)
         self.points_table.bind("<Double-1>", self._on_points_table_double_click)
 
@@ -1277,9 +1278,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         region = self.points_table.identify_region(event.x, event.y)
         if region != "cell":
             return
-        column_id = self.points_table.identify_column(event.x)
-        if column_id != "#2":
-            return
         row_id = self.points_table.identify_row(event.y)
         if not row_id:
             return
@@ -1308,11 +1306,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 "end",
                 values=(
                     idx + 1,
-                    "✓" if point.enabled else "✗",
                     f"{point.x:.3f}",
                     f"{point.y:.3f}",
                     "-" if point.yaw is None else f"{self._yaw_internal_radians_to_cw_degrees(point.yaw):.3f}",
                 ),
+                tags=("active",) if point.enabled else ("inactive",),
             )
         self._draw_map_preview()
         self._refresh_start_point_options()
