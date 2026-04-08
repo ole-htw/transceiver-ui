@@ -44,8 +44,9 @@ LIVE_LABEL_TICKER_INTERVAL_MS = 250
 AUTO_STOP_CONTINUOUS_BEFORE_RUN = True
 ECHO_OVERLAY_COLORS = ("#ef5350", "#42a5f5", "#66bb6a", "#ffca28", "#ab47bc")
 ECHO_HEADING_MARKERS = ("🟥", "🟦", "🟩", "🟨", "🟪")
-LIDAR_OVERLAY_MAX_DRAWN_BEAMS = 700
+LIDAR_OVERLAY_MAX_DRAWN_BEAMS = 450
 LIDAR_OVERLAY_CELL_SIZE_PX = 3.0
+LIDAR_OVERLAY_MAX_BEAMS_PER_CELL = 1
 
 
 def _load_json_dict(path: Path) -> dict[str, Any]:
@@ -1363,8 +1364,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         angle_min = float(scan["angle_min"])
         angle_increment = float(scan["angle_increment"])
         ranges = scan["ranges"]
-        beam_stride = max(1, len(ranges) // LIDAR_OVERLAY_MAX_DRAWN_BEAMS)
-        drawn_beam_cells: set[tuple[int, int]] = set()
+        finite_positive_beam_count = sum(
+            1 for distance in ranges if isinstance(distance, (int, float)) and math.isfinite(distance) and distance > 0.0
+        )
+        beam_stride = max(1, finite_positive_beam_count // LIDAR_OVERLAY_MAX_DRAWN_BEAMS)
+        density_factor = max(1.0, math.sqrt(finite_positive_beam_count / float(LIDAR_OVERLAY_MAX_DRAWN_BEAMS)))
+        effective_cell_size_px = LIDAR_OVERLAY_CELL_SIZE_PX * density_factor
+        drawn_beam_cells: dict[tuple[int, int], int] = {}
         for idx, distance in enumerate(ranges):
             if not math.isfinite(distance) or distance <= 0.0:
                 continue
@@ -1379,12 +1385,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             end_x = end_map_pixel[0] * scale_x + offset_x
             end_y = end_map_pixel[1] * scale_y + offset_y
             beam_cell = (
-                int((end_x - start_x) / LIDAR_OVERLAY_CELL_SIZE_PX),
-                int((end_y - start_y) / LIDAR_OVERLAY_CELL_SIZE_PX),
+                int((end_x - start_x) / effective_cell_size_px),
+                int((end_y - start_y) / effective_cell_size_px),
             )
-            if beam_cell in drawn_beam_cells:
+            current_cell_count = drawn_beam_cells.get(beam_cell, 0)
+            if current_cell_count >= LIDAR_OVERLAY_MAX_BEAMS_PER_CELL:
                 continue
-            drawn_beam_cells.add(beam_cell)
+            drawn_beam_cells[beam_cell] = current_cell_count + 1
             self.map_preview_canvas.create_line(
                 start_x,
                 start_y,
