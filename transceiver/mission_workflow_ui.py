@@ -6,10 +6,10 @@ import zipfile
 from dataclasses import replace
 from datetime import datetime
 import math
+import re
 from fractions import Fraction
 from pathlib import Path
 import json
-import re
 from tkinter import filedialog, messagebox, ttk
 import tkinter as tk
 from typing import Any, Callable
@@ -302,6 +302,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._live_position: dict[str, Any] | None = None
         self._live_position_received_at: float | None = None
         self._selected_point_index: int | None = None
+        self._selected_result_index: int | None = None
+        self._lidar_reference_scan_cache: dict[str, dict[str, Any] | None] = {}
         self._last_live_diagnosis_key: str | None = None
         self._emit_live_diagnostics_to_validation = True
         self._rx_antenna_global_position: tuple[float, float] | None = None
@@ -458,6 +460,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.results_table.yview)
         scroll.grid(row=0, column=1, sticky="ns")
         self.results_table.configure(yscrollcommand=scroll.set)
+        self.results_table.bind("<<TreeviewSelect>>", self._on_results_table_select)
 
         self._mission_points: list[MeasurementPoint] = []
         self.mission_name_var.trace_add("write", lambda *_args: self._persist_workflow_state())
@@ -682,6 +685,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._map_canvas_image_id = self.map_preview_canvas.create_image(offset_x, offset_y, anchor="nw", image=preview)
         self._draw_mission_markers()
         self._draw_rx_antenna_marker()
+        self._draw_selected_lidar_reference_overlay()
         self._draw_live_marker()
 
     def _draw_rx_antenna_marker(self) -> None:
@@ -886,6 +890,153 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         selected_index = self.points_table.index(selected[0])
         self._selected_point_index = selected_index if selected_index >= 0 else None
         self._draw_map_preview()
+
+    def _on_results_table_select(self, _event: tk.Event) -> None:
+        selected = self.results_table.selection()
+        if not selected:
+            self._selected_result_index = None
+            self._draw_map_preview()
+            return
+        selected_index = self.results_table.index(selected[0])
+        self._selected_result_index = selected_index if selected_index >= 0 else None
+        self._draw_map_preview()
+
+    def _draw_selected_lidar_reference_overlay(self) -> None:
+        record = self._selected_record_payload()
+        if record is None:
+            return
+        measurement = record.get("measurement")
+        if not isinstance(measurement, dict):
+            return
+        result = measurement.get("result")
+        if not isinstance(result, dict):
+            return
+        lidar_reference = result.get("lidar_reference")
+        if not isinstance(lidar_reference, dict):
+            return
+        lidar_file = lidar_reference.get("output_file")
+        if not isinstance(lidar_file, str) or not lidar_file.strip():
+            return
+        point_index = record.get("point_index")
+        if not isinstance(point_index, int) or point_index < 0 or point_index >= len(self._mission_points):
+            return
+        point = self._mission_points[point_index]
+        scan = self._load_lidar_scan_for_overlay(lidar_file)
+        if scan is None:
+            return
+        self._draw_lidar_scan_overlay_for_point(point=point, scan=scan)
+
+    def _selected_record_payload(self) -> dict[str, Any] | None:
+        selected_idx = self._selected_result_index
+        if selected_idx is None:
+            return None
+        if selected_idx < 0 or selected_idx >= len(self._records):
+            return None
+        payload = self._records[selected_idx]
+        return payload if isinstance(payload, dict) else None
+
+    def _load_lidar_scan_for_overlay(self, lidar_file: str) -> dict[str, Any] | None:
+        if lidar_file in self._lidar_reference_scan_cache:
+            return self._lidar_reference_scan_cache[lidar_file]
+        try:
+            text = Path(lidar_file).read_text(encoding="utf-8")
+        except Exception:
+            self._lidar_reference_scan_cache[lidar_file] = None
+            return None
+        parsed = self._parse_lidar_scan_text_for_overlay(text)
+        self._lidar_reference_scan_cache[lidar_file] = parsed
+        return parsed
+
+    @staticmethod
+    def _parse_lidar_scan_text_for_overlay(raw_text: str) -> dict[str, Any] | None:
+        angle_min_match = re.search(r"angle_min:\s*([-+0-9.eE]+)", raw_text)
+        angle_inc_match = re.search(r"angle_increment:\s*([-+0-9.eE]+)", raw_text)
+        if angle_min_match is None or angle_inc_match is None:
+            return None
+        try:
+            angle_min = float(angle_min_match.group(1))
+            angle_increment = float(angle_inc_match.group(1))
+        except Exception:
+            return None
+        ranges = MissionWorkflowWindow._extract_lidar_ranges_from_scan_text(raw_text)
+        if not ranges:
+            return None
+        return {
+            "angle_min": angle_min,
+            "angle_increment": angle_increment,
+            "ranges": ranges,
+        }
+
+    @staticmethod
+    def _extract_lidar_ranges_from_scan_text(raw_text: str) -> list[float]:
+        block_match = re.search(r"ranges:\s*(\[[\s\S]*?\]|(?:\n(?:\s*-\s*[^\n]+))+)", raw_text)
+        if block_match is None:
+            return []
+        tokens = re.findall(r"[-+0-9.eE]+|inf|-inf|nan", block_match.group(1))
+        parsed: list[float] = []
+        for token in tokens:
+            normalized = token.lower()
+            if normalized in {"inf", "+inf"}:
+                value = float("inf")
+            elif normalized == "-inf":
+                value = float("-inf")
+            elif normalized == "nan":
+                value = float("nan")
+            else:
+                try:
+                    value = float(token)
+                except Exception:
+                    continue
+            parsed.append(value)
+        return parsed
+
+    def _draw_lidar_scan_overlay_for_point(self, *, point: MeasurementPoint, scan: dict[str, Any]) -> None:
+        original = self._map_image_original
+        if original is None:
+            return
+        start_map_pixel = self._world_to_map_pixel(x=point.x, y=point.y, image_height=original.height())
+        if start_map_pixel is None:
+            return
+        if not self._is_pixel_inside_map(start_map_pixel[0], start_map_pixel[1], width=original.width(), height=original.height()):
+            return
+        scale_x, scale_y = self._map_preview_scale
+        offset_x, offset_y = self._map_preview_offset
+        start_x = start_map_pixel[0] * scale_x + offset_x
+        start_y = start_map_pixel[1] * scale_y + offset_y
+        self.map_preview_canvas.create_oval(
+            start_x - 5,
+            start_y - 5,
+            start_x + 5,
+            start_y + 5,
+            fill="#90caf9",
+            outline="#1565c0",
+            width=1,
+        )
+        angle_min = float(scan["angle_min"])
+        angle_increment = float(scan["angle_increment"])
+        ranges = scan["ranges"]
+        for idx, distance in enumerate(ranges):
+            if not math.isfinite(distance) or distance <= 0.0:
+                continue
+            if idx % 4 != 0:
+                continue
+            beam_angle = point.yaw + angle_min + idx * angle_increment
+            end_world_x = point.x + math.cos(beam_angle) * distance
+            end_world_y = point.y + math.sin(beam_angle) * distance
+            end_map_pixel = self._world_to_map_pixel(x=end_world_x, y=end_world_y, image_height=original.height())
+            if end_map_pixel is None:
+                continue
+            end_x = end_map_pixel[0] * scale_x + offset_x
+            end_y = end_map_pixel[1] * scale_y + offset_y
+            self.map_preview_canvas.create_line(
+                start_x,
+                start_y,
+                end_x,
+                end_y,
+                fill="#4fc3f7",
+                width=1,
+                stipple="gray25",
+            )
 
     def _draw_live_marker(self) -> None:
         mission = self._mission
@@ -1477,6 +1628,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
         self.results_table.delete(*self.results_table.get_children())
         self._records = []
+        self._selected_result_index = None
         self._run_started_at = time.time()
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         self._run_log_dir = Path("signals") / "mission-runs" / ts

@@ -40,6 +40,25 @@ def test_format_one_based_index_converts_zero_based_values_for_ui() -> None:
     assert MissionWorkflowWindow._format_one_based_index(-1) == "-1"
 
 
+def test_parse_lidar_scan_text_for_overlay_supports_inline_ranges() -> None:
+    parsed = MissionWorkflowWindow._parse_lidar_scan_text_for_overlay(
+        "angle_min: -1.57\nangle_increment: 0.1\nranges: [1.0, 2.5, inf, nan]\n"
+    )
+    assert parsed is not None
+    assert parsed["angle_min"] == -1.57
+    assert parsed["angle_increment"] == 0.1
+    assert parsed["ranges"][:2] == [1.0, 2.5]
+
+
+def test_extract_lidar_ranges_from_scan_text_supports_list_style() -> None:
+    values = MissionWorkflowWindow._extract_lidar_ranges_from_scan_text(
+        "ranges:\n  - 1.2\n  - inf\n  - 3.4\n"
+    )
+    assert len(values) == 3
+    assert values[0] == 1.2
+    assert values[2] == 3.4
+
+
 class _FakeAdapter:
     def __init__(self, events):
         self.config = object()
@@ -66,7 +85,7 @@ class _FakePoseStreamTransport:
         self.on_event = None
         _FakePoseStreamTransport.last_instance = self
 
-    def start(self, *, config, on_event) -> None:
+    def start(self, *, config, on_event, expected_frame_id=None) -> None:
         self.on_event = on_event
 
     def stop(self) -> None:
