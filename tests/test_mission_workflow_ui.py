@@ -95,7 +95,7 @@ class _FakePoseStreamTransport:
 def test_ui_navigator_uses_pose_stream_for_live_position(monkeypatch) -> None:
     from transceiver import mission_workflow_ui as module
 
-    monkeypatch.setattr(module, "Ros2CliPoseStreamTransport", _FakePoseStreamTransport)
+    monkeypatch.setattr(module, "RosbridgePoseStreamTransport", _FakePoseStreamTransport)
     navigator = module._UiNavigator(
         adapter=_FakeAdapter([_FakeNavigationEvent("feedback", data={"position": {"x": 99.0, "y": 77.0}})]),
         on_status=lambda *_args: None,
@@ -126,7 +126,7 @@ def test_ui_navigator_uses_pose_stream_for_live_position(monkeypatch) -> None:
 def test_ui_navigator_navigation_succeeds_without_feedback_position(monkeypatch) -> None:
     from transceiver import mission_workflow_ui as module
 
-    monkeypatch.setattr(module, "Ros2CliPoseStreamTransport", _FakePoseStreamTransport)
+    monkeypatch.setattr(module, "RosbridgePoseStreamTransport", _FakePoseStreamTransport)
     navigator = module._UiNavigator(
         adapter=_FakeAdapter([_FakeNavigationEvent("feedback", data={"raw": "feedback without pose"})]),
         on_status=lambda *_args: None,

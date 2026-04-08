@@ -9,7 +9,7 @@ from transceiver.navigation_adapter import (
     NavigationOutcome,
     NavigationPoint,
     Ros2CliNavigationTransport,
-    Ros2CliPoseStreamTransport,
+    RosbridgePoseStreamTransport,
 )
 
 
@@ -179,7 +179,6 @@ def test_build_command_prefers_explicit_remote_ros_env_cmd() -> None:
     assert remote_cmd.startswith(
         "set -euo pipefail; source /opt/ros/jazzy/setup.bash && source ~/ws/install/setup.bash; echo '[transceiver] ROS env source=TRANSCEIVER_REMOTE_ROS_ENV_CMD; FASTDDS profile not configured; namespace=robot1'; command -v ros2"
     )
-    assert "source /opt/ros/jazzy/setup.bash" not in remote_cmd
 
 
 def test_build_command_with_ros_setup_wraps_command_with_pipefail_and_send_goal() -> None:
@@ -551,416 +550,73 @@ def test_send_goal_emits_parse_diagnostics_when_feedback_position_parse_fails(mo
     assert "status: moving" in str(payload["raw_feedback_excerpt"])
 
 
-def test_pose_stream_build_command_contains_ros2_prechecks_for_amcl_pose() -> None:
-    config = NavigationAdapterConfig(
-        robot_host="robot@10.0.0.2",
-        remote_ros_setup="/opt/ros/jazzy/setup.bash",
-        ros2_namespace="robot1",
-    )
-
-    cmd = Ros2CliPoseStreamTransport._build_stream_command(config=config)
-
-    remote_cmd = cmd[-1]
-    assert ">&2 echo '[transceiver] ROS env source=" in remote_cmd
-    assert "source /opt/ros/jazzy/setup.bash 1>&2" in remote_cmd
-    assert "command -v ros2 >/dev/null 2>&1" in remote_cmd
-    assert "test -n \"${ROS_DOMAIN_ID:-}\"" in remote_cmd
-    assert "ros2 topic list >/dev/null 2>&1" in remote_cmd
-    assert "grep -Fx -- /amcl_pose" in remote_cmd
-    assert "ros2 topic info /amcl_pose >/dev/null 2>&1" in remote_cmd
-    assert "ros2 topic echo /amcl_pose 2>/dev/null" in remote_cmd
-    assert "/robot1/amcl_pose" not in remote_cmd
-
-
-def test_pose_stream_build_command_only_echo_suppresses_stderr() -> None:
-    config = NavigationAdapterConfig(
-        robot_host="robot@10.0.0.2",
-        remote_ros_setup="/opt/ros/jazzy/setup.bash",
-    )
-
-    cmd = Ros2CliPoseStreamTransport._build_stream_command(config=config)
-    remote_cmd = cmd[-1]
-
-    assert "ros2 topic list >/dev/null 2>&1 ||" in remote_cmd
-    assert "ros2 topic info /amcl_pose >/dev/null 2>&1 ||" in remote_cmd
-    assert "ros2 topic echo /amcl_pose 2>/dev/null" in remote_cmd
-
-
-def test_pose_stream_build_command_rejects_topic_override() -> None:
+def test_rosbridge_pose_stream_build_tunnel_command() -> None:
     config = NavigationAdapterConfig(robot_host="robot@10.0.0.2")
 
-    try:
-        Ros2CliPoseStreamTransport._build_stream_command(config=config, topic="/robot1/amcl_pose")
-        assert False, "expected ValueError"
-    except ValueError as exc:
-        assert str(exc) == "Pose stream topic must be /amcl_pose"
+    cmd = RosbridgePoseStreamTransport._build_tunnel_command(config=config, local_port=19090)
+
+    assert cmd[:4] == ["ssh", "-N", "-L", "19090:127.0.0.1:9090"]
+    assert "BatchMode=yes" in cmd
+    assert "StrictHostKeyChecking=accept-new" in cmd
+    assert "robot@10.0.0.2" in cmd
 
 
-def test_pose_stream_reports_topic_visible_but_no_data(monkeypatch) -> None:
-    class _Stream:
-        def readline(self) -> str:
-            return ""
+def test_rosbridge_pose_stream_sends_subscribe_and_parses_pose(monkeypatch) -> None:
+    import sys
+    import types
+
+    sent_messages: list[str] = []
+
+    class _FakeWebSocket:
+        def __init__(self) -> None:
+            self._recv_calls = 0
+
+        def settimeout(self, _timeout: float) -> None:
+            return None
+
+        def send(self, message: str) -> None:
+            sent_messages.append(message)
+
+        def recv(self) -> str:
+            self._recv_calls += 1
+            if self._recv_calls == 1:
+                return (
+                    '{"op":"publish","topic":"/amcl_pose","msg":'
+                    '{"header":{"frame_id":"map","stamp":{"sec":10,"nanosec":500000000}},'
+                    '"pose":{"pose":{"position":{"x":1.25,"y":2.5},'
+                    '"orientation":{"x":0.0,"y":0.0,"z":0.7071068,"w":0.7071068}}}}}'
+                )
+            raise RuntimeError("disconnect")
+
+        def close(self) -> None:
+            return None
+
+    class _FakeWebsocketModule(types.SimpleNamespace):
+        class WebSocketTimeoutException(Exception):
+            pass
+
+    fake_module = _FakeWebsocketModule()
+    fake_module.create_connection = lambda *_args, **_kwargs: _FakeWebSocket()
+    monkeypatch.setitem(sys.modules, "websocket", fake_module)
 
     class _Process:
         def __init__(self) -> None:
-            self.stdout = _Stream()
-            self.stderr = _Stream()
+            self.stdout = None
+            self.stderr = types.SimpleNamespace(read=lambda: "")
+            self.terminated = False
 
         def poll(self):
             return None
 
         def terminate(self) -> None:
-            return None
-
-        def wait(self, timeout: float) -> int:
-            return 0
-
-    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
-    monkeypatch.setattr(Ros2CliPoseStreamTransport, "_NO_DATA_WARNING_AFTER_S", 0.0)
-
-    transport = Ros2CliPoseStreamTransport()
-    events: list[dict[str, object]] = []
-
-    def _on_event(payload: dict[str, object]) -> None:
-        events.append(payload)
-        event = payload.get("event") if isinstance(payload, dict) else None
-        if isinstance(event, dict) and event.get("type") == "stream_error":
-            transport._stop_event.set()
-
-    transport._run_loop(
-        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
-        on_event=_on_event,
-    )
-
-    error_messages = [
-        str(payload["event"]["message"])
-        for payload in events
-        if isinstance(payload.get("event"), dict) and payload["event"].get("type") == "stream_error"
-    ]
-    assert any("Topic sichtbar, aber keine Nachrichten" in message for message in error_messages)
-
-
-def test_pose_stream_reports_parse_error_excerpt(monkeypatch) -> None:
-    class _Stream:
-        def __init__(self, lines: list[str], rest: str = "") -> None:
-            self._lines = lines
-            self._idx = 0
-            self._rest = rest
-
-        def readline(self) -> str:
-            if self._idx >= len(self._lines):
-                return ""
-            line = self._lines[self._idx]
-            self._idx += 1
-            return line
-
-        def read(self) -> str:
-            return self._rest
-
-    class _Process:
-        def __init__(self) -> None:
-            self.stdout = _Stream(
-                [
-                    "header:\n",
-                    "  frame_id: map\n",
-                    "---\n",
-                ]
-            )
-            self.stderr = _Stream([], rest="")
-
-        def poll(self):
-            return 0 if self.stdout._idx >= len(self.stdout._lines) else None
-
-        def terminate(self) -> None:
-            return None
+            self.terminated = True
 
         def wait(self, timeout: float) -> int:
             return 0
 
     monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
 
-    transport = Ros2CliPoseStreamTransport()
-    events: list[dict[str, object]] = []
-
-    def _on_event(payload: dict[str, object]) -> None:
-        events.append(payload)
-        event = payload.get("event") if isinstance(payload, dict) else None
-        if isinstance(event, dict) and "nicht parsebar" in str(event.get("message")):
-            transport._stop_event.set()
-
-    transport._run_loop(
-        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
-        on_event=_on_event,
-    )
-
-    parse_errors = [
-        str(payload["event"]["message"])
-        for payload in events
-        if isinstance(payload.get("event"), dict)
-        and payload["event"].get("type") == "stream_error"
-        and "nicht parsebar" in str(payload["event"].get("message"))
-    ]
-    assert parse_errors
-    assert "raw=header:" in parse_errors[0]
-
-
-def test_pose_stream_parse_error_does_not_emit_no_data_warning(monkeypatch) -> None:
-    class _Stream:
-        def __init__(self, lines: list[str], rest: str = "") -> None:
-            self._lines = lines
-            self._idx = 0
-            self._rest = rest
-
-        def readline(self) -> str:
-            if self._idx >= len(self._lines):
-                return ""
-            line = self._lines[self._idx]
-            self._idx += 1
-            return line
-
-        def read(self) -> str:
-            return self._rest
-
-    class _Process:
-        def __init__(self) -> None:
-            self.stdout = _Stream(
-                [
-                    "header:\n",
-                    "  frame_id: map\n",
-                    "---\n",
-                ]
-            )
-            self.stderr = _Stream([], rest="")
-
-        def poll(self):
-            return 0 if self.stdout._idx >= len(self.stdout._lines) else None
-
-        def terminate(self) -> None:
-            return None
-
-        def wait(self, timeout: float) -> int:
-            return 0
-
-    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
-    monkeypatch.setattr(Ros2CliPoseStreamTransport, "_NO_DATA_WARNING_AFTER_S", 0.0)
-
-    transport = Ros2CliPoseStreamTransport()
-    events: list[dict[str, object]] = []
-
-    def _on_event(payload: dict[str, object]) -> None:
-        events.append(payload)
-        event = payload.get("event") if isinstance(payload, dict) else None
-        if isinstance(event, dict) and "nicht parsebar" in str(event.get("message")):
-            transport._stop_event.set()
-
-    transport._run_loop(
-        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
-        on_event=_on_event,
-    )
-
-    messages = [
-        str(payload["event"]["message"])
-        for payload in events
-        if isinstance(payload.get("event"), dict) and payload["event"].get("type") == "stream_error"
-    ]
-    assert any("nicht parsebar" in message for message in messages)
-    assert not any("Topic sichtbar, aber keine Nachrichten" in message for message in messages)
-
-
-def test_pose_stream_reports_raw_data_without_complete_block(monkeypatch) -> None:
-    class _Stream:
-        def __init__(self, lines: list[str], rest: str = "") -> None:
-            self._lines = lines
-            self._idx = 0
-            self._rest = rest
-
-        def readline(self) -> str:
-            if self._idx >= len(self._lines):
-                return ""
-            line = self._lines[self._idx]
-            self._idx += 1
-            return line
-
-        def read(self) -> str:
-            return self._rest
-
-    class _Process:
-        def __init__(self) -> None:
-            self.stdout = _Stream(
-                [
-                    "header:\n",
-                    "  frame_id: map\n",
-                ]
-            )
-            self.stderr = _Stream([], rest="")
-
-        def poll(self):
-            return None
-
-        def terminate(self) -> None:
-            return None
-
-        def wait(self, timeout: float) -> int:
-            return 0
-
-    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
-    monkeypatch.setattr(Ros2CliPoseStreamTransport, "_NO_DATA_WARNING_AFTER_S", 0.0)
-
-    transport = Ros2CliPoseStreamTransport()
-    events: list[dict[str, object]] = []
-
-    def _on_event(payload: dict[str, object]) -> None:
-        events.append(payload)
-        event = payload.get("event") if isinstance(payload, dict) else None
-        if isinstance(event, dict) and "noch kein kompletter Nachrichtenblock" in str(event.get("message")):
-            transport._stop_event.set()
-
-    transport._run_loop(
-        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
-        on_event=_on_event,
-    )
-
-    messages = [
-        str(payload["event"]["message"])
-        for payload in events
-        if isinstance(payload.get("event"), dict) and payload["event"].get("type") == "stream_error"
-    ]
-    assert any("noch kein kompletter Nachrichtenblock" in message for message in messages)
-    raw_block_errors = [
-        payload["event"]
-        for payload in events
-        if isinstance(payload.get("event"), dict)
-        and payload["event"].get("type") == "stream_error"
-        and "noch kein kompletter Nachrichtenblock" in str(payload["event"].get("message"))
-    ]
-    assert raw_block_errors
-    assert raw_block_errors[0]["raw_pose_excerpt"] == "header:\\n  frame_id: map"
-    assert raw_block_errors[0]["saw_separator"] is False
-    assert raw_block_errors[0]["saw_header"] is True
-    assert raw_block_errors[0]["buffer_line_count"] == 2
-
-
-def test_pose_stream_banner_only_is_not_counted_as_raw_amcl_data(monkeypatch) -> None:
-    class _Stream:
-        def __init__(self, lines: list[str], rest: str = "") -> None:
-            self._lines = lines
-            self._idx = 0
-            self._rest = rest
-
-        def readline(self) -> str:
-            if self._idx >= len(self._lines):
-                return ""
-            line = self._lines[self._idx]
-            self._idx += 1
-            return line
-
-        def read(self) -> str:
-            return self._rest
-
-    class _Process:
-        def __init__(self) -> None:
-            self.stdout = _Stream(
-                [
-                    "[transceiver] ROS env source=TRANSCEIVER_REMOTE_ROS_ENV_CMD; pose_topic=/amcl_pose\n",
-                ]
-            )
-            self.stderr = _Stream([], rest="")
-
-        def poll(self):
-            return None
-
-        def terminate(self) -> None:
-            return None
-
-        def wait(self, timeout: float) -> int:
-            return 0
-
-    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
-    monkeypatch.setattr(Ros2CliPoseStreamTransport, "_NO_DATA_WARNING_AFTER_S", 0.0)
-
-    transport = Ros2CliPoseStreamTransport()
-    events: list[dict[str, object]] = []
-
-    def _on_event(payload: dict[str, object]) -> None:
-        events.append(payload)
-        event = payload.get("event") if isinstance(payload, dict) else None
-        if isinstance(event, dict) and "nur Fremd-/Setup-Ausgaben" in str(event.get("message")):
-            transport._stop_event.set()
-
-    transport._run_loop(
-        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
-        on_event=_on_event,
-    )
-
-    messages = [
-        str(payload["event"]["message"])
-        for payload in events
-        if isinstance(payload.get("event"), dict) and payload["event"].get("type") == "stream_error"
-    ]
-    assert any("nur Fremd-/Setup-Ausgaben" in message for message in messages)
-    assert not any("noch kein kompletter Nachrichtenblock" in message for message in messages)
-
-
-def test_pose_stream_data_line_filter_ignores_transceiver_banner_and_env_assignments() -> None:
-    assert not Ros2CliPoseStreamTransport._is_pose_stream_data_line(
-        "[transceiver] ROS env source=TRANSCEIVER_REMOTE_ROS_ENV_CMD\n"
-    )
-    assert not Ros2CliPoseStreamTransport._is_pose_stream_data_line("USER=robot\n")
-    assert not Ros2CliPoseStreamTransport._is_pose_stream_data_line("XDG_DATA_DIRS=/usr/share\n")
-    assert not Ros2CliPoseStreamTransport._is_pose_stream_data_line("PATH=/usr/bin:/bin\n")
-    assert Ros2CliPoseStreamTransport._is_pose_stream_data_line("header:\n")
-    assert Ros2CliPoseStreamTransport._is_pose_stream_data_line("    x: 1.0\n")
-    assert Ros2CliPoseStreamTransport._is_pose_stream_data_line("---\n")
-
-
-def test_pose_stream_mixed_foreign_lines_and_valid_yaml_emits_position_update(monkeypatch) -> None:
-    class _Stream:
-        def __init__(self, lines: list[str], rest: str = "") -> None:
-            self._lines = lines
-            self._idx = 0
-            self._rest = rest
-
-        def readline(self) -> str:
-            if self._idx >= len(self._lines):
-                return ""
-            line = self._lines[self._idx]
-            self._idx += 1
-            return line
-
-        def read(self) -> str:
-            return self._rest
-
-    class _Process:
-        def __init__(self) -> None:
-            self.stdout = _Stream(
-                [
-                    "[transceiver] ROS env source=TRANSCEIVER_REMOTE_ROS_ENV_CMD; pose_topic=/amcl_pose\n",
-                    "USER=robot\n",
-                    "XDG_DATA_DIRS=/usr/share\n",
-                    "header:\n",
-                    "  frame_id: map\n",
-                    "pose:\n",
-                    "  pose:\n",
-                    "    position:\n",
-                    "      x: 1.25\n",
-                    "      y: 2.5\n",
-                    "---\n",
-                ]
-            )
-            self.stderr = _Stream([], rest="")
-
-        def poll(self):
-            return 0 if self.stdout._idx >= len(self.stdout._lines) else None
-
-        def terminate(self) -> None:
-            return None
-
-        def wait(self, timeout: float) -> int:
-            return 0
-
-    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
-
-    transport = Ros2CliPoseStreamTransport()
+    transport = RosbridgePoseStreamTransport()
     events: list[dict[str, object]] = []
 
     def _on_event(payload: dict[str, object]) -> None:
@@ -969,60 +625,58 @@ def test_pose_stream_mixed_foreign_lines_and_valid_yaml_emits_position_update(mo
         if isinstance(event, dict) and event.get("type") == "position_update":
             transport._stop_event.set()
 
-    transport._run_loop(
-        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
-        on_event=_on_event,
-    )
+    transport._run_loop(config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"), on_event=_on_event)
 
+    assert sent_messages
+    subscribe = sent_messages[0]
+    assert '"op": "subscribe"' in subscribe
+    assert '"topic": "/amcl_pose"' in subscribe
     updates = [
         payload["event"]["position"]
         for payload in events
         if isinstance(payload.get("event"), dict) and payload["event"].get("type") == "position_update"
-    ]
-    errors = [
-        str(payload["event"]["message"])
-        for payload in events
-        if isinstance(payload.get("event"), dict) and payload["event"].get("type") == "stream_error"
     ]
     assert updates
     assert updates[0]["x"] == 1.25
     assert updates[0]["y"] == 2.5
-    assert not any("nicht parsebar" in message for message in errors)
+    assert updates[0]["frame_id"] == "map"
+    assert abs(float(updates[0]["timestamp"]) - 10.5) < 1e-6
+    assert abs(float(updates[0]["yaw"]) - 1.57079632679) < 1e-3
 
 
-def test_pose_stream_flushes_previous_parseable_block_on_new_header_without_separator(monkeypatch) -> None:
-    class _Stream:
-        def __init__(self, lines: list[str], rest: str = "") -> None:
-            self._lines = lines
-            self._idx = 0
-            self._rest = rest
+def test_rosbridge_pose_stream_reconnects_after_disconnect(monkeypatch) -> None:
+    import sys
+    import types
 
-        def readline(self) -> str:
-            if self._idx >= len(self._lines):
-                return ""
-            line = self._lines[self._idx]
-            self._idx += 1
-            return line
+    connection_counter = {"count": 0}
 
-        def read(self) -> str:
-            return self._rest
+    class _FakeWebSocket:
+        def settimeout(self, _timeout: float) -> None:
+            return None
+
+        def send(self, _message: str) -> None:
+            return None
+
+        def recv(self) -> str:
+            raise RuntimeError("socket down")
+
+        def close(self) -> None:
+            return None
+
+    class _FakeWebsocketModule(types.SimpleNamespace):
+        class WebSocketTimeoutException(Exception):
+            pass
+
+    def _create_connection(*_args, **_kwargs):
+        connection_counter["count"] += 1
+        return _FakeWebSocket()
+
+    fake_module = _FakeWebsocketModule(create_connection=_create_connection)
+    monkeypatch.setitem(sys.modules, "websocket", fake_module)
 
     class _Process:
         def __init__(self) -> None:
-            self.stdout = _Stream(
-                [
-                    "header:\n",
-                    "  frame_id: map\n",
-                    "pose:\n",
-                    "  pose:\n",
-                    "    position:\n",
-                    "      x: 1.0\n",
-                    "      y: 2.0\n",
-                    "header:\n",
-                    "  frame_id: map\n",
-                ]
-            )
-            self.stderr = _Stream([], rest="")
+            self.stderr = types.SimpleNamespace(read=lambda: "")
 
         def poll(self):
             return None
@@ -1035,232 +689,75 @@ def test_pose_stream_flushes_previous_parseable_block_on_new_header_without_sepa
 
     monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
 
-    transport = Ros2CliPoseStreamTransport()
+    transport = RosbridgePoseStreamTransport()
     events: list[dict[str, object]] = []
 
     def _on_event(payload: dict[str, object]) -> None:
         events.append(payload)
         event = payload.get("event") if isinstance(payload, dict) else None
-        if isinstance(event, dict) and event.get("type") == "position_update":
+        if isinstance(event, dict) and event.get("type") == "stream_reconnect_wait":
             transport._stop_event.set()
 
-    transport._run_loop(
-        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
-        on_event=_on_event,
+    monkeypatch.setattr(transport._stop_event, "wait", lambda timeout=0.0: True)
+
+    transport._run_loop(config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"), on_event=_on_event)
+
+    assert connection_counter["count"] >= 1
+    assert any(
+        isinstance(payload.get("event"), dict) and payload["event"].get("type") == "stream_reconnect_wait"
+        for payload in events
     )
 
-    updates = [
-        payload["event"]
-        for payload in events
-        if isinstance(payload.get("event"), dict) and payload["event"].get("type") == "position_update"
-    ]
-    assert updates
-    assert updates[0]["position"]["x"] == 1.0
-    assert updates[0]["position"]["y"] == 2.0
-    assert updates[0]["block_flush_reason"] == "new_header"
 
+def test_rosbridge_pose_stream_stop_closes_websocket_and_tunnel(monkeypatch) -> None:
+    import types
 
-def test_pose_stream_idle_flushes_parseable_block_without_separator(monkeypatch) -> None:
-    class _Stream:
-        def __init__(self, lines: list[str], rest: str = "") -> None:
-            self._lines = lines
-            self._idx = 0
-            self._rest = rest
-
-        def readline(self) -> str:
-            if self._idx >= len(self._lines):
-                return ""
-            line = self._lines[self._idx]
-            self._idx += 1
-            return line
-
-        def read(self) -> str:
-            return self._rest
+    tunnel_processes: list[object] = []
 
     class _Process:
         def __init__(self) -> None:
-            self.stdout = _Stream(
-                [
-                    "header:\n",
-                    "  frame_id: map\n",
-                    "pose:\n",
-                    "  pose:\n",
-                    "    position:\n",
-                    "      x: 3.0\n",
-                    "      y: 4.0\n",
-                ]
-            )
-            self.stderr = _Stream([], rest="")
+            self.stderr = types.SimpleNamespace(read=lambda: "")
+            self.terminated = False
 
         def poll(self):
             return None
 
         def terminate(self) -> None:
-            return None
+            self.terminated = True
 
         def wait(self, timeout: float) -> int:
             return 0
 
-    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
-    monkeypatch.setattr(Ros2CliPoseStreamTransport, "_BLOCK_IDLE_FLUSH_AFTER_S", 0.0)
-
-    transport = Ros2CliPoseStreamTransport()
-    events: list[dict[str, object]] = []
-
-    def _on_event(payload: dict[str, object]) -> None:
-        events.append(payload)
-        event = payload.get("event") if isinstance(payload, dict) else None
-        if isinstance(event, dict) and event.get("type") == "position_update":
-            transport._stop_event.set()
-
-    transport._run_loop(
-        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
-        on_event=_on_event,
-    )
-
-    updates = [
-        payload["event"]
-        for payload in events
-        if isinstance(payload.get("event"), dict) and payload["event"].get("type") == "position_update"
-    ]
-    assert updates
-    assert updates[0]["position"]["x"] == 3.0
-    assert updates[0]["position"]["y"] == 4.0
-    assert updates[0]["block_flush_reason"] == "idle_flush"
-
-
-def test_pose_stream_parses_completed_block_without_separator(monkeypatch) -> None:
-    class _Stream:
-        def __init__(self, lines: list[str], rest: str = "") -> None:
-            self._lines = lines
-            self._idx = 0
-            self._rest = rest
-
-        def readline(self) -> str:
-            if self._idx >= len(self._lines):
-                return ""
-            line = self._lines[self._idx]
-            self._idx += 1
-            return line
-
-        def read(self) -> str:
-            return self._rest
-
-    class _Process:
+    class _Ws:
         def __init__(self) -> None:
-            self.stdout = _Stream(
-                [
-                    "header:\n",
-                    "  frame_id: map\n",
-                    "pose:\n",
-                    "  pose:\n",
-                    "    position:\n",
-                    "      x: 1.0\n",
-                    "      y: 2.0\n",
-                ]
-            )
-            self.stderr = _Stream([], rest="")
+            self.closed = False
 
-        def poll(self):
-            return 0 if self.stdout._idx >= len(self.stdout._lines) else None
-
-        def terminate(self) -> None:
+        def settimeout(self, _timeout: float) -> None:
             return None
 
-        def wait(self, timeout: float) -> int:
-            return 0
-
-    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
-
-    transport = Ros2CliPoseStreamTransport()
-    events: list[dict[str, object]] = []
-
-    def _on_event(payload: dict[str, object]) -> None:
-        events.append(payload)
-        event = payload.get("event") if isinstance(payload, dict) else None
-        if isinstance(event, dict) and event.get("type") == "position_update":
-            transport._stop_event.set()
-
-    transport._run_loop(
-        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
-        on_event=_on_event,
-    )
-
-    updates = [
-        payload["event"]["position"]
-        for payload in events
-        if isinstance(payload.get("event"), dict) and payload["event"].get("type") == "position_update"
-    ]
-    assert updates
-    assert updates[0]["x"] == 1.0
-    assert updates[0]["y"] == 2.0
-
-
-def test_pose_stream_reports_frame_id_mismatch(monkeypatch) -> None:
-    class _Stream:
-        def __init__(self, lines: list[str], rest: str = "") -> None:
-            self._lines = lines
-            self._idx = 0
-            self._rest = rest
-
-        def readline(self) -> str:
-            if self._idx >= len(self._lines):
-                return ""
-            line = self._lines[self._idx]
-            self._idx += 1
-            return line
-
-        def read(self) -> str:
-            return self._rest
-
-    class _Process:
-        def __init__(self) -> None:
-            self.stdout = _Stream(
-                [
-                    "header:\n",
-                    "  frame_id: odom\n",
-                    "pose:\n",
-                    "  pose:\n",
-                    "    position:\n",
-                    "      x: 1.0\n",
-                    "      y: 2.0\n",
-                    "---\n",
-                ]
-            )
-            self.stderr = _Stream([], rest="")
-
-        def poll(self):
-            return 0 if self.stdout._idx >= len(self.stdout._lines) else None
-
-        def terminate(self) -> None:
+        def send(self, _message: str) -> None:
             return None
 
-        def wait(self, timeout: float) -> int:
-            return 0
+        def recv(self) -> str:
+            raise RuntimeError("drop")
 
-    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", lambda *a, **k: _Process())
+        def close(self) -> None:
+            self.closed = True
 
-    transport = Ros2CliPoseStreamTransport()
-    events: list[dict[str, object]] = []
+    def _popen(*_a, **_k):
+        proc = _Process()
+        tunnel_processes.append(proc)
+        return proc
 
-    def _on_event(payload: dict[str, object]) -> None:
-        events.append(payload)
-        event = payload.get("event") if isinstance(payload, dict) else None
-        if isinstance(event, dict) and "unerwarteter /amcl_pose frame_id" in str(event.get("message")):
-            transport._stop_event.set()
+    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.Popen", _popen)
 
-    transport._run_loop(
-        config=NavigationAdapterConfig(robot_host="robot@10.0.0.2"),
-        on_event=_on_event,
-        expected_frame_id="map",
-    )
+    transport = RosbridgePoseStreamTransport()
+    ws = _Ws()
+    transport._websocket = ws
+    proc = _Process()
+    transport._ssh_process = proc
 
-    mismatch = [
-        str(payload["event"]["message"])
-        for payload in events
-        if isinstance(payload.get("event"), dict)
-        and payload["event"].get("type") == "stream_error"
-        and "unerwarteter /amcl_pose frame_id" in str(payload["event"].get("message"))
-    ]
-    assert mismatch
-    assert "erwartet=map, empfangen=odom" in mismatch[0]
+    transport.stop()
+
+    assert ws.closed is True
+    assert proc.terminated is True

@@ -35,7 +35,7 @@ from .navigation_adapter import (
     NavigationAdapter,
     NavigationAdapterConfig,
     NavigationEvent,
-    Ros2CliPoseStreamTransport,
+    RosbridgePoseStreamTransport,
 )
 from .window_utils import configure_child_window
 
@@ -89,7 +89,7 @@ class _UiNavigator:
         self._adapter = adapter
         self._on_status = on_status
         self._on_operator_message = on_operator_message
-        self._pose_stream = Ros2CliPoseStreamTransport()
+        self._pose_stream = RosbridgePoseStreamTransport()
         self._latest_pose_lock = threading.Lock()
         self._latest_pose_from_stream: dict[str, Any] | None = None
 

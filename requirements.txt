@@ -48,3 +48,4 @@ zipp
 pyqtgraph
 PySide6
 scipy
+websocket-client
