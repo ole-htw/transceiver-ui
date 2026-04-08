@@ -585,7 +585,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         )
 
     @staticmethod
-    def _resize_photo_to_cover(photo: tk.PhotoImage, *, target_width: int, target_height: int) -> tk.PhotoImage:
+    def _resize_photo_to_contain(photo: tk.PhotoImage, *, target_width: int, target_height: int) -> tk.PhotoImage:
         if target_width <= 1 or target_height <= 1:
             return photo
 
@@ -594,10 +594,10 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if width <= 0 or height <= 0:
             return photo
 
-        # Fill the available canvas area with the map while preserving aspect ratio.
-        # This intentionally allows clipping in one axis so there is no free space
-        # in both axes at the same time.
-        scale = max(target_width / width, target_height / height)
+        # Keep the whole map visible in the available canvas area while preserving
+        # aspect ratio. The image may be scaled above 100% which can look pixelated,
+        # but prevents clipping/cropping.
+        scale = min(target_width / width, target_height / height)
         if abs(scale - 1.0) < 0.01:
             return photo
 
@@ -673,7 +673,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             canvas_height = max(1, self.map_preview_canvas.winfo_height())
         except tk.TclError:
             return
-        preview = self._resize_photo_to_cover(original, target_width=canvas_width, target_height=canvas_height)
+        preview = self._resize_photo_to_contain(original, target_width=canvas_width, target_height=canvas_height)
         offset_x = (canvas_width - preview.width()) / 2.0
         offset_y = (canvas_height - preview.height()) / 2.0
 
