@@ -1566,6 +1566,7 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         magnitudes: np.ndarray,
         los_idx: int | None,
         echo_indices: list[int],
+        interpolation_factor: float = 1.0,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Mission Measurement Review")
@@ -1578,6 +1579,11 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         self._selected_los_idx = int(los_idx) if los_idx is not None else None
         self._base_echo_indices = [int(idx) for idx in echo_indices]
         self._selected_echo_indices = [int(idx) for idx in echo_indices]
+        try:
+            interpolation_factor_value = float(interpolation_factor)
+        except (TypeError, ValueError):
+            interpolation_factor_value = 1.0
+        self._interpolation_factor = interpolation_factor_value if interpolation_factor_value > 0 else 1.0
 
         layout = QtWidgets.QVBoxLayout(self)
         header = QtWidgets.QLabel(
@@ -1765,7 +1771,13 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             return
         rows = []
         for i, delay in enumerate(self.echo_delays, start=1):
-            rows.append(f"Echo {i}: {delay} samp ({delay * 1.5:.1f} m)")
+            adjusted_delay = float(delay) / self._interpolation_factor
+            adjusted_delay_text = (
+                str(int(adjusted_delay))
+                if adjusted_delay.is_integer()
+                else f"{adjusted_delay:.2f}".rstrip("0").rstrip(".")
+            )
+            rows.append(f"Echo {i}: {adjusted_delay_text} samp ({adjusted_delay * 1.5:.1f} m)")
         self._stats_label.setText("LOS-Echos:\n" + "\n".join(rows) if rows else "LOS-Echos: --")
 
     def _connect_click_handler(self) -> None:
@@ -6865,6 +6877,9 @@ class TransceiverUI(ctk.CTk):
                     magnitudes=mag,
                     los_idx=int(los_idx),
                     echo_indices=echo_indices,
+                    interpolation_factor=self._rx_effective_interpolation_factor()
+                    if self.rx_interpolation_enable.get()
+                    else 1.0,
                 )
                 dialog.raise_()
                 dialog.activateWindow()
