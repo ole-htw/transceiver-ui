@@ -44,6 +44,19 @@ def test_format_one_based_index_converts_zero_based_values_for_ui() -> None:
     assert MissionWorkflowWindow._format_one_based_index(-1) == "-1"
 
 
+def test_derive_table_status_maps_error_to_failed() -> None:
+    assert (
+        MissionWorkflowWindow._derive_table_status(
+            {"measurement": {"status": "succeeded"}, "error": "navigation_failed.timeout"}
+        )
+        == "failed"
+    )
+
+
+def test_derive_table_status_uses_measurement_status_without_error() -> None:
+    assert MissionWorkflowWindow._derive_table_status({"measurement": {"status": "skipped"}, "error": None}) == "skipped"
+
+
 def test_parse_lidar_scan_text_for_overlay_supports_inline_ranges() -> None:
     parsed = MissionWorkflowWindow._parse_lidar_scan_text_for_overlay(
         "angle_min: -1.57\nangle_increment: 0.1\nranges: [1.0, 2.5, inf, nan]\n"
