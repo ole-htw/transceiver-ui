@@ -448,13 +448,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "measurement_idx",
             "idx",
             "nav",
-            "measurement",
+            "status",
             "echo_1_m",
             "echo_2_m",
             "echo_3_m",
             "echo_4_m",
             "echo_5_m",
-            "status",
             "error",
         )
         self.results_table = ttk.Treeview(table_frame, columns=columns, show="headings", height=14)
@@ -463,13 +462,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "measurement_idx": "Messung",
             "idx": "Punktindex",
             "nav": "Navigation",
-            "measurement": "Status",
+            "status": "Status",
             "echo_1_m": "E1",
             "echo_2_m": "E2",
             "echo_3_m": "E3",
             "echo_4_m": "E4",
             "echo_5_m": "E5",
-            "status": "Gesamtstatus",
             "error": "Fehler",
         }
         for key, title in headings.items():
@@ -2144,13 +2142,23 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 self._format_one_based_index(payload.get("global_index")),
                 self._format_one_based_index(payload.get("point_index")),
                 nav.get("state", "-"),
-                meas.get("status", "-"),
+                self._derive_table_status(payload),
                 *echo_distances,
-                "ok" if payload.get("error") is None else "fehler",
                 error_text,
             ),
         )
         self._update_live_label()
+
+    @staticmethod
+    def _derive_table_status(payload: dict[str, Any]) -> str:
+        if payload.get("error") is not None:
+            return "failed"
+
+        measurement = payload.get("measurement")
+        measurement_status = measurement.get("status") if isinstance(measurement, dict) else None
+        if measurement_status in {"succeeded", "failed", "skipped"}:
+            return str(measurement_status)
+        return "succeeded"
 
     @staticmethod
     def _format_one_based_index(value: Any) -> str:
