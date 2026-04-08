@@ -114,3 +114,19 @@ def test_save_and_load_json_dict_preserves_lidar_reference_enabled_flag(tmp_path
     loaded = _load_json_dict(state_file)
 
     assert loaded["lidar_reference_enabled"] is False
+
+
+def test_save_and_load_json_dict_preserves_manual_review_enabled_flag(tmp_path) -> None:
+    state_file = tmp_path / "mission-workflow-state.json"
+    payload = {
+        "name": "scan-manual-review-toggle",
+        "repeat": 1,
+        "start_point_index": 0,
+        "manual_review_enabled": False,
+        "points": [{"id": "p001", "x": 0.0, "y": 0.0, "z": 0.0, "yaw": 0.0, "enabled": True}],
+    }
+
+    _save_json_dict(state_file, payload)
+    loaded = _load_json_dict(state_file)
+
+    assert loaded["manual_review_enabled"] is False

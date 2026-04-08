@@ -214,6 +214,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._live_label_ticker_job: str | None = None
         self._live_label_ticker_active = False
         self.lidar_reference_enabled_var = tk.BooleanVar(value=True)
+        self.manual_review_enabled_var = tk.BooleanVar(value=True)
         self.live_pose_stream_enabled_var = tk.BooleanVar(value=False)
         self._live_pose_stream_active = False
 
@@ -454,12 +455,18 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             variable=self.lidar_reference_enabled_var,
             command=self._persist_workflow_state,
         ).grid(row=3, column=0, columnspan=2, padx=(8, 3), pady=(0, 4), sticky="w")
+        ctk.CTkCheckBox(
+            controls,
+            text="Manuelle Prüfung",
+            variable=self.manual_review_enabled_var,
+            command=self._on_manual_review_toggle_changed,
+        ).grid(row=3, column=2, padx=(8, 3), pady=(0, 4), sticky="w")
         ctk.CTkSwitch(
             controls,
             text="Live-Position aktivieren",
             variable=self.live_pose_stream_enabled_var,
             command=self._on_live_pose_stream_switch_changed,
-        ).grid(row=3, column=2, columnspan=3, padx=(8, 8), pady=(0, 4), sticky="w")
+        ).grid(row=3, column=3, columnspan=2, padx=(8, 8), pady=(0, 4), sticky="w")
 
         self.live_var = tk.StringVar(value="Punkt: - | Navigation: idle | Messung: idle | Verbleibend: - | Live-Status: Karte nicht geladen")
         ctk.CTkLabel(controls, textvariable=self.live_var, anchor="w", justify="left").grid(
@@ -1679,6 +1686,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "map_config_file": self._selected_map_config_file,
             "rx_antenna_global_position": self._serialize_rx_antenna_global_position(),
             "lidar_reference_enabled": bool(self.lidar_reference_enabled_var.get()),
+            "manual_review_enabled": bool(self.manual_review_enabled_var.get()),
             "reverse_point_order": bool(self.reverse_point_order_var.get()),
         }
 
@@ -1757,6 +1765,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             else:
                 self._set_rx_antenna_position(x=rx_position[0], y=rx_position[1], persist=False)
             self.lidar_reference_enabled_var.set(bool(payload.get("lidar_reference_enabled", True)))
+            self.manual_review_enabled_var.set(bool(payload.get("manual_review_enabled", True)))
             self.reverse_point_order_var.set(bool(payload.get("reverse_point_order", False)))
             self._refresh_points_table()
             self._refresh_map_section()
@@ -1989,6 +1998,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._live_label_ticker_job = None
 
     def _review_measurement(self, *, point_context, output_file: str) -> dict[str, object]:  # type: ignore[no-untyped-def]
+        if not bool(self.manual_review_enabled_var.get()):
+            return {
+                "approved": True,
+                "reason": "",
+                "detail": ""
+            }
         point_id = point_context.point.id or point_context.point.name or f"point-{point_context.global_index}"
         point_label = f"Punkt {point_context.global_index} ({point_id})"
         review_fn = getattr(self.master, "review_measurement_for_mission", None)
@@ -2092,16 +2107,17 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if not any(point.enabled for point in self._mission_points):
             reasons.append("Keine aktiven Wegpunkte vorhanden. Bitte mindestens einen Punkt aktivieren.")
         reasons.extend(self._runtime_guard_reasons())
-        review_fn = getattr(self.master, "review_measurement_for_mission", None)
-        if not callable(review_fn):
-            reasons.append(
-                "Review-Funktion ist nicht verfügbar (self.master.review_measurement_for_mission ist nicht callable)."
-            )
-        reference_data = self._get_crosscorr_reference_for_mission()
-        if not self._has_crosscorr_reference_data(reference_data):
-            reasons.append(
-                "TX-Referenzdaten für Crosscorrelation fehlen. Bitte TX laden (gleiche Quelle wie _get_crosscorr_reference)."
-            )
+        if bool(self.manual_review_enabled_var.get()):
+            review_fn = getattr(self.master, "review_measurement_for_mission", None)
+            if not callable(review_fn):
+                reasons.append(
+                    "Review-Funktion ist nicht verfügbar (self.master.review_measurement_for_mission ist nicht callable)."
+                )
+            reference_data = self._get_crosscorr_reference_for_mission()
+            if not self._has_crosscorr_reference_data(reference_data):
+                reasons.append(
+                    "TX-Referenzdaten für Crosscorrelation fehlen. Bitte TX laden (gleiche Quelle wie _get_crosscorr_reference)."
+                )
         return len(reasons) == 0, reasons
 
     def _create_navigation_adapter(self) -> NavigationAdapter:
@@ -2127,6 +2143,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 on_operator_message=self._append_validation,
             )
         return self._navigator
+
+
+    def _on_manual_review_toggle_changed(self) -> None:
+        self._persist_workflow_state()
+        self._refresh_review_ready_indicator()
 
     def _on_live_pose_stream_switch_changed(self) -> None:
         self._sync_live_pose_stream_state()
@@ -2166,6 +2187,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
     def _refresh_review_ready_indicator(self, prerequisites_ok: bool | None = None) -> None:
         if prerequisites_ok is None:
             prerequisites_ok, _ = self._check_run_prerequisites()
+        if not bool(self.manual_review_enabled_var.get()):
+            self.review_ready_var.set("Review: automatisch ✅")
+            return
         if prerequisites_ok:
             self.review_ready_var.set("Review: bereit ✅")
         else:
