@@ -89,6 +89,41 @@ def test_extract_lidar_ranges_from_scan_text_supports_list_style() -> None:
     assert values[2] == 3.4
 
 
+def test_build_waypoint_arrow_polygon_points_to_positive_x_for_zero_yaw() -> None:
+    points = MissionWorkflowWindow._build_waypoint_arrow_polygon(
+        center_x=100.0,
+        center_y=50.0,
+        yaw_radians=0.0,
+        arrow_length=10.0,
+        tail_length=4.0,
+        tail_width=8.0,
+    )
+
+    tip_x, tip_y, left_x, left_y, right_x, right_y = points
+    assert (tip_x, tip_y) == (110.0, 50.0)
+    assert (left_x, left_y) == (96.0, 54.0)
+    assert (right_x, right_y) == (96.0, 46.0)
+
+
+def test_build_waypoint_arrow_polygon_points_up_for_ninety_degree_yaw() -> None:
+    points = MissionWorkflowWindow._build_waypoint_arrow_polygon(
+        center_x=100.0,
+        center_y=50.0,
+        yaw_radians=1.5707963267948966,
+        arrow_length=10.0,
+        tail_length=4.0,
+        tail_width=8.0,
+    )
+
+    tip_x, tip_y, left_x, left_y, right_x, right_y = points
+    assert round(tip_x, 3) == 100.0
+    assert round(tip_y, 3) == 40.0
+    assert round(left_x, 3) == 104.0
+    assert round(left_y, 3) == 54.0
+    assert round(right_x, 3) == 96.0
+    assert round(right_y, 3) == 54.0
+
+
 class _FakeAdapter:
     def __init__(self, events):
         self.config = object()

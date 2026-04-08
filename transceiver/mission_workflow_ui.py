@@ -828,11 +828,16 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             px, py = pixel_coordinates
             px += offset_x
             py += offset_y
-            marker_id = self.map_preview_canvas.create_oval(
-                px - 4,
-                py - 4,
-                px + 4,
-                py + 4,
+            marker_points = self._build_waypoint_arrow_polygon(
+                center_x=px,
+                center_y=py,
+                yaw_radians=float(point.yaw),
+                arrow_length=10.0,
+                tail_length=4.0,
+                tail_width=8.0,
+            )
+            marker_id = self.map_preview_canvas.create_polygon(
+                marker_points,
                 fill="#00d26a",
                 outline="#0d1016",
                 width=1,
@@ -840,6 +845,32 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._map_marker_ids.append(marker_id)
             if index == self._selected_point_index:
                 self._highlight_marker(marker_id)
+
+    @staticmethod
+    def _build_waypoint_arrow_polygon(
+        *,
+        center_x: float,
+        center_y: float,
+        yaw_radians: float,
+        arrow_length: float,
+        tail_length: float,
+        tail_width: float,
+    ) -> tuple[float, float, float, float, float, float]:
+        heading_x = math.cos(yaw_radians)
+        heading_y = -math.sin(yaw_radians)
+        perpendicular_x = math.sin(yaw_radians)
+        perpendicular_y = math.cos(yaw_radians)
+
+        tip_x = center_x + heading_x * arrow_length
+        tip_y = center_y + heading_y * arrow_length
+        tail_center_x = center_x - heading_x * tail_length
+        tail_center_y = center_y - heading_y * tail_length
+        half_width = tail_width / 2.0
+        left_x = tail_center_x + perpendicular_x * half_width
+        left_y = tail_center_y + perpendicular_y * half_width
+        right_x = tail_center_x - perpendicular_x * half_width
+        right_y = tail_center_y - perpendicular_y * half_width
+        return (tip_x, tip_y, left_x, left_y, right_x, right_y)
 
     def _world_to_preview_pixel(
         self,
