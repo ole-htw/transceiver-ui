@@ -4,14 +4,18 @@ from transceiver.measurement_mission import MeasurementPoint
 from transceiver.mission_workflow_ui import MissionWorkflowWindow
 
 
-def test_format_echo_delays_for_table_uses_structured_measurement_result_entries() -> None:
-    text = MissionWorkflowWindow._format_echo_delays_for_table(
+def test_format_echo_distances_for_table_returns_only_meter_values_for_first_five_echoes() -> None:
+    text = MissionWorkflowWindow._format_echo_distances_for_table(
         [
             {"echo_index": 3, "delta_lag": 24, "distance_m": 36.0},
             {"echo_index": 5, "delta_lag": 42},
+            {"echo_index": 6, "delta_lag": 52, "distance_m": 78.25},
+            {"echo_index": 7, "delta_lag": 61, "distance_m": 12.5},
+            {"echo_index": 8, "delta_lag": 73, "distance_m": 6.0},
+            {"echo_index": 9, "delta_lag": 91, "distance_m": 99.0},
         ]
     )
-    assert text == "E3: 24 (36.0m); E5: 42"
+    assert text == ("36", "-", "78.25", "12.5", "6")
 
 
 def test_yaw_conversion_uses_clockwise_degrees_in_ui() -> None:
