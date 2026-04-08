@@ -252,23 +252,21 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.point_name_var = tk.StringVar(value="")
         self.point_x_var = tk.StringVar(value="0.0")
         self.point_y_var = tk.StringVar(value="0.0")
-        self.point_z_var = tk.StringVar(value="0.0")
         self.point_yaw_var = tk.StringVar(value="0.0")
 
         self._labeled_entry(points_editor, row=0, column=1, label="Name", variable=self.point_name_var, width=120)
         self._labeled_entry(points_editor, row=0, column=2, label="X", variable=self.point_x_var, width=90)
         self._labeled_entry(points_editor, row=0, column=3, label="Y", variable=self.point_y_var, width=90)
-        self._labeled_entry(points_editor, row=0, column=4, label="Z", variable=self.point_z_var, width=90)
-        self._labeled_entry(points_editor, row=0, column=5, label="Yaw (° CW)", variable=self.point_yaw_var, width=90)
-        ctk.CTkButton(points_editor, text="Punkt hinzufügen", command=self._add_point).grid(row=0, column=6, padx=(8, 3))
-        ctk.CTkButton(points_editor, text="Auswahl entfernen", command=self._remove_selected_point).grid(row=0, column=7, padx=3)
-        ctk.CTkButton(points_editor, text="▲", width=36, command=self._move_selected_point_up).grid(row=0, column=8, padx=3)
-        ctk.CTkButton(points_editor, text="▼", width=36, command=self._move_selected_point_down).grid(row=0, column=9, padx=(3, 8), sticky="w")
+        self._labeled_entry(points_editor, row=0, column=4, label="Yaw (° CW)", variable=self.point_yaw_var, width=90)
+        ctk.CTkButton(points_editor, text="Punkt hinzufügen", command=self._add_point).grid(row=0, column=5, padx=(8, 3))
+        ctk.CTkButton(points_editor, text="Auswahl entfernen", command=self._remove_selected_point).grid(row=0, column=6, padx=3)
+        ctk.CTkButton(points_editor, text="▲", width=36, command=self._move_selected_point_up).grid(row=0, column=7, padx=3)
+        ctk.CTkButton(points_editor, text="▼", width=36, command=self._move_selected_point_down).grid(row=0, column=8, padx=(3, 8), sticky="w")
         ctk.CTkButton(
             points_editor,
             text="Aktivieren/Deaktivieren",
             command=self._toggle_selected_point_enabled,
-        ).grid(row=0, column=10, padx=(3, 8), sticky="w")
+        ).grid(row=0, column=9, padx=(3, 8), sticky="w")
 
         map_controls_row = ctk.CTkFrame(self, fg_color="transparent")
         map_controls_row.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 6))
@@ -353,16 +351,14 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         points_table_frame.columnconfigure(0, weight=1)
         points_table_frame.rowconfigure(1, weight=1)
         ctk.CTkLabel(points_table_frame, text="3) Wegpunkte").grid(row=0, column=0, sticky="w", padx=8, pady=(8, 2))
-        point_columns = ("idx", "enabled", "name", "x", "y", "z", "yaw")
+        point_columns = ("idx", "enabled", "x", "y", "yaw")
         self.points_table = ttk.Treeview(points_table_frame, columns=point_columns, show="headings", height=6)
         self.points_table.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
         for key, title in {
             "idx": "#",
             "enabled": "Aktiv",
-            "name": "Name",
             "x": "X",
             "y": "Y",
-            "z": "Z",
             "yaw": "Yaw (° CW)",
         }.items():
             self.points_table.heading(key, text=title)
@@ -1191,7 +1187,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "name": self.point_name_var.get().strip() or None,
             "x": self.point_x_var.get().strip(),
             "y": self.point_y_var.get().strip(),
-            "z": self.point_z_var.get().strip() or 0.0,
+            "z": 0.0,
             "yaw": yaw_internal_radians,
             "enabled": True,
         }
@@ -1313,10 +1309,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 values=(
                     idx + 1,
                     "✓" if point.enabled else "✗",
-                    point.name or "-",
                     f"{point.x:.3f}",
                     f"{point.y:.3f}",
-                    f"{point.z:.3f}",
                     "-" if point.yaw is None else f"{self._yaw_internal_radians_to_cw_degrees(point.yaw):.3f}",
                 ),
             )
