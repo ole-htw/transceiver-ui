@@ -6809,6 +6809,7 @@ class TransceiverUI(ctk.CTk):
         *,
         point_label: str,
         output_file: str,
+        auto_approve: bool = False,
     ) -> dict[str, object]:
         """Open a blocking cross-correlation review dialog for one mission point."""
         outcome: dict[str, object] = {
@@ -6860,6 +6861,30 @@ class TransceiverUI(ctk.CTk):
                     outcome["approved"] = False
                     outcome["reason"] = REVIEW_REASON_NO_DETECTABLE_LOS
                     outcome["detail"] = detail
+                    return
+                if auto_approve:
+                    interpolation_enabled = bool(self.rx_interpolation_enable.get())
+                    interpolation_factor = self._rx_effective_interpolation_factor()
+                    los_idx_final = int(los_idx)
+                    echo_indices_final = [int(idx) for idx in echo_indices]
+                    los_lag = int(round(float(lags[los_idx_final])))
+                    outcome["approved"] = True
+                    outcome["reason"] = ""
+                    outcome["detail"] = ""
+                    outcome["manual_lags"] = {"los": None, "echo": None}
+                    outcome["interpolation_enabled"] = interpolation_enabled
+                    outcome["interpolation_factor"] = interpolation_factor
+                    outcome["los_idx"] = los_idx_final
+                    outcome["echo_indices"] = echo_indices_final
+                    outcome["echo_delays"] = [
+                        int(abs(int(round(float(lags[int(idx)]))) - los_lag))
+                        for idx in echo_indices_final
+                    ]
+                    outcome["los_lag"] = los_lag
+                    outcome["echo_lags"] = [
+                        int(round(float(lags[int(idx)])))
+                        for idx in echo_indices_final
+                    ]
                     return
 
                 parent_window = qapp.activeWindow()

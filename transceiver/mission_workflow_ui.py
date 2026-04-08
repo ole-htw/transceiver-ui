@@ -2110,15 +2110,31 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._live_label_ticker_job = None
 
     def _review_measurement(self, *, point_context, output_file: str) -> dict[str, object]:  # type: ignore[no-untyped-def]
-        if not bool(self.manual_review_enabled_var.get()):
-            return {
-                "approved": True,
-                "reason": "",
-                "detail": ""
-            }
+        manual_review_enabled = bool(self.manual_review_enabled_var.get())
         point_id = point_context.point.id or point_context.point.name or f"point-{point_context.global_index}"
         point_label = f"Punkt {point_context.global_index} ({point_id})"
         review_fn = getattr(self.master, "review_measurement_for_mission", None)
+        if not manual_review_enabled and callable(review_fn):
+            try:
+                review_result = review_fn(
+                    point_label=point_label,
+                    output_file=output_file,
+                    auto_approve=True,
+                )
+            except TypeError:
+                review_result = review_fn(point_label=point_label, output_file=output_file)
+            except Exception:
+                review_result = {"approved": True, "reason": "", "detail": ""}
+            if isinstance(review_result, dict):
+                result_payload = dict(review_result)
+                result_payload["approved"] = True
+                result_payload["reason"] = ""
+                detail = result_payload.get("detail")
+                result_payload["detail"] = detail.strip() if isinstance(detail, str) else ""
+                return result_payload
+            return {"approved": True, "reason": "", "detail": ""}
+        if not manual_review_enabled:
+            return {"approved": True, "reason": "", "detail": ""}
         if not callable(review_fn):
             detail = "Mission-Review nicht verfügbar; Messung wird verworfen."
             self._append_validation(f"⚠️ {detail}")

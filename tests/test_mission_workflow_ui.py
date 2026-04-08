@@ -305,13 +305,30 @@ def test_on_map_canvas_release_creates_waypoint_and_disables_pick_mode() -> None
 def test_review_measurement_auto_approves_when_manual_review_disabled() -> None:
     window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
     window.manual_review_enabled_var = SimpleNamespace(get=lambda: False)
+    observed: dict[str, object] = {}
+    window.master = SimpleNamespace(
+        review_measurement_for_mission=lambda **kwargs: observed.update(kwargs) or {
+            "approved": False,
+            "echo_delays": [12],
+            "echo_lags": [8],
+            "los_lag": -4,
+        }
+    )
 
     review_result = window._review_measurement(
         point_context=SimpleNamespace(point=SimpleNamespace(id="p1", name=""), global_index=1),
         output_file="dummy.bin",
     )
 
-    assert review_result == {"approved": True, "reason": "", "detail": ""}
+    assert observed["auto_approve"] is True
+    assert review_result == {
+        "approved": True,
+        "reason": "",
+        "detail": "",
+        "echo_delays": [12],
+        "echo_lags": [8],
+        "los_lag": -4,
+    }
 
 
 def test_check_run_prerequisites_skips_review_requirements_when_manual_review_disabled() -> None:
