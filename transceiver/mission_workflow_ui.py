@@ -2117,6 +2117,14 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     @staticmethod
     def _format_echo_delays_for_table(value: Any) -> str:
+        def _fmt_delay(delay_value: Any) -> str:
+            if not isinstance(delay_value, (int, float)):
+                return "--"
+            numeric = float(delay_value)
+            if numeric.is_integer():
+                return str(int(numeric))
+            return f"{numeric:.2f}".rstrip("0").rstrip(".")
+
         if not isinstance(value, list) or not value:
             return "-"
         rows: list[str] = []
@@ -2127,7 +2135,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             echo_idx = item.get("echo_index", idx - 1)
             delta_lag = item.get("delta_lag")
             distance = item.get("distance_m")
-            base = f"E{echo_idx}: {delta_lag if delta_lag is not None else '--'}"
+            base = f"E{echo_idx}: {_fmt_delay(delta_lag)}"
             if isinstance(distance, (int, float)):
                 base += f" ({float(distance):.1f}m)"
             rows.append(base)
