@@ -70,6 +70,25 @@ def test_compose_table_status_uses_status_when_error_missing() -> None:
     assert MissionWorkflowWindow._compose_table_status("succeeded", "") == "succeeded"
 
 
+def test_compose_table_outcome_returns_succeeded_for_clean_success() -> None:
+    payload = {
+        "navigation": {"state": "succeeded"},
+        "measurement": {"status": "succeeded"},
+    }
+    assert MissionWorkflowWindow._compose_table_outcome(payload, "") == "succeeded"
+
+
+def test_compose_table_outcome_includes_navigation_and_measurement_for_failures() -> None:
+    payload = {
+        "navigation": {"state": "aborted"},
+        "measurement": {"status": "skipped"},
+    }
+    assert (
+        MissionWorkflowWindow._compose_table_outcome(payload, "navigation_failed.aborted")
+        == "navigation aborted, measurement skipped: navigation_failed.aborted"
+    )
+
+
 def test_parse_lidar_scan_text_for_overlay_supports_inline_ranges() -> None:
     parsed = MissionWorkflowWindow._parse_lidar_scan_text_for_overlay(
         "angle_min: -1.57\nangle_increment: 0.1\nranges: [1.0, 2.5, inf, nan]\n"

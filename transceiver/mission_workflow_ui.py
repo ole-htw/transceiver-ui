@@ -474,7 +474,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         columns = (
             "measurement_idx",
             "idx",
-            "nav",
             "echo_1_m",
             "echo_2_m",
             "echo_3_m",
@@ -487,7 +486,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         headings = {
             "measurement_idx": "Messung",
             "idx": "Punktindex",
-            "nav": "Navigation",
             "echo_1_m": "E1",
             "echo_2_m": "E2",
             "echo_3_m": "E3",
@@ -2316,7 +2314,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _on_record(self, payload: dict[str, Any]) -> None:
         self._records.append(payload)
-        nav = payload.get("navigation", {})
         meas = payload.get("measurement", {})
         result = meas.get("result", {}) if isinstance(meas.get("result"), dict) else {}
         review = result.get("review", {}) if isinstance(result.get("review"), dict) else {}
@@ -2327,7 +2324,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             error_text = f"{error_text} [{review_reason}]" if error_text else review_reason
         if review_detail:
             error_text = f"{error_text}: {review_detail}" if error_text else review_detail
-        combined_status = self._compose_table_status(self._derive_table_status(payload), error_text)
+        combined_status = self._compose_table_outcome(payload, error_text)
         echo_distances = self._format_echo_distances_for_table(result.get("echo_delays"))
         self.results_table.insert(
             "",
@@ -2335,12 +2332,32 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             values=(
                 self._format_one_based_index(payload.get("global_index")),
                 self._format_one_based_index(payload.get("point_index")),
-                nav.get("state", "-"),
                 *echo_distances,
                 combined_status,
             ),
         )
         self._update_live_label()
+
+    @staticmethod
+    def _compose_table_outcome(payload: dict[str, Any], error_text: str) -> str:
+        nav = payload.get("navigation")
+        nav_state = nav.get("state") if isinstance(nav, dict) else None
+        nav_status = str(nav_state) if isinstance(nav_state, str) and nav_state.strip() else "-"
+        measurement = payload.get("measurement")
+        measurement_state = measurement.get("status") if isinstance(measurement, dict) else None
+        measurement_status = (
+            str(measurement_state)
+            if isinstance(measurement_state, str) and measurement_state.strip()
+            else "-"
+        )
+        if nav_status == "succeeded" and measurement_status == "succeeded" and not error_text.strip():
+            return "succeeded"
+
+        base = f"navigation {nav_status}, measurement {measurement_status}"
+        details = error_text.strip()
+        if details:
+            return f"{base}: {details}"
+        return base
 
     @staticmethod
     def _derive_table_status(payload: dict[str, Any]) -> str:
