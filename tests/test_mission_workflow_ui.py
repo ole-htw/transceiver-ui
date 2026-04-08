@@ -57,6 +57,17 @@ def test_derive_table_status_uses_measurement_status_without_error() -> None:
     assert MissionWorkflowWindow._derive_table_status({"measurement": {"status": "skipped"}, "error": None}) == "skipped"
 
 
+def test_compose_table_status_accumulates_status_and_error_text() -> None:
+    assert (
+        MissionWorkflowWindow._compose_table_status("failed", "navigation_failed.timeout [lidar_missing]: Peaks fehlen")
+        == "failed: navigation_failed.timeout [lidar_missing]: Peaks fehlen"
+    )
+
+
+def test_compose_table_status_uses_status_when_error_missing() -> None:
+    assert MissionWorkflowWindow._compose_table_status("succeeded", "") == "succeeded"
+
+
 def test_parse_lidar_scan_text_for_overlay_supports_inline_ranges() -> None:
     parsed = MissionWorkflowWindow._parse_lidar_scan_text_for_overlay(
         "angle_min: -1.57\nangle_increment: 0.1\nranges: [1.0, 2.5, inf, nan]\n"

@@ -445,13 +445,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "measurement_idx",
             "idx",
             "nav",
-            "status",
             "echo_1_m",
             "echo_2_m",
             "echo_3_m",
             "echo_4_m",
             "echo_5_m",
-            "error",
+            "status",
         )
         self.results_table = ttk.Treeview(table_frame, columns=columns, show="headings", height=14)
         self.results_table.grid(row=0, column=0, sticky="nsew")
@@ -459,13 +458,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "measurement_idx": "Messung",
             "idx": "Punktindex",
             "nav": "Navigation",
-            "status": "Status",
             "echo_1_m": "E1",
             "echo_2_m": "E2",
             "echo_3_m": "E3",
             "echo_4_m": "E4",
             "echo_5_m": "E5",
-            "error": "Fehler",
+            "status": "Status",
         }
         for key, title in headings.items():
             self.results_table.heading(key, text=title)
@@ -476,7 +474,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.results_table.column("echo_3_m", width=80)
         self.results_table.column("echo_4_m", width=80)
         self.results_table.column("echo_5_m", width=80)
-        self.results_table.column("error", width=260)
+        self.results_table.column("status", width=320)
 
         scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.results_table.yview)
         scroll.grid(row=0, column=1, sticky="ns")
@@ -2126,6 +2124,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             error_text = f"{error_text} [{review_reason}]" if error_text else review_reason
         if review_detail:
             error_text = f"{error_text}: {review_detail}" if error_text else review_detail
+        combined_status = self._compose_table_status(self._derive_table_status(payload), error_text)
         echo_distances = self._format_echo_distances_for_table(result.get("echo_delays"))
         self.results_table.insert(
             "",
@@ -2134,9 +2133,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 self._format_one_based_index(payload.get("global_index")),
                 self._format_one_based_index(payload.get("point_index")),
                 nav.get("state", "-"),
-                self._derive_table_status(payload),
                 *echo_distances,
-                error_text,
+                combined_status,
             ),
         )
         self._update_live_label()
@@ -2151,6 +2149,14 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if measurement_status in {"succeeded", "failed", "skipped"}:
             return str(measurement_status)
         return "succeeded"
+
+    @staticmethod
+    def _compose_table_status(status_text: str, error_text: str) -> str:
+        status_value = status_text.strip() if isinstance(status_text, str) else ""
+        error_value = error_text.strip() if isinstance(error_text, str) else ""
+        if status_value and error_value:
+            return f"{status_value}: {error_value}"
+        return status_value or error_value or "-"
 
     @staticmethod
     def _format_one_based_index(value: Any) -> str:
