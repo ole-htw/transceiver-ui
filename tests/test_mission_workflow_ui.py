@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from transceiver.measurement_mission import MeasurementPoint
 from transceiver.mission_workflow_ui import MissionWorkflowWindow
 
@@ -167,3 +169,33 @@ def test_ui_navigator_navigation_succeeds_without_feedback_position(monkeypatch)
     assert state == "succeeded"
     position_updates = [event for event in nav_events if event.get("type") == "position_update"]
     assert position_updates
+
+
+def test_on_map_canvas_click_ignores_click_when_pick_mode_disabled() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._rx_antenna_map_pick_mode_enabled = False
+    window._preview_pixel_to_world = lambda **_kwargs: (1.0, 2.0)
+    calls: list[tuple[float, float]] = []
+    window._set_rx_antenna_position = lambda *, x, y: calls.append((x, y))
+    window._set_rx_antenna_map_pick_mode = lambda _enabled: None
+    window._append_validation = lambda _text: None
+
+    window._on_map_canvas_click(SimpleNamespace(x=10, y=20))
+
+    assert calls == []
+
+
+def test_on_map_canvas_click_sets_position_and_disables_pick_mode() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._rx_antenna_map_pick_mode_enabled = True
+    window._preview_pixel_to_world = lambda **_kwargs: (3.5, -2.5)
+    set_calls: list[tuple[float, float]] = []
+    mode_calls: list[bool] = []
+    window._set_rx_antenna_position = lambda *, x, y: set_calls.append((x, y))
+    window._set_rx_antenna_map_pick_mode = lambda enabled: mode_calls.append(enabled)
+    window._append_validation = lambda _text: None
+
+    window._on_map_canvas_click(SimpleNamespace(x=10, y=20))
+
+    assert set_calls == [(3.5, -2.5)]
+    assert mode_calls == [False]
