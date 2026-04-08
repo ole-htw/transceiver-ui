@@ -300,3 +300,27 @@ def test_on_map_canvas_release_creates_waypoint_and_disables_pick_mode() -> None
 
     assert add_calls == [(4.0, -3.0, 1.2)]
     assert mode_calls == [False]
+
+
+def test_review_measurement_auto_approves_when_manual_review_disabled() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window.manual_review_enabled_var = SimpleNamespace(get=lambda: False)
+
+    review_result = window._review_measurement(
+        point_context=SimpleNamespace(point=SimpleNamespace(id="p1", name=""), global_index=1),
+        output_file="dummy.bin",
+    )
+
+    assert review_result == {"approved": True, "reason": "", "detail": ""}
+
+
+def test_check_run_prerequisites_skips_review_requirements_when_manual_review_disabled() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window.manual_review_enabled_var = SimpleNamespace(get=lambda: False)
+    window._mission_points = [MeasurementPoint(id="p1", name="", x=0.0, y=0.0, yaw=0.0, enabled=True)]
+    window._runtime_guard_reasons = lambda: []
+
+    ok, reasons = window._check_run_prerequisites()
+
+    assert ok is True
+    assert reasons == []
