@@ -252,12 +252,20 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.point_name_var = tk.StringVar(value="")
         self.point_x_var = tk.StringVar(value="0.0")
         self.point_y_var = tk.StringVar(value="0.0")
-        self.point_yaw_var = tk.StringVar(value="0.0")
+        self.point_yaw_var = tk.StringVar(value="0°")
 
         self._labeled_entry(points_editor, row=0, column=1, label="Name", variable=self.point_name_var, width=120)
         self._labeled_entry(points_editor, row=0, column=2, label="X", variable=self.point_x_var, width=90)
         self._labeled_entry(points_editor, row=0, column=3, label="Y", variable=self.point_y_var, width=90)
-        self._labeled_entry(points_editor, row=0, column=4, label="Yaw (° CW)", variable=self.point_yaw_var, width=90)
+        self._labeled_entry(
+            points_editor,
+            row=0,
+            column=4,
+            label="Yaw",
+            variable=self.point_yaw_var,
+            width=90,
+            validatecommand=(self.register(self._validate_yaw_input), "%P"),
+        )
         ctk.CTkButton(points_editor, text="Punkt hinzufügen", command=self._add_point).grid(row=0, column=5, padx=(8, 3))
         ctk.CTkButton(points_editor, text="Auswahl entfernen", command=self._remove_selected_point).grid(row=0, column=6, padx=3)
         ctk.CTkButton(points_editor, text="▲", width=36, command=self._move_selected_point_up).grid(row=0, column=7, padx=3)
@@ -358,7 +366,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "idx": "#",
             "x": "X",
             "y": "Y",
-            "yaw": "Yaw (° CW)",
+            "yaw": "Yaw",
         }.items():
             self.points_table.heading(key, text=title)
             self.points_table.column(key, stretch=True, width=95)
@@ -523,11 +531,16 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         label: str,
         variable: tk.StringVar,
         width: int,
+        validatecommand: tuple[str, str] | None = None,
     ) -> None:
         wrap = ctk.CTkFrame(parent, fg_color="transparent")
         wrap.grid(row=row, column=column, padx=3, pady=3)
         ctk.CTkLabel(wrap, text=label).pack(side="top", anchor="w")
-        ctk.CTkEntry(wrap, textvariable=variable, width=width).pack(side="top")
+        entry_kwargs: dict[str, Any] = {"textvariable": variable, "width": width}
+        if validatecommand is not None:
+            entry_kwargs["validate"] = "key"
+            entry_kwargs["validatecommand"] = validatecommand
+        ctk.CTkEntry(wrap, **entry_kwargs).pack(side="top")
 
     def _append_validation(self, text: str) -> None:
         if not self._is_validation_box_available():
@@ -556,12 +569,30 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     @staticmethod
     def _yaw_cw_degrees_to_internal_radians(yaw_cw_degrees: Any) -> float:
-        yaw_deg = float(yaw_cw_degrees)
+        if isinstance(yaw_cw_degrees, str):
+            yaw_deg = float(yaw_cw_degrees.strip().removesuffix("°").strip())
+        else:
+            yaw_deg = float(yaw_cw_degrees)
         return math.radians(-yaw_deg)
 
     @staticmethod
     def _yaw_internal_radians_to_cw_degrees(yaw_radians: float) -> float:
         return -math.degrees(yaw_radians)
+
+    @staticmethod
+    def _validate_yaw_input(proposed: str) -> bool:
+        if proposed in {"", "-", "°", "-°"}:
+            return True
+        return bool(re.fullmatch(r"-?\d+°?", proposed))
+
+    @staticmethod
+    def _format_yaw_degrees(yaw_radians: float | None) -> str:
+        if yaw_radians is None:
+            return "-"
+        yaw_degrees = int(round(MissionWorkflowWindow._yaw_internal_radians_to_cw_degrees(yaw_radians)))
+        if yaw_degrees == 0:
+            yaw_degrees = 0
+        return f"{yaw_degrees}°"
 
     def _refresh_map_section(self) -> None:
         self._map_image_original = None
@@ -1176,10 +1207,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         except Exception:
             messagebox.showwarning(
                 "Messpunkt ungültig",
-                "Yaw muss eine Zahl in Grad (Uhrzeigersinn) sein.",
+                "Yaw muss eine ganze Zahl in Grad sein (z. B. 90°).",
                 parent=self,
             )
             return
+        self.point_yaw_var.set(self._format_yaw_degrees(yaw_internal_radians))
 
         point_payload = {
             "id": self._generate_unique_point_id(),
@@ -1205,7 +1237,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._persist_workflow_state()
         self._append_validation(
             f"✅ Punkt hinzugefügt: {point.id or point.name} "
-            f"(x={point.x:.2f}, y={point.y:.2f}, z={point.z:.2f}, yaw={self._yaw_internal_radians_to_cw_degrees(point.yaw):.2f}° CW)"
+            f"(x={point.x:.2f}, y={point.y:.2f}, z={point.z:.2f}, yaw={self._format_yaw_degrees(point.yaw)})"
         )
 
     def _remove_selected_point(self) -> None:
@@ -1306,7 +1338,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                     idx + 1,
                     f"{point.x:.3f}",
                     f"{point.y:.3f}",
-                    "-" if point.yaw is None else f"{self._yaw_internal_radians_to_cw_degrees(point.yaw):.3f}",
+                    self._format_yaw_degrees(point.yaw),
                 ),
                 tags=("active",) if point.enabled else ("inactive",),
             )
