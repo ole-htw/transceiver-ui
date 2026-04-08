@@ -319,12 +319,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._last_live_diagnosis_key: str | None = None
         self._emit_live_diagnostics_to_validation = True
         self._rx_antenna_global_position: tuple[float, float] | None = None
+        self._rx_antenna_map_pick_mode_enabled = False
         self.rx_antenna_x_var = tk.StringVar(value="")
         self.rx_antenna_y_var = tk.StringVar(value="")
 
         rx_position_controls = ctk.CTkFrame(map_frame, fg_color="transparent")
         rx_position_controls.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 8))
-        rx_position_controls.columnconfigure(7, weight=1)
+        rx_position_controls.columnconfigure(8, weight=1)
         ctk.CTkLabel(rx_position_controls, text="RX-Antenne global").grid(row=0, column=0, padx=(0, 4), sticky="w")
         ctk.CTkLabel(rx_position_controls, text="X").grid(row=0, column=1, padx=(6, 2), sticky="w")
         ctk.CTkEntry(rx_position_controls, textvariable=self.rx_antenna_x_var, width=95).grid(
@@ -346,6 +347,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             command=self._clear_rx_antenna_position,
             width=80,
         ).grid(row=0, column=6, padx=(3, 0), sticky="w")
+        self.rx_antenna_map_pick_mode_btn = ctk.CTkButton(
+            rx_position_controls,
+            text="🖱️",
+            command=self._toggle_rx_antenna_map_pick_mode,
+            width=42,
+        )
+        self.rx_antenna_map_pick_mode_btn.grid(row=0, column=7, padx=(3, 0), sticky="w")
 
         side_panel = ctk.CTkFrame(map_controls_row)
         side_panel.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
@@ -645,13 +653,25 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._draw_map_preview()
 
     def _on_map_canvas_click(self, event: tk.Event) -> None:
+        if not self._rx_antenna_map_pick_mode_enabled:
+            return
         world_position = self._preview_pixel_to_world(preview_x=float(event.x), preview_y=float(event.y))
         if world_position is None:
             return
         self._set_rx_antenna_position(x=world_position[0], y=world_position[1])
+        self._set_rx_antenna_map_pick_mode(False)
         self._append_validation(
             f"✅ RX-Antenne auf Karte gesetzt: x={world_position[0]:.3f}, y={world_position[1]:.3f}"
         )
+
+    def _set_rx_antenna_map_pick_mode(self, enabled: bool) -> None:
+        self._rx_antenna_map_pick_mode_enabled = enabled
+        button_text = "✕" if enabled else "🖱️"
+        self.rx_antenna_map_pick_mode_btn.configure(text=button_text)
+        self.map_preview_canvas.configure(cursor="crosshair" if enabled else "")
+
+    def _toggle_rx_antenna_map_pick_mode(self) -> None:
+        self._set_rx_antenna_map_pick_mode(not self._rx_antenna_map_pick_mode_enabled)
 
     @staticmethod
     def _resize_photo_to_contain(photo: tk.PhotoImage, *, target_width: int, target_height: int) -> tk.PhotoImage:
