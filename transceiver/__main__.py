@@ -61,6 +61,10 @@ from .mission_measurement_service import (
 )
 from .mission_workflow_ui import MissionWorkflowWindow
 from .tx_controller import TxController
+from .window_utils import (
+    close_child_window,
+    configure_child_window,
+)
 
 # --- suggestion helper -------------------------------------------------------
 
@@ -771,7 +775,25 @@ class RangeSlider(ctk.CTkFrame):
             self.command(None)
 
 
-class ConsoleWindow(ctk.CTkToplevel):
+class ManagedChildWindow(ctk.CTkToplevel):
+    """Toplevel base class that always restores main-window focus on close."""
+
+    def __init__(self, parent, *, modal: bool = False, focus: bool = True) -> None:
+        super().__init__(parent)
+        self._main_window = configure_child_window(
+            self,
+            parent=parent,
+            modal=modal,
+            focus=focus,
+            on_close=self._close_with_main_focus,
+        )
+
+    def _close_with_main_focus(self) -> None:
+        if self.winfo_exists():
+            self.destroy()
+
+
+class ConsoleWindow(ManagedChildWindow):
     """Simple window to display text output."""
 
     def __init__(self, parent, title: str = "Console") -> None:
@@ -785,7 +807,7 @@ class ConsoleWindow(ctk.CTkToplevel):
         self.text.see(tk.END)
 
 
-class SignalViewer(ctk.CTkToplevel):
+class SignalViewer(ManagedChildWindow):
     """Window to display a previously recorded signal."""
 
     def __init__(self, parent, data: np.ndarray, fs: float, title: str) -> None:
@@ -978,11 +1000,11 @@ class SignalViewer(ctk.CTkToplevel):
         self.stats_label.configure(text=text)
 
 
-class OpenSignalDialog(ctk.CTkToplevel):
+class OpenSignalDialog(ManagedChildWindow):
     """Custom file dialog listing signals sortable by modification date."""
 
     def __init__(self, parent, initialdir: str | Path) -> None:
-        super().__init__(parent)
+        super().__init__(parent, modal=True)
         self.title("Open Signal")
         self.initialdir = Path(initialdir)
         self.result: str | None = None
@@ -1011,8 +1033,6 @@ class OpenSignalDialog(ctk.CTkToplevel):
         w, h = self.winfo_width(), self.winfo_height()
         self.geometry(f"{w * 2}x{h * 2}")
         self.tree.bind("<Double-1>", lambda _e: self._on_open())
-        self.grab_set()
-        self.transient(parent)
         _apply_button_cursor(self)
 
     def _populate(self) -> None:
@@ -1255,7 +1275,7 @@ class SignalColumn(ctk.CTkFrame):
             messagebox.showerror("Save Trim", str(exc), parent=self)
 
 
-class CompareWindow(ctk.CTkToplevel):
+class CompareWindow(ManagedChildWindow):
     """Window with four columns to compare signals."""
 
     def __init__(self, parent) -> None:
@@ -7062,6 +7082,7 @@ class TransceiverUI(ctk.CTk):
     def _show_toast(self, text: str, duration: int = 2000) -> None:
         """Show a temporary notification on top of the main window."""
         win = ctk.CTkToplevel(self)
+        configure_child_window(win, parent=self, focus=False)
         win.overrideredirect(True)
         win.attributes("-topmost", True)
         lbl = ctk.CTkLabel(win, text=text)
@@ -7443,6 +7464,7 @@ class TransceiverUI(ctk.CTk):
 
     def open_load_preset_window(self) -> None:
         win = ctk.CTkToplevel(self)
+        configure_child_window(win, parent=self)
         win.title("Load Preset")
         lb = tk.Listbox(win, exportselection=False)
         for name in sorted(_PRESETS.keys()):
@@ -7463,6 +7485,7 @@ class TransceiverUI(ctk.CTk):
 
     def open_save_preset_window(self) -> None:
         win = ctk.CTkToplevel(self)
+        configure_child_window(win, parent=self)
         win.title("Save Preset")
         ctk.CTkLabel(win, text="Name:", anchor="e").grid(
             row=0, column=0, sticky="e", padx=5, pady=5
@@ -7502,6 +7525,7 @@ class TransceiverUI(ctk.CTk):
             messagebox.showinfo("Delete Preset", "No presets available")
             return
         win = ctk.CTkToplevel(self)
+        configure_child_window(win, parent=self)
         win.title("Delete Preset")
         lb = tk.Listbox(win, exportselection=False)
         for p in sorted(_PRESETS.keys()):
@@ -8254,10 +8278,13 @@ class TransceiverUI(ctk.CTk):
         self, cont_thread: threading.Thread, timeout: float = 10.0
     ) -> bool:
         dialog = tk.Toplevel(self)
+        configure_child_window(
+            dialog,
+            parent=self,
+            modal=True,
+            on_close=lambda: None,
+        )
         dialog.title("Continuous")
-        dialog.transient(self)
-        dialog.grab_set()
-        dialog.protocol("WM_DELETE_WINDOW", lambda: None)
         dialog.resizable(False, False)
         label = ttk.Label(
             dialog,
@@ -8274,7 +8301,7 @@ class TransceiverUI(ctk.CTk):
             dialog.update()
         progress.stop()
         dialog.grab_release()
-        dialog.destroy()
+        close_child_window(dialog)
         return not cont_thread.is_alive()
 
     def stop_continuous(self) -> None:

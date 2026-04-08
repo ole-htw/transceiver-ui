@@ -37,6 +37,7 @@ from .navigation_adapter import (
     NavigationEvent,
     Ros2CliPoseStreamTransport,
 )
+from .window_utils import configure_child_window
 
 MISSION_WORKFLOW_STATE_FILE = Path(__file__).with_name("mission_workflow_state.json")
 LIVE_LABEL_TICKER_INTERVAL_MS = 250
@@ -189,6 +190,11 @@ class _UiNavigator:
 class MissionWorkflowWindow(ctk.CTkToplevel):
     def __init__(self, parent: ctk.CTk) -> None:
         super().__init__(parent)
+        configure_child_window(
+            self,
+            parent=parent,
+            on_close=self._on_window_close,
+        )
         self.title("Mission Workflow")
         self.geometry("1100x700")
         self.minsize(980, 640)
@@ -214,7 +220,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._build_ui()
         self._restore_workflow_state()
         self.after_idle(self._stabilize_initial_geometry)
-        self.protocol("WM_DELETE_WINDOW", self._on_window_close)
 
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
