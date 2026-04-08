@@ -6866,11 +6866,15 @@ class TransceiverUI(ctk.CTk):
                 approved = bool(dialog.confirmed)
                 outcome["approved"] = approved
                 if approved:
+                    interpolation_enabled = bool(self.rx_interpolation_enable.get())
+                    interpolation_factor = self._rx_effective_interpolation_factor()
                     outcome["reason"] = ""
                     outcome["detail"] = ""
                     los_idx_final = dialog.selected_los_idx
                     echo_indices_final = dialog.selected_echo_indices
                     outcome["manual_lags"] = dialog.manual_lags
+                    outcome["interpolation_enabled"] = interpolation_enabled
+                    outcome["interpolation_factor"] = interpolation_factor
                     outcome["los_idx"] = int(los_idx_final) if los_idx_final is not None else None
                     outcome["echo_indices"] = [int(idx) for idx in echo_indices_final]
                     outcome["echo_delays"] = [int(delay) for delay in dialog.echo_delays]

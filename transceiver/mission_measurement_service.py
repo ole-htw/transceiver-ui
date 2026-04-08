@@ -52,12 +52,22 @@ def _coerce_echo_delay_entries(
     echo_indices: Any,
     echo_lags: Any,
     los_lag: Any,
+    interpolation_enabled: Any = False,
+    interpolation_factor: Any = 1.0,
 ) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     delays = list(echo_delays) if isinstance(echo_delays, list) else []
     indices = list(echo_indices) if isinstance(echo_indices, list) else []
     lags = list(echo_lags) if isinstance(echo_lags, list) else []
     los_lag_value = int(los_lag) if isinstance(los_lag, (int, float)) else None
+    interpolation_enabled_flag = bool(interpolation_enabled)
+    interpolation_factor_value = 1.0
+    try:
+        interpolation_factor_value = float(interpolation_factor)
+    except (TypeError, ValueError):
+        interpolation_factor_value = 1.0
+    if interpolation_factor_value <= 0:
+        interpolation_factor_value = 1.0
 
     total = max(len(delays), len(indices), len(lags))
     for idx in range(total):
@@ -68,9 +78,11 @@ def _coerce_echo_delay_entries(
         if isinstance(raw_delay, dict):
             entry = dict(raw_delay)
         else:
-            delta_lag = int(raw_delay) if isinstance(raw_delay, (int, float)) else None
+            delta_lag = float(raw_delay) if isinstance(raw_delay, (int, float)) else None
             if delta_lag is None and los_lag_value is not None and isinstance(raw_echo_lag, (int, float)):
-                delta_lag = int(abs(int(raw_echo_lag) - los_lag_value))
+                delta_lag = float(abs(float(raw_echo_lag) - float(los_lag_value)))
+            if delta_lag is not None and interpolation_enabled_flag:
+                delta_lag /= interpolation_factor_value
             entry = {
                 "echo_index": int(raw_echo_index) if isinstance(raw_echo_index, (int, float)) else idx,
                 "delta_lag": delta_lag,
@@ -255,6 +267,8 @@ class MissionRxMeasurementService:
                         echo_indices=review_result.get("echo_indices"),
                         echo_lags=review_result.get("echo_lags"),
                         los_lag=review_result.get("los_lag"),
+                        interpolation_enabled=review_result.get("interpolation_enabled"),
+                        interpolation_factor=review_result.get("interpolation_factor"),
                     )
                     review_payload = {
                         "approved": True,

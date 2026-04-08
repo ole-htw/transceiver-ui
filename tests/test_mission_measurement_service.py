@@ -45,10 +45,33 @@ def test_trigger_promotes_review_los_echo_fields_to_measurement_result() -> None
     assert payload["los_lag"] == -120
     assert payload["echo_lags"] == [-90]
     assert payload["echo_delays"] == [
-        {"echo_index": 33, "delta_lag": 30, "distance_m": 45.0}
+        {"echo_index": 33, "delta_lag": 30.0, "distance_m": 45.0}
     ]
     assert payload["review"]["echo_delays"] == payload["echo_delays"]
     assert payload["lidar_reference"] == lidar_payload
+
+
+def test_trigger_scales_review_echo_delays_by_interpolation_factor() -> None:
+    service = MissionRxMeasurementService(
+        app=_FakeApp(),
+        on_status=lambda *_args: None,
+        collect_lidar_reference=lambda _output_file: {"topic": "/scan"},
+        review_measurement=lambda **_kwargs: {
+            "approved": True,
+            "los_lag": -120,
+            "echo_indices": [33],
+            "echo_lags": [-60],
+            "echo_delays": [60],
+            "interpolation_enabled": True,
+            "interpolation_factor": 2,
+        },
+    )
+
+    payload = service.trigger(_point_context())
+
+    assert payload["echo_delays"] == [
+        {"echo_index": 33, "delta_lag": 30.0, "distance_m": 45.0}
+    ]
 
 
 def test_trigger_waits_for_receive_and_runs_review_after_success() -> None:
