@@ -44,6 +44,8 @@ LIVE_LABEL_TICKER_INTERVAL_MS = 250
 AUTO_STOP_CONTINUOUS_BEFORE_RUN = True
 ECHO_OVERLAY_COLORS = ("#ef5350", "#42a5f5", "#66bb6a", "#ffca28", "#ab47bc")
 ECHO_HEADING_MARKERS = ("🟥", "🟦", "🟩", "🟨", "🟪")
+LIDAR_OVERLAY_MAX_DRAWN_BEAMS = 700
+LIDAR_OVERLAY_CELL_SIZE_PX = 3.0
 
 
 def _load_json_dict(path: Path) -> dict[str, Any]:
@@ -1360,10 +1362,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         angle_min = float(scan["angle_min"])
         angle_increment = float(scan["angle_increment"])
         ranges = scan["ranges"]
+        beam_stride = max(1, len(ranges) // LIDAR_OVERLAY_MAX_DRAWN_BEAMS)
+        drawn_beam_cells: set[tuple[int, int]] = set()
         for idx, distance in enumerate(ranges):
             if not math.isfinite(distance) or distance <= 0.0:
                 continue
-            if idx % 4 != 0:
+            if idx % beam_stride != 0:
                 continue
             beam_angle = point.yaw + angle_min + idx * angle_increment
             end_world_x = point.x + math.cos(beam_angle) * distance
@@ -1373,6 +1377,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 continue
             end_x = end_map_pixel[0] * scale_x + offset_x
             end_y = end_map_pixel[1] * scale_y + offset_y
+            beam_cell = (
+                int((end_x - start_x) / LIDAR_OVERLAY_CELL_SIZE_PX),
+                int((end_y - start_y) / LIDAR_OVERLAY_CELL_SIZE_PX),
+            )
+            if beam_cell in drawn_beam_cells:
+                continue
+            drawn_beam_cells.add(beam_cell)
             self.map_preview_canvas.create_line(
                 start_x,
                 start_y,
