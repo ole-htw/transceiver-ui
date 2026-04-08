@@ -24,7 +24,7 @@ def test_yaw_conversion_uses_clockwise_degrees_in_ui() -> None:
     assert MissionWorkflowWindow._yaw_internal_radians_to_cw_degrees(yaw_rad) == 90.0
 
 
-def test_format_start_point_label_uses_index_and_name_without_id() -> None:
+def test_format_start_point_label_uses_only_one_based_index() -> None:
     label_without_name = MissionWorkflowWindow._format_start_point_label(
         0,
         MeasurementPoint(id="p001", name="", x=0.0, y=0.0, yaw=0.0),
@@ -34,8 +34,8 @@ def test_format_start_point_label_uses_index_and_name_without_id() -> None:
         MeasurementPoint(id="p002", name="Messpunkt B", x=1.0, y=1.0, yaw=0.0),
     )
 
-    assert label_without_name == "1: Punkt 1"
-    assert label_with_name == "2: Messpunkt B"
+    assert label_without_name == "1"
+    assert label_with_name == "2"
 
 
 def test_format_one_based_index_converts_zero_based_values_for_ui() -> None:

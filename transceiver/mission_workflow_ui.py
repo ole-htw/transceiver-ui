@@ -1360,8 +1360,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     @staticmethod
     def _format_start_point_label(index: int, point: MeasurementPoint) -> str:
-        display_name = point.name or f"Punkt {index + 1}"
-        return f"{index + 1}: {display_name}"
+        _ = point
+        return str(index + 1)
 
     def _active_start_points(self) -> list[tuple[int, MeasurementPoint]]:
         return [
