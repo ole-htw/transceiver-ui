@@ -2121,7 +2121,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "",
             "end",
             values=(
-                payload.get("global_index", ""),
+                self._format_one_based_index(payload.get("global_index")),
                 self._format_one_based_index(payload.get("point_index")),
                 nav.get("state", "-"),
                 meas.get("status", "-"),
