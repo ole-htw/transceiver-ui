@@ -623,99 +623,35 @@ class NavigationAdapter:
         return "aborted"
 
 
-class Ros2CliPoseStreamTransport:
-    """Continuously streams robot pose updates from `/amcl_pose` via ROS2 CLI over SSH."""
+class RosbridgePoseStreamTransport:
+    """Continuously streams `/amcl_pose` updates via rosbridge through an SSH tunnel."""
 
-    _FRAME_ID_PATTERN = re.compile(
-        r"\bframe_id\s*:\s*['\"]?([A-Za-z0-9_./-]+)['\"]?",
-        re.IGNORECASE,
-    )
-    _STAMP_SEC_PATTERN = re.compile(r"\bsec\s*:\s*(-?\d+)\b", re.IGNORECASE)
-    _STAMP_NANOSEC_PATTERN = re.compile(r"\bnanosec\s*:\s*(\d+)\b", re.IGNORECASE)
-    _NUMERIC_PATTERN = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
-    _NO_DATA_WARNING_AFTER_S = 5.0
-    _BLOCK_IDLE_FLUSH_AFTER_S = 0.35
+    _POSE_TOPIC = "/amcl_pose"
+    _POSE_TYPE = "geometry_msgs/msg/PoseWithCovarianceStamped"
     _DEFAULT_EXPECTED_FRAME_ID = "map"
-    _TRANSCEIVER_BANNER_PREFIX = "[transceiver]"
-    _POSE_STREAM_TOP_LEVEL_KEYS = frozenset(
-        {
-            "header",
-            "stamp",
-            "frame_id",
-            "pose",
-            "position",
-            "orientation",
-            "covariance",
-        }
-    )
-    _POSE_STREAM_NESTED_KEYS = frozenset({"x", "y", "z", "w", "sec", "nanosec"})
-    _ENV_ASSIGNMENT_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
     def __init__(self) -> None:
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
-        self._process: subprocess.Popen[str] | None = None
+        self._ssh_process: subprocess.Popen[str] | None = None
+        self._websocket: Any = None
         self._lock = threading.Lock()
 
+    @staticmethod
+    def _reserve_local_port() -> int:
+        import socket
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            return int(sock.getsockname()[1])
+
     @classmethod
-    def _build_stream_command(
-        cls,
-        *,
-        config: NavigationAdapterConfig,
-        topic: str = "/amcl_pose",
-    ) -> list[str]:
-        if topic != "/amcl_pose":
-            raise ValueError("Pose stream topic must be /amcl_pose")
-        remote_ros_env_cmd = config.remote_ros_env_cmd.strip()
-        remote_setup = config.remote_ros_setup.strip()
-        fastdds_profiles_file = config.fastdds_profiles_file.strip()
-        env_source_label = Ros2CliNavigationTransport._build_env_source_label(config)
-        profile_source_label = (
-            "FASTDDS profile configured" if fastdds_profiles_file else "FASTDDS profile not configured"
-        )
-
-        env_exports: list[str] = []
-        if fastdds_profiles_file:
-            quoted_profile = shlex.quote(fastdds_profiles_file)
-            env_exports.extend(
-                [
-                    f"export FASTDDS_DEFAULT_PROFILES_FILE={quoted_profile}",
-                    f"export FASTRTPS_DEFAULT_PROFILES_FILE={quoted_profile}",
-                ]
-            )
-
-        shell_parts: list[str] = ["set -euo pipefail"]
-        shell_parts.extend(env_exports)
-        if remote_ros_env_cmd:
-            shell_parts.append(f"{{ {remote_ros_env_cmd}; }} 1>&2")
-        elif remote_setup:
-            shell_parts.append(f"source {shlex.quote(remote_setup)} 1>&2")
-        shell_parts.append(
-            f">&2 echo {shlex.quote(f'[transceiver] ROS env source={env_source_label}; {profile_source_label}; pose_topic={topic}') }"
-        )
-        shell_parts.extend(
-            [
-                "command -v ros2 >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 CLI not found in PATH' >&2; exit 70; }",
-                "test -n \"${ROS_DOMAIN_ID:-}\" || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ROS_DOMAIN_ID is not set' >&2; exit 72; }",
-                "ros2 topic list >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 topic list failed' >&2; exit 73; }",
-                f"ros2 topic list 2>/dev/null | grep -Fx -- {shlex.quote(topic)} >/dev/null || {{ echo 'TRANSCEIVER_ENV_CHECK_FAILED: topic {topic} is not visible in ros2 topic list' >&2; exit 74; }}",
-                f"ros2 topic info {shlex.quote(topic)} >/dev/null 2>&1 || {{ echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 topic info {topic} failed' >&2; exit 75; }}",
-            ]
-        )
-        shell_parts.append(
-            " ".join(
-                [
-                    "ros2",
-                    "topic",
-                    "echo",
-                    shlex.quote(topic),
-                    "2>/dev/null",
-                ]
-            )
-        )
-        remote_cmd = "; ".join(shell_parts)
+    def _build_tunnel_command(cls, *, config: NavigationAdapterConfig, local_port: int) -> list[str]:
         return [
             "ssh",
+            "-N",
+            "-L",
+            f"{local_port}:127.0.0.1:9090",
             "-o",
             "BatchMode=yes",
             "-o",
@@ -729,127 +665,68 @@ class Ros2CliPoseStreamTransport:
             "-o",
             f"ConnectTimeout={int(max(1.0, config.goal_acceptance_timeout_s))}",
             config.robot_host,
-            "bash",
-            "-lc",
-            remote_cmd,
         ]
-
-    @classmethod
-    def _extract_position_xy(cls, block: str) -> tuple[float, float] | None:
-        lines = block.splitlines()
-        in_position = False
-        position_indent = 0
-        x_value: float | None = None
-        y_value: float | None = None
-
-        for raw_line in lines:
-            stripped = raw_line.strip()
-            if not stripped:
-                continue
-            indent = len(raw_line) - len(raw_line.lstrip(" "))
-            key = stripped.split(":", 1)[0].strip().lower()
-            if key == "position":
-                in_position = True
-                position_indent = indent
-                continue
-            if in_position and indent <= position_indent and key not in {"x", "y"}:
-                in_position = False
-            if not in_position:
-                continue
-            if key not in {"x", "y"}:
-                continue
-            value_part = stripped.split(":", 1)[1] if ":" in stripped else ""
-            number_match = cls._NUMERIC_PATTERN.search(value_part)
-            if not number_match:
-                continue
-            try:
-                value = float(number_match.group(0))
-            except ValueError:
-                continue
-            if key == "x":
-                x_value = value
-            elif key == "y":
-                y_value = value
-            if x_value is not None and y_value is not None:
-                return x_value, y_value
-        return None
-
-    @classmethod
-    def _extract_pose_payload(cls, block: str) -> dict[str, Any] | None:
-        xy = cls._extract_position_xy(block)
-        if xy is None:
-            return None
-        x_value, y_value = xy
-
-        frame_match = cls._FRAME_ID_PATTERN.search(block)
-        frame_id = frame_match.group(1) if frame_match else "map"
-
-        sec_match = cls._STAMP_SEC_PATTERN.search(block)
-        nanosec_match = cls._STAMP_NANOSEC_PATTERN.search(block)
-        timestamp = time.time()
-        if sec_match:
-            try:
-                sec = int(sec_match.group(1))
-                nanosec = int(nanosec_match.group(1)) if nanosec_match else 0
-                timestamp = float(sec) + float(nanosec) / 1_000_000_000.0
-            except ValueError:
-                timestamp = time.time()
-
-        return {
-            "x": x_value,
-            "y": y_value,
-            "frame_id": frame_id,
-            "timestamp": timestamp,
-        }
-
-    @classmethod
-    def _looks_like_complete_pose_block(cls, block_lines: list[str]) -> bool:
-        if not block_lines:
-            return False
-        block_text = "\n".join(line for line in block_lines if line.strip())
-        if not block_text:
-            return False
-        lowered = block_text.lower()
-        if "position:" not in lowered:
-            return False
-        return cls._extract_position_xy(block_text) is not None
 
     @staticmethod
     def _tail_text(text: str, *, max_lines: int = 6) -> str:
         return Ros2CliNavigationTransport._tail_text(text, max_lines=max_lines)
 
-    @classmethod
-    def _is_transceiver_banner_line(cls, stripped_line: str) -> bool:
-        return stripped_line.startswith(cls._TRANSCEIVER_BANNER_PREFIX)
-
     @staticmethod
-    def _is_likely_new_message_start(stripped_line: str) -> bool:
-        lowered = stripped_line.lower()
-        return lowered == "header:"
+    def _extract_yaw(*, x: float, y: float, z: float, w: float) -> float:
+        siny_cosp = 2.0 * (w * z + x * y)
+        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+        return float(math.atan2(siny_cosp, cosy_cosp))
 
     @classmethod
-    def _is_pose_stream_data_line(cls, line: str) -> bool:
-        stripped = line.strip()
-        if not stripped:
-            return False
-        if stripped == "---":
-            return True
-        if cls._is_transceiver_banner_line(stripped):
-            return False
-        if cls._ENV_ASSIGNMENT_PATTERN.match(stripped):
-            return False
-        if ":" not in stripped:
-            return False
-        key = stripped.split(":", 1)[0].strip().lower()
-        indent = len(line) - len(line.lstrip(" "))
-        if indent == 0:
-            return key in cls._POSE_STREAM_TOP_LEVEL_KEYS
-        return key in cls._POSE_STREAM_TOP_LEVEL_KEYS or key in cls._POSE_STREAM_NESTED_KEYS
+    def _extract_pose_payload(cls, rosbridge_msg: dict[str, Any]) -> dict[str, Any] | None:
+        msg = rosbridge_msg.get("msg")
+        if not isinstance(msg, dict):
+            return None
+        header = msg.get("header")
+        pose_cov = msg.get("pose")
+        if not isinstance(header, dict) or not isinstance(pose_cov, dict):
+            return None
+        pose = pose_cov.get("pose")
+        if not isinstance(pose, dict):
+            return None
+        position = pose.get("position")
+        orientation = pose.get("orientation")
+        if not isinstance(position, dict) or not isinstance(orientation, dict):
+            return None
+        try:
+            px = float(position["x"])
+            py = float(position["y"])
+            qx = float(orientation.get("x", 0.0))
+            qy = float(orientation.get("y", 0.0))
+            qz = float(orientation.get("z", 0.0))
+            qw = float(orientation.get("w", 1.0))
+        except (TypeError, ValueError, KeyError):
+            return None
 
-    def _stop_process(self) -> None:
+        frame_id_raw = header.get("frame_id")
+        frame_id = frame_id_raw if isinstance(frame_id_raw, str) and frame_id_raw.strip() else "map"
+        stamp = header.get("stamp")
+        timestamp = time.time()
+        if isinstance(stamp, dict):
+            try:
+                sec = int(stamp.get("sec", 0))
+                nanosec = int(stamp.get("nanosec", 0))
+                timestamp = float(sec) + float(nanosec) / 1_000_000_000.0
+            except (TypeError, ValueError):
+                timestamp = time.time()
+
+        return {
+            "x": px,
+            "y": py,
+            "frame_id": frame_id,
+            "timestamp": timestamp,
+            "yaw": cls._extract_yaw(x=qx, y=qy, z=qz, w=qw),
+        }
+
+    def _stop_ssh_tunnel(self) -> None:
         with self._lock:
-            process = self._process
-            self._process = None
+            process = self._ssh_process
+            self._ssh_process = None
         if process is None:
             return
         try:
@@ -860,6 +737,17 @@ class Ros2CliPoseStreamTransport:
             pass
         try:
             process.kill()
+        except Exception:
+            pass
+
+    def _close_websocket(self) -> None:
+        with self._lock:
+            ws = self._websocket
+            self._websocket = None
+        if ws is None:
+            return
+        try:
+            ws.close()
         except Exception:
             pass
 
@@ -885,7 +773,8 @@ class Ros2CliPoseStreamTransport:
 
     def stop(self) -> None:
         self._stop_event.set()
-        self._stop_process()
+        self._close_websocket()
+        self._stop_ssh_tunnel()
         thread = self._thread
         self._thread = None
         if thread is not None:
@@ -898,6 +787,22 @@ class Ros2CliPoseStreamTransport:
         on_event: Callable[[dict[str, Any]], None],
         expected_frame_id: str | None = None,
     ) -> None:
+        try:
+            import websocket  # type: ignore
+        except ImportError:
+            on_event(
+                {
+                    "type": "pose_stream",
+                    "event": {
+                        "type": "stream_error",
+                        "message": "python package 'websocket-client' is required for rosbridge pose streaming",
+                        "attempt": 1,
+                        "timestamp": time.time(),
+                    },
+                }
+            )
+            return
+
         expected_frame = (
             expected_frame_id.strip()
             if isinstance(expected_frame_id, str) and expected_frame_id.strip()
@@ -906,16 +811,43 @@ class Ros2CliPoseStreamTransport:
         reconnect_attempt = 0
         while not self._stop_event.is_set():
             reconnect_attempt += 1
+            frame_mismatch_reported = False
+            disconnect_reason = ""
             try:
-                cmd = self._build_stream_command(config=config)
+                local_port = self._reserve_local_port()
+                tunnel_cmd = self._build_tunnel_command(config=config, local_port=local_port)
                 process = subprocess.Popen(
-                    cmd,
+                    tunnel_cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
                 )
                 with self._lock:
-                    self._process = process
+                    self._ssh_process = process
+
+                time.sleep(0.15)
+                poll_code = process.poll()
+                if poll_code is not None:
+                    stderr = process.stderr.read() if process.stderr is not None else ""
+                    disconnect_reason = (
+                        f"SSH tunnel setup failed (exit_code={poll_code}): {self._tail_text(stderr, max_lines=3)}"
+                    )
+                    raise OSError(disconnect_reason)
+
+                ws = websocket.create_connection(f"ws://127.0.0.1:{local_port}", timeout=2.0)
+                ws.settimeout(0.5)
+                with self._lock:
+                    self._websocket = ws
+
+                ws.send(
+                    json.dumps(
+                        {
+                            "op": "subscribe",
+                            "topic": self._POSE_TOPIC,
+                            "type": self._POSE_TYPE,
+                        }
+                    )
+                )
                 on_event(
                     {
                         "type": "pose_stream",
@@ -926,257 +858,103 @@ class Ros2CliPoseStreamTransport:
                         },
                     }
                 )
-                block_lines: list[str] = []
-                connected_at = time.time()
-                has_reported_stream_stall_warning = False
-                has_reported_frame_mismatch = False
-                has_seen_any_stdout_data = False
-                has_seen_foreign_stdout_data = False
-                has_seen_pose_raw_data = False
-                has_seen_complete_message_block = False
-                has_seen_parse_error_block = False
-                has_seen_valid_payload = False
-                has_seen_parseable_unflushed_block = False
-                saw_separator = False
-                saw_header = False
-                last_pose_line_at: float | None = None
-
-                def _handle_completed_block(raw_block: str, *, flush_reason: str) -> None:
-                    nonlocal has_seen_complete_message_block
-                    nonlocal has_seen_valid_payload
-                    nonlocal has_seen_parse_error_block
-                    nonlocal has_reported_frame_mismatch
-                    nonlocal has_seen_parseable_unflushed_block
-                    cleaned_block = raw_block.strip()
-                    if not cleaned_block:
-                        return
-                    has_seen_complete_message_block = True
-                    has_seen_parseable_unflushed_block = False
-                    payload = self._extract_pose_payload(cleaned_block)
-                    if payload is not None:
-                        has_seen_valid_payload = True
-                        received_frame = payload.get("frame_id")
-                        if (
-                            not has_reported_frame_mismatch
-                            and isinstance(received_frame, str)
-                            and received_frame.strip()
-                            and received_frame != expected_frame
-                        ):
-                            has_reported_frame_mismatch = True
-                            on_event(
-                                {
-                                    "type": "pose_stream",
-                                    "event": {
-                                        "type": "stream_error",
-                                        "message": (
-                                            "unerwarteter /amcl_pose frame_id: "
-                                            f"erwartet={expected_frame}, empfangen={received_frame}"
-                                        ),
-                                        "attempt": reconnect_attempt,
-                                        "timestamp": time.time(),
-                                    },
-                                }
-                            )
-                        on_event(
-                            {
-                                "type": "pose_stream",
-                                "event": {
-                                    "type": "position_update",
-                                    "position": payload,
-                                    "block_flush_reason": flush_reason,
-                                },
-                            }
-                        )
-                        return
-                    has_seen_parse_error_block = True
-                    on_event(
-                        {
-                            "type": "pose_stream",
-                            "event": {
-                                "type": "stream_error",
-                                    "message": (
-                                        "amcl_pose-Nachricht empfangen, aber nicht parsebar "
-                                        f"(x/y fehlen oder ungültig); raw={self._tail_text(cleaned_block, max_lines=5)}"
-                                    ),
-                                    "raw_pose_excerpt": self._tail_text(cleaned_block, max_lines=5),
-                                    "block_flush_reason": flush_reason,
-                                    "attempt": reconnect_attempt,
-                                    "timestamp": time.time(),
-                                },
-                        }
-                    )
 
                 while not self._stop_event.is_set():
-                    raw_line = ""
-                    if process.stdout is not None and hasattr(process.stdout, "fileno"):
-                        readable, _, _ = select.select([process.stdout], [], [], 0.25)
-                        if readable:
-                            raw_line = process.stdout.readline()
-                    elif process.stdout is not None:
-                        raw_line = process.stdout.readline()
-                    if raw_line:
-                        has_seen_any_stdout_data = True
-                        stripped = raw_line.strip()
-                        if stripped == "---":
-                            saw_separator = True
-                            if not block_lines:
-                                continue
-                            raw_block = "\n".join(block_lines)
-                            block_lines = []
-                            _handle_completed_block(raw_block, flush_reason="separator")
-                            continue
-                        if stripped and self._is_transceiver_banner_line(stripped):
-                            has_seen_foreign_stdout_data = True
-                            continue
-                        if stripped and not self._is_pose_stream_data_line(raw_line.rstrip("\n")):
-                            has_seen_foreign_stdout_data = True
-                            continue
-                        if stripped:
-                            if self._is_likely_new_message_start(stripped):
-                                saw_header = True
-                            if self._is_likely_new_message_start(stripped) and block_lines:
-                                _handle_completed_block(
-                                    "\n".join(block_lines),
-                                    flush_reason="new_header",
-                                )
-                                block_lines = []
-                            has_seen_pose_raw_data = True
-                            block_lines.append(raw_line.rstrip("\n"))
-                            has_seen_parseable_unflushed_block = self._looks_like_complete_pose_block(
-                                block_lines
-                            )
-                            last_pose_line_at = time.time()
+                    try:
+                        raw = ws.recv()
+                    except websocket.WebSocketTimeoutException:
                         continue
-                    if (
-                        block_lines
-                        and has_seen_parseable_unflushed_block
-                        and last_pose_line_at is not None
-                        and (time.time() - last_pose_line_at) >= self._BLOCK_IDLE_FLUSH_AFTER_S
-                    ):
-                        _handle_completed_block("\n".join(block_lines), flush_reason="idle_flush")
-                        block_lines = []
+                    except Exception as exc:
+                        disconnect_reason = f"rosbridge websocket disconnected: {exc}"
+                        break
+                    if not isinstance(raw, str) or not raw.strip():
                         continue
-                    if (
-                        not has_reported_stream_stall_warning
-                        and (time.time() - connected_at) >= self._NO_DATA_WARNING_AFTER_S
-                    ):
-                        if block_lines and has_seen_parseable_unflushed_block:
-                            _handle_completed_block("\n".join(block_lines), flush_reason="idle_flush")
-                            block_lines = []
-                            continue
-                        has_reported_stream_stall_warning = True
-                        if not has_seen_any_stdout_data:
-                            message = (
-                                "keine /amcl_pose-Daten empfangen: Topic sichtbar, aber keine Nachrichten "
-                                f"(>{self._NO_DATA_WARNING_AFTER_S:.0f}s nach Verbindungsaufbau)"
-                            )
-                        elif has_seen_foreign_stdout_data and not has_seen_pose_raw_data:
-                            message = (
-                                "nur Fremd-/Setup-Ausgaben empfangen, aber noch keine /amcl_pose-Nachrichten "
-                                f"(>{self._NO_DATA_WARNING_AFTER_S:.0f}s nach Verbindungsaufbau)"
-                            )
-                        elif has_seen_pose_raw_data and has_seen_parseable_unflushed_block:
-                            message = (
-                                "parsebarer /amcl_pose-Block liegt im Buffer, wurde aber noch nicht geflusht "
-                                f"(nach >{self._NO_DATA_WARNING_AFTER_S:.0f}s)"
-                            )
-                        elif has_seen_pose_raw_data and not has_seen_complete_message_block:
-                            message = (
-                                "amcl_pose-Rohdaten empfangen, aber noch kein kompletter Nachrichtenblock "
-                                f"(nach >{self._NO_DATA_WARNING_AFTER_S:.0f}s; warte auf Blockabschluss)"
-                            )
-                        elif has_seen_parse_error_block and not has_seen_valid_payload:
-                            message = (
-                                "kompletter /amcl_pose-Block empfangen, aber Parsing fehlgeschlagen "
-                                f"(nach >{self._NO_DATA_WARNING_AFTER_S:.0f}s noch kein gültiger Pose-Block)"
-                            )
-                        else:
-                            message = ""
-                        if not message:
-                            poll = process.poll()
-                            if poll is not None:
-                                break
-                            continue
+                    try:
+                        decoded = json.loads(raw)
+                    except json.JSONDecodeError:
                         on_event(
                             {
                                 "type": "pose_stream",
                                 "event": {
                                     "type": "stream_error",
-                                    "message": message,
-                                    "raw_pose_excerpt": self._tail_text("\n".join(block_lines), max_lines=6),
-                                    "saw_separator": saw_separator,
-                                    "saw_header": saw_header,
-                                    "buffer_line_count": len(block_lines),
-                                    "block_flush_reason": "idle_flush"
-                                    if has_seen_parseable_unflushed_block
-                                    else ("separator" if saw_separator else ("new_header" if saw_header else "")),
+                                    "message": "rosbridge message is not valid JSON",
+                                    "raw_pose_excerpt": self._tail_text(raw, max_lines=2),
                                     "attempt": reconnect_attempt,
                                     "timestamp": time.time(),
                                 },
                             }
                         )
-                    poll = process.poll()
-                    if poll is not None:
-                        break
-                if not self._stop_event.is_set():
-                    if block_lines:
-                        _handle_completed_block("\n".join(block_lines), flush_reason="idle_flush")
-                        block_lines = []
-                    exit_code = process.poll()
-                    stderr_tail = ""
-                    if process.stderr is not None:
-                        stderr = process.stderr.read()
-                        stderr_tail = Ros2CliNavigationTransport._tail_text(stderr, max_lines=5)
-                    else:
-                        stderr = ""
-                    if "TRANSCEIVER_ENV_CHECK_FAILED:" in stderr:
-                        reason = Ros2CliNavigationTransport._tail_text(
-                            "\n".join(
-                                line for line in stderr.splitlines() if "TRANSCEIVER_ENV_CHECK_FAILED:" in line
-                            ),
-                            max_lines=1,
+                        continue
+                    if decoded.get("op") != "publish" or decoded.get("topic") != self._POSE_TOPIC:
+                        continue
+                    payload = self._extract_pose_payload(decoded)
+                    if payload is None:
+                        on_event(
+                            {
+                                "type": "pose_stream",
+                                "event": {
+                                    "type": "stream_error",
+                                    "message": "amcl_pose rosbridge message is missing required pose fields",
+                                    "attempt": reconnect_attempt,
+                                    "timestamp": time.time(),
+                                },
+                            }
                         )
-                        message = f"ROS environment precheck failed before starting pose stream: {reason}"
-                    else:
-                        stderr_part = f"; stderr={stderr_tail}" if stderr_tail else ""
-                        if has_seen_complete_message_block and not has_seen_valid_payload:
-                            message = (
-                                "pose stream disconnected after unparseable /amcl_pose data "
-                                f"(exit_code={exit_code}){stderr_part}"
-                            )
-                        else:
-                            message = (
-                                "pose stream disconnected after connection "
-                                f"(exit_code={exit_code}; had_data={has_seen_valid_payload}){stderr_part}"
-                            )
+                        continue
+                    received_frame = payload.get("frame_id")
+                    if (
+                        not frame_mismatch_reported
+                        and isinstance(received_frame, str)
+                        and received_frame.strip()
+                        and received_frame != expected_frame
+                    ):
+                        frame_mismatch_reported = True
+                        on_event(
+                            {
+                                "type": "pose_stream",
+                                "event": {
+                                    "type": "stream_error",
+                                    "message": (
+                                        "unerwarteter /amcl_pose frame_id: "
+                                        f"erwartet={expected_frame}, empfangen={received_frame}"
+                                    ),
+                                    "attempt": reconnect_attempt,
+                                    "timestamp": time.time(),
+                                },
+                            }
+                        )
                     on_event(
                         {
                             "type": "pose_stream",
                             "event": {
-                                "type": "stream_error",
-                                "message": message,
-                                "attempt": reconnect_attempt,
-                                "timestamp": time.time(),
+                                "type": "position_update",
+                                "position": payload,
                             },
                         }
                     )
+                if not disconnect_reason and not self._stop_event.is_set():
+                    disconnect_reason = "pose stream disconnected"
             except OSError as exc:
-                on_event(
-                    {
-                        "type": "pose_stream",
-                        "event": {
-                            "type": "stream_error",
-                            "message": str(exc),
-                            "attempt": reconnect_attempt,
-                            "timestamp": time.time(),
-                        },
-                    }
-                )
+                disconnect_reason = str(exc)
+            except Exception as exc:
+                disconnect_reason = f"pose stream connection failed: {exc}"
             finally:
-                self._stop_process()
+                self._close_websocket()
+                self._stop_ssh_tunnel()
 
             if self._stop_event.is_set():
                 break
+            on_event(
+                {
+                    "type": "pose_stream",
+                    "event": {
+                        "type": "stream_error",
+                        "message": disconnect_reason or "pose stream disconnected after connection",
+                        "attempt": reconnect_attempt,
+                        "timestamp": time.time(),
+                    },
+                }
+            )
             backoff_s = min(10.0, float(2 ** min(reconnect_attempt - 1, 4)))
             on_event(
                 {
@@ -1190,3 +968,6 @@ class Ros2CliPoseStreamTransport:
                 }
             )
             self._stop_event.wait(timeout=backoff_s)
+
+
+Ros2CliPoseStreamTransport = RosbridgePoseStreamTransport
