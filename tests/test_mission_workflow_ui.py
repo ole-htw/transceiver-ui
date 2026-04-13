@@ -89,6 +89,30 @@ def test_compose_table_outcome_includes_navigation_and_measurement_for_failures(
     )
 
 
+def test_format_distance_to_rx_for_table_uses_measurement_point_coordinates() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._rx_antenna_global_position = (1.0, 2.0)
+    window._mission_points = [
+        MeasurementPoint(id="p0", name="P0", x=4.0, y=6.0, yaw=0.0),
+    ]
+
+    distance = window._format_distance_to_rx_for_table({"point_index": 0})
+
+    assert distance == "5"
+
+
+def test_format_distance_to_rx_for_table_returns_dash_without_rx_position() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._rx_antenna_global_position = None
+    window._mission_points = [
+        MeasurementPoint(id="p0", name="P0", x=4.0, y=6.0, yaw=0.0),
+    ]
+
+    distance = window._format_distance_to_rx_for_table({"point_index": 0})
+
+    assert distance == "-"
+
+
 def test_parse_lidar_scan_text_for_overlay_supports_inline_ranges() -> None:
     parsed = MissionWorkflowWindow._parse_lidar_scan_text_for_overlay(
         "angle_min: -1.57\nangle_increment: 0.1\nranges: [1.0, 2.5, inf, nan]\n"
