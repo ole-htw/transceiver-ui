@@ -487,6 +487,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         columns = (
             "measurement_idx",
             "idx",
+            "distance_to_rx_m",
             "echo_1_m",
             "echo_2_m",
             "echo_3_m",
@@ -499,6 +500,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         headings = {
             "measurement_idx": "Messung",
             "idx": "Punktindex",
+            "distance_to_rx_m": "Abstand",
             "echo_1_m": f"{ECHO_HEADING_MARKERS[0]} E1",
             "echo_2_m": f"{ECHO_HEADING_MARKERS[1]} E2",
             "echo_3_m": f"{ECHO_HEADING_MARKERS[2]} E3",
@@ -510,6 +512,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self.results_table.heading(key, text=title)
             self.results_table.column(key, stretch=True, width=110)
         self.results_table.column("measurement_idx", width=80)
+        self.results_table.column("distance_to_rx_m", width=90)
         self.results_table.column("echo_1_m", width=80)
         self.results_table.column("echo_2_m", width=80)
         self.results_table.column("echo_3_m", width=80)
@@ -2502,12 +2505,14 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             error_text = f"{error_text}: {review_detail}" if error_text else review_detail
         combined_status = self._compose_table_outcome(payload, error_text)
         echo_distances = self._format_echo_distances_for_table(result.get("echo_delays"))
+        distance_to_rx = self._format_distance_to_rx_for_table(payload)
         self.results_table.insert(
             "",
             "end",
             values=(
                 self._format_one_based_index(payload.get("global_index")),
                 self._format_one_based_index(payload.get("point_index")),
+                distance_to_rx,
                 *echo_distances,
                 combined_status,
             ),
@@ -2582,6 +2587,18 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if len(formatted) < limit:
             formatted.extend("-" for _ in range(limit - len(formatted)))
         return tuple(formatted)
+
+    def _format_distance_to_rx_for_table(self, payload: dict[str, Any]) -> str:
+        rx_position = self._rx_antenna_global_position
+        if rx_position is None:
+            return "-"
+        point = self._selected_record_point(payload)
+        if point is None:
+            return "-"
+        distance_m = math.hypot(point.x - rx_position[0], point.y - rx_position[1])
+        if not math.isfinite(distance_m):
+            return "-"
+        return f"{distance_m:.2f}".rstrip("0").rstrip(".")
 
     def _on_run_finished(self, state: str) -> None:
         self._stop_live_label_ticker()
