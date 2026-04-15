@@ -113,6 +113,26 @@ def test_format_distance_to_rx_for_table_returns_dash_without_rx_position() -> N
     assert distance == "-"
 
 
+def test_format_position_for_table_uses_one_decimal_for_x_and_y() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._mission_points = [
+        MeasurementPoint(id="p0", name="P0", x=3.24, y=-1.01, yaw=0.0),
+    ]
+
+    position = window._format_position_for_table({"point_index": 0})
+
+    assert position == "3.2,-1.0"
+
+
+def test_format_position_for_table_returns_dash_without_known_point() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._mission_points = []
+
+    position = window._format_position_for_table({"point_index": 0})
+
+    assert position == "-"
+
+
 def test_parse_lidar_scan_text_for_overlay_supports_inline_ranges() -> None:
     parsed = MissionWorkflowWindow._parse_lidar_scan_text_for_overlay(
         "angle_min: -1.57\nangle_increment: 0.1\nranges: [1.0, 2.5, inf, nan]\n"
