@@ -277,6 +277,7 @@ def test_review_drag_preview_updates_echo_distances_live() -> None:
     dialog._selected_los_idx = 0
     dialog._selected_echo_indices = [2, 3]
     dialog._base_echo_indices = [2, 3]
+    dialog._update_peak_label_positions = lambda: None
     dialog._update_stats_label = lambda: None
 
     from transceiver.__main__ import MissionMeasurementReviewDialog
@@ -295,6 +296,7 @@ def test_review_echo_drag_preview_updates_selected_slot_live() -> None:
     dialog._selected_los_idx = 0
     dialog._selected_echo_indices = [2, 3]
     dialog._base_echo_indices = [2, 3]
+    dialog._update_peak_label_positions = lambda: None
     dialog._update_stats_label = lambda: None
 
     from transceiver.__main__ import MissionMeasurementReviewDialog
@@ -304,6 +306,21 @@ def test_review_echo_drag_preview_updates_selected_slot_live() -> None:
     delays = MissionMeasurementReviewDialog.echo_delays.fget(dialog)
     assert dialog._selected_echo_indices == [2, 1]
     assert delays == [20, 10]
+
+
+def test_review_echo_numbers_swap_when_markers_cross() -> None:
+    from transceiver.__main__ import MissionMeasurementReviewDialog
+
+    dialog = types.SimpleNamespace()
+    dialog._lags = np.array([0.0, 10.0, 20.0, 30.0], dtype=float)
+    dialog._selected_echo_indices = [2, 1]
+    dialog._echo_marker_slots_by_lag = lambda: MissionMeasurementReviewDialog._echo_marker_slots_by_lag(dialog)
+
+    slots_by_lag = MissionMeasurementReviewDialog._echo_marker_slots_by_lag(dialog)
+    numbers = MissionMeasurementReviewDialog._echo_numbers_by_marker_slot(dialog)
+
+    assert slots_by_lag == [1, 0]
+    assert numbers == {1: 1, 0: 2}
 
 
 def test_review_echo_delays_hide_duplicates_for_overlapping_markers() -> None:

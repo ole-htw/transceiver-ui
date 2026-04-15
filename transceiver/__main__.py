@@ -1721,12 +1721,7 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             pen=pg.mkPen(PLOT_COLORS["crosscorr"], width=2),
         )
 
-        label_group = (
-            [int(self._selected_los_idx), *[int(idx) for idx in self._selected_echo_indices]]
-            if self._selected_los_idx is not None
-            else []
-        )
-        peak_labels = _crosscorr_peak_labels(label_group)
+        echo_numbers_by_slot = self._echo_numbers_by_marker_slot()
 
         if self._selected_los_idx is not None:
             los_idx_int = int(self._selected_los_idx)
@@ -1735,9 +1730,9 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             self._plot.addItem(los_label_item)
             self._los_label_item = los_label_item
 
-        for peak_idx in self._selected_echo_indices:
+        for marker_slot, peak_idx in enumerate(self._selected_echo_indices):
             idx = int(peak_idx)
-            label_value = peak_labels.get(idx)
+            label_value = echo_numbers_by_slot.get(int(marker_slot))
             label_text = f"Echo {label_value}" if label_value is not None else "Echo"
             label_item = pg.TextItem(label_text, color=PLOT_COLORS["text"], anchor=(0, 1))
             label_item.setPos(float(self._lags[idx]), float(self._magnitudes[idx]))
@@ -1897,15 +1892,32 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             self._stats_label.setText("LOS-Echos: --")
             return
         rows = []
-        for i, delay in enumerate(self.echo_delays, start=1):
+        ordered_slots = self._echo_marker_slots_by_lag()
+        for row_number, marker_slot in enumerate(ordered_slots, start=1):
+            echo_idx = int(self._selected_echo_indices[int(marker_slot)])
+            delay = _echo_delay_samples(self._lags, self._selected_los_idx, echo_idx)
+            if delay is None:
+                continue
             adjusted_delay = float(delay) / self._interpolation_factor
             adjusted_delay_text = (
                 str(int(adjusted_delay))
                 if adjusted_delay.is_integer()
                 else f"{adjusted_delay:.2f}".rstrip("0").rstrip(".")
             )
-            rows.append(f"Echo {i}: {adjusted_delay_text} samp ({adjusted_delay * 1.5:.1f} m)")
+            rows.append(f"Echo {row_number}: {adjusted_delay_text} samp ({adjusted_delay * 1.5:.1f} m)")
         self._stats_label.setText("LOS-Echos:\n" + "\n".join(rows) if rows else "LOS-Echos: --")
+
+    def _echo_marker_slots_by_lag(self) -> list[int]:
+        return sorted(
+            range(len(self._selected_echo_indices)),
+            key=lambda slot: (float(self._lags[int(self._selected_echo_indices[slot])]), int(slot)),
+        )
+
+    def _echo_numbers_by_marker_slot(self) -> dict[int, int]:
+        numbers: dict[int, int] = {}
+        for display_number, marker_slot in enumerate(self._echo_marker_slots_by_lag(), start=1):
+            numbers[int(marker_slot)] = int(display_number)
+        return numbers
 
     def _connect_click_handler(self) -> None:
         scene = self._plot.scene()
