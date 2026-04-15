@@ -137,6 +137,41 @@ def test_format_live_distance_to_rx_for_table_returns_dash_without_live_position
     assert distance == "-"
 
 
+def test_selected_record_measurement_position_reads_live_coordinates() -> None:
+    position = MissionWorkflowWindow._selected_record_measurement_position(
+        {"live_position_at_measurement": {"x": 1.25, "y": -3.5}}
+    )
+
+    assert position == (1.25, -3.5)
+
+
+def test_selected_record_measurement_position_returns_none_without_live_coordinates() -> None:
+    position = MissionWorkflowWindow._selected_record_measurement_position({"point_index": 0})
+
+    assert position is None
+
+
+def test_draw_selected_echo_overlay_uses_live_measurement_position() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._selected_result_index = 0
+    window._records = [
+        {
+            "point_index": 0,
+            "live_position_at_measurement": {"x": 7.0, "y": -2.0},
+            "measurement": {"result": {"echo_delays": [{"distance_m": 3.0}]}},
+        }
+    ]
+    window._rx_antenna_global_position = (1.0, 1.0)
+    window._mission_points = [MeasurementPoint(id="p0", name="P0", x=50.0, y=50.0, yaw=0.0)]
+    calls: list[dict[str, object]] = []
+    window._draw_echo_ellipse_for_overlay = lambda **kwargs: calls.append(kwargs)
+
+    window._draw_selected_echo_overlay()
+
+    assert len(calls) == 1
+    assert calls[0]["measurement_position"] == (7.0, -2.0)
+
+
 def test_format_position_for_table_uses_one_decimal_for_x_and_y() -> None:
     window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
     window._mission_points = [

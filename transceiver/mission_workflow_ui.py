@@ -1186,11 +1186,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _draw_selected_echo_overlay(self) -> None:
         record = self._selected_record_payload()
-        point = self._selected_record_point(record)
-        if record is None or point is None:
+        if record is None:
             return
         rx_position = self._rx_antenna_global_position
         if rx_position is None:
+            return
+        measurement_position = self._selected_record_measurement_position(record)
+        if measurement_position is None:
             return
         measurement = record.get("measurement")
         if not isinstance(measurement, dict):
@@ -1205,7 +1207,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             color = ECHO_OVERLAY_COLORS[echo_index % len(ECHO_OVERLAY_COLORS)]
             self._draw_echo_ellipse_for_overlay(
                 rx_position=rx_position,
-                point=point,
+                measurement_position=measurement_position,
                 echo_distance_m=echo_distance,
                 color=color,
             )
@@ -1217,6 +1219,21 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if not isinstance(point_index, int) or point_index < 0 or point_index >= len(self._mission_points):
             return None
         return self._mission_points[point_index]
+
+    @staticmethod
+    def _selected_record_measurement_position(record: dict[str, Any]) -> tuple[float, float] | None:
+        live_position = record.get("live_position_at_measurement")
+        if not isinstance(live_position, dict):
+            return None
+        x_value = live_position.get("x")
+        y_value = live_position.get("y")
+        if not isinstance(x_value, (int, float)) or not isinstance(y_value, (int, float)):
+            return None
+        x = float(x_value)
+        y = float(y_value)
+        if not math.isfinite(x) or not math.isfinite(y):
+            return None
+        return (x, y)
 
     @staticmethod
     def _extract_echo_distances(value: Any, *, limit: int) -> list[float]:
@@ -1239,7 +1256,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self,
         *,
         rx_position: tuple[float, float],
-        point: MeasurementPoint,
+        measurement_position: tuple[float, float],
         echo_distance_m: float,
         color: str,
     ) -> None:
@@ -1251,16 +1268,17 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if not math.isfinite(resolution) or resolution <= 0.0:
             return
         rx_x, rx_y = rx_position
+        point_x, point_y = measurement_position
         if (
             not math.isfinite(rx_x)
             or not math.isfinite(rx_y)
-            or not math.isfinite(point.x)
-            or not math.isfinite(point.y)
+            or not math.isfinite(point_x)
+            or not math.isfinite(point_y)
             or not math.isfinite(echo_distance_m)
             or echo_distance_m < 0.0
         ):
             return
-        distance_rx_to_point = math.hypot(point.x - rx_x, point.y - rx_y)
+        distance_rx_to_point = math.hypot(point_x - rx_x, point_y - rx_y)
         ellipse_axes = _compute_bistatic_echo_ellipse_axes(
             distance_rx_to_point=distance_rx_to_point,
             echo_distance_m=echo_distance_m,
@@ -1270,9 +1288,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         semi_focal_distance, semi_major_axis, semi_minor_axis = ellipse_axes
         if semi_minor_axis <= 0.0:
             return
-        center_x = (rx_x + point.x) / 2.0
-        center_y = (rx_y + point.y) / 2.0
-        angle = math.atan2(point.y - rx_y, point.x - rx_x)
+        center_x = (rx_x + point_x) / 2.0
+        center_y = (rx_y + point_y) / 2.0
+        angle = math.atan2(point_y - rx_y, point_x - rx_x)
         cos_angle = math.cos(angle)
         sin_angle = math.sin(angle)
         samples = 64
