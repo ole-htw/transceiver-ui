@@ -3018,7 +3018,7 @@ def _plot_on_pg(
             extra_legend.setData([0], [0])
             legend.addItem(extra_legend, "lokale Maxima")
 
-        if peak_source_highest_idx is not None:
+        if peak_source_highest_idx is not None and peak_source_highest_idx != los_idx:
             plot.plot(
                 [los_lags[peak_source_highest_idx]],
                 [los_mag[peak_source_highest_idx]],
