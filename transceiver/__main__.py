@@ -1793,10 +1793,14 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
                 float(self._lags[los_idx_int]),
                 float(self._magnitudes[los_idx_int]),
             )
+        echo_numbers_by_slot = self._echo_numbers_by_marker_slot()
         for marker_slot, label_item in enumerate(self._echo_label_items):
             if marker_slot >= len(self._selected_echo_indices):
                 break
             echo_idx_int = int(self._selected_echo_indices[marker_slot])
+            label_value = echo_numbers_by_slot.get(int(marker_slot))
+            label_text = f"Echo {label_value}" if label_value is not None else "Echo"
+            label_item.setText(label_text)
             label_item.setPos(
                 float(self._lags[echo_idx_int]),
                 float(self._magnitudes[echo_idx_int]),
