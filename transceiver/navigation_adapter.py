@@ -73,6 +73,7 @@ class NavigationAdapterConfig:
         "aborted",
     )
     cancel_on_timeout: bool = True
+    pose_stream_ready_timeout_s: float = 2.5
 
 
 @dataclass(frozen=True)
@@ -629,6 +630,7 @@ class RosbridgePoseStreamTransport:
     _POSE_TOPIC = "/amcl_pose"
     _POSE_TYPE = "geometry_msgs/msg/PoseWithCovarianceStamped"
     _DEFAULT_EXPECTED_FRAME_ID = "map"
+    _READY_RETRY_INTERVAL_S = 0.15
 
     def __init__(self) -> None:
         self._thread: threading.Thread | None = None
@@ -825,16 +827,40 @@ class RosbridgePoseStreamTransport:
                 with self._lock:
                     self._ssh_process = process
 
-                time.sleep(0.15)
-                poll_code = process.poll()
-                if poll_code is not None:
-                    stderr = process.stderr.read() if process.stderr is not None else ""
-                    disconnect_reason = (
-                        f"SSH tunnel setup failed (exit_code={poll_code}): {self._tail_text(stderr, max_lines=3)}"
-                    )
+                ready_timeout_s = max(0.1, float(config.pose_stream_ready_timeout_s))
+                ready_deadline = time.monotonic() + ready_timeout_s
+                ws = None
+                last_connect_error: Exception | None = None
+                while time.monotonic() < ready_deadline and not self._stop_event.is_set():
+                    poll_code = process.poll()
+                    if poll_code is not None:
+                        stderr = process.stderr.read() if process.stderr is not None else ""
+                        disconnect_reason = (
+                            f"SSH tunnel setup failed (exit_code={poll_code}): {self._tail_text(stderr, max_lines=3)}"
+                        )
+                        raise OSError(disconnect_reason)
+                    try:
+                        ws = websocket.create_connection(f"ws://127.0.0.1:{local_port}", timeout=2.0)
+                        break
+                    except Exception as exc:
+                        last_connect_error = exc
+                        self._stop_event.wait(timeout=self._READY_RETRY_INTERVAL_S)
+
+                if ws is None:
+                    poll_code = process.poll()
+                    if poll_code is not None:
+                        stderr = process.stderr.read() if process.stderr is not None else ""
+                        disconnect_reason = (
+                            f"SSH tunnel setup failed (exit_code={poll_code}): {self._tail_text(stderr, max_lines=3)}"
+                        )
+                    else:
+                        disconnect_reason = f"tunnel not ready within {ready_timeout_s:.1f}s"
+                        if last_connect_error is not None:
+                            disconnect_reason = (
+                                f"{disconnect_reason} (last connect error: {last_connect_error})"
+                            )
                     raise OSError(disconnect_reason)
 
-                ws = websocket.create_connection(f"ws://127.0.0.1:{local_port}", timeout=2.0)
                 ws.settimeout(0.5)
                 with self._lock:
                     self._websocket = ws
