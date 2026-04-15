@@ -1594,7 +1594,8 @@ def _update_echo_indices_after_manual_drag(
     updated = [int(idx) for idx in echo_indices]
     nearest_idx = int(np.abs(np.asarray(lags) - float(lag_value)).argmin())
     updated[marker_slot] = nearest_idx
-    return updated
+    lags_array = np.asarray(lags, dtype=float)
+    return sorted(updated, key=lambda idx: float(lags_array[int(idx)]))
 
 
 class MissionMeasurementReviewDialog(QtWidgets.QDialog):
