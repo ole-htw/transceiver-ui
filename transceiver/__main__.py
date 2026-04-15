@@ -2919,8 +2919,10 @@ def _plot_on_pg(
                     echo_text.setText("LOS-Echos: --")
             _position_echo_text()
 
-        def _wrap_drag(callback):
+        def _wrap_drag(kind: str, callback):
             def _handler(idx, lag):
+                if manual_lags is not None and kind in ("los", "echo"):
+                    manual_lags[kind] = int(round(lag))
                 if callback is not None:
                     callback(idx, lag)
                 _update_echo_text()
@@ -3015,10 +3017,10 @@ def _plot_on_pg(
             los_label_item.setPos(float(los_lags[los_idx]), float(los_mag[los_idx]))
             plot.addItem(los_label_item)
 
-        los_drag_callback = _wrap_drag(on_los_drag)
-        echo_drag_callback = _wrap_drag(on_echo_drag)
-        los_end_callback = _wrap_drag(on_los_drag_end)
-        echo_end_callback = _wrap_drag(on_echo_drag_end)
+        los_drag_callback = _wrap_drag("los", on_los_drag)
+        echo_drag_callback = _wrap_drag("echo", on_echo_drag)
+        los_end_callback = _wrap_drag("los", on_los_drag_end)
+        echo_end_callback = _wrap_drag("echo", on_echo_drag_end)
         los_marker, echo_markers = _add_draggable_markers(
             plot,
             lags,
