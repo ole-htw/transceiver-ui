@@ -1436,6 +1436,7 @@ class DraggableLagMarker(pg.ScatterPlotItem):
         self._on_drag = on_drag
         self._on_drag_end = on_drag_end
         self._dragging = False
+        self._mouse_enabled_before_drag: tuple[bool, bool] | None = None
         pen = pg.mkPen(color)
         brush = pg.mkBrush(color)
         super().__init__(symbol="o", size=size, pen=pen, brush=brush)
@@ -1463,6 +1464,9 @@ class DraggableLagMarker(pg.ScatterPlotItem):
             return
         if ev.isStart():
             self._dragging = True
+            current = self._view_box.state.get("mouseEnabled", (True, True))
+            self._mouse_enabled_before_drag = (bool(current[0]), bool(current[1]))
+            self._view_box.setMouseEnabled(x=False, y=False)
             ev.accept()
         if not self._dragging:
             ev.ignore()
@@ -1474,6 +1478,10 @@ class DraggableLagMarker(pg.ScatterPlotItem):
             self._on_drag(self._index, float(self._lags[self._index]))
         if ev.isFinish():
             self._dragging = False
+            if self._mouse_enabled_before_drag is not None:
+                mouse_x, mouse_y = self._mouse_enabled_before_drag
+                self._view_box.setMouseEnabled(x=mouse_x, y=mouse_y)
+            self._mouse_enabled_before_drag = None
             if self._on_drag_end is not None:
                 self._on_drag_end(self._index, float(self._lags[self._index]))
         ev.accept()
