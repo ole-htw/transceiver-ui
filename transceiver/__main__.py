@@ -157,47 +157,6 @@ CONTINUOUS_INPUT_SLOT_MAX_BYTES = 64 * 1024 * 1024
 CONTINUOUS_INPUT_SLOT_HEADROOM = 1.35
 
 
-def _manual_echo_slot_key(slot: int) -> str:
-    return f"echo_{int(slot)}"
-
-
-def _event_key_to_echo_slot(key: int) -> int | None:
-    mapping = {
-        int(QtCore.Qt.Key_1): 1,
-        int(QtCore.Qt.Key_2): 2,
-        int(QtCore.Qt.Key_3): 3,
-        int(QtCore.Qt.Key_4): 4,
-        int(QtCore.Qt.Key_5): 5,
-        int(QtCore.Qt.KeypadModifier | QtCore.Qt.Key_1): 1,
-        int(QtCore.Qt.KeypadModifier | QtCore.Qt.Key_2): 2,
-        int(QtCore.Qt.KeypadModifier | QtCore.Qt.Key_3): 3,
-        int(QtCore.Qt.KeypadModifier | QtCore.Qt.Key_4): 4,
-        int(QtCore.Qt.KeypadModifier | QtCore.Qt.Key_5): 5,
-    }
-    return mapping.get(int(key))
-
-
-def _apply_manual_echo_slots(
-    lags: np.ndarray,
-    echo_indices: list[int],
-    manual_lags: dict[str, int | None] | None,
-    *,
-    slots: int = 5,
-) -> list[int]:
-    ordered = [int(idx) for idx in echo_indices if idx is not None]
-    if lags.size == 0 or manual_lags is None:
-        return ordered
-    for slot in range(1, int(slots) + 1):
-        lag_value = manual_lags.get(_manual_echo_slot_key(slot))
-        if lag_value is None:
-            continue
-        manual_idx = int(np.abs(lags - float(lag_value)).argmin())
-        ordered = [idx for idx in ordered if int(idx) != manual_idx]
-        insert_pos = min(slot - 1, len(ordered))
-        ordered.insert(insert_pos, manual_idx)
-    return [int(idx) for idx in ordered]
-
-
 def _repetition_period_samples_from_tx(tx_length_samples: int, lag_step: int = 1) -> int:
     """Return TX repetition period in the active xcorr sample domain."""
     return max(1, int(tx_length_samples) * max(1, int(lag_step)))
@@ -1595,30 +1554,6 @@ def _echo_delay_samples(
     return int(abs(lags[echo_idx] - lags[los_idx]))
 
 
-_QT_QOBJECT_BASE = QtCore.QObject if isinstance(getattr(QtCore, "QObject", None), type) else object
-
-
-class _XcorrKeyHoldFilter(_QT_QOBJECT_BASE):
-    """Track pressed number key (1..5) for cross-correlation click shortcuts."""
-
-    def __init__(self, owner_plot: pg.PlotItem) -> None:
-        super().__init__()
-        self._owner_plot = owner_plot
-
-    def eventFilter(self, _obj, event) -> bool:  # noqa: N802 - Qt API
-        event_type = event.type()
-        if event_type == QtCore.QEvent.KeyPress:
-            slot = _event_key_to_echo_slot(int(event.key()))
-            if slot is not None:
-                self._owner_plot._xcorr_held_echo_slot = int(slot)
-        elif event_type == QtCore.QEvent.KeyRelease:
-            slot = _event_key_to_echo_slot(int(event.key()))
-            held = getattr(self._owner_plot, "_xcorr_held_echo_slot", None)
-            if slot is not None and held == slot:
-                self._owner_plot._xcorr_held_echo_slot = None
-        return False
-
-
 class MissionMeasurementReviewDialog(QtWidgets.QDialog):
     """Blocking review dialog for mission cross-correlation peaks."""
 
@@ -1641,7 +1576,6 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         self._lags = np.asarray(lags)
         self._magnitudes = np.asarray(magnitudes)
         self._manual_lags: dict[str, int | None] = {"los": None, "echo": None}
-        self._held_echo_slot: int | None = None
         self._selected_los_idx = int(los_idx) if los_idx is not None else None
         self._base_echo_indices = [int(idx) for idx in echo_indices]
         self._selected_echo_indices = [int(idx) for idx in echo_indices]
@@ -1831,31 +1765,6 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             self._selected_echo_indices = reordered
         self._render_plot()
 
-    def _apply_manual_echo_slot(self, slot: int, lag_value: float) -> None:
-        slot_int = int(slot)
-        if slot_int < 1 or slot_int > 5:
-            return
-        self._manual_lags[_manual_echo_slot_key(slot_int)] = int(round(lag_value))
-        self._selected_echo_indices = _apply_manual_echo_slots(
-            self._lags,
-            self._selected_echo_indices,
-            self._manual_lags,
-            slots=5,
-        )
-        self._render_plot()
-
-    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt API
-        slot = _event_key_to_echo_slot(int(event.key()))
-        if slot is not None:
-            self._held_echo_slot = int(slot)
-        super().keyPressEvent(event)
-
-    def keyReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API
-        slot = _event_key_to_echo_slot(int(event.key()))
-        if slot is not None and self._held_echo_slot == int(slot):
-            self._held_echo_slot = None
-        super().keyReleaseEvent(event)
-
     def _update_stats_label(self) -> None:
         if self._selected_los_idx is None or not self._selected_echo_indices:
             self._stats_label.setText("LOS-Echos: --")
@@ -1880,9 +1789,7 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             if ev.button() != QtCore.Qt.LeftButton:
                 return
             modifiers = ev.modifiers()
-            has_modifier = bool(modifiers & QtCore.Qt.ShiftModifier or modifiers & QtCore.Qt.AltModifier)
-            held_echo_slot = self._held_echo_slot
-            if not has_modifier and held_echo_slot is None:
+            if not (modifiers & QtCore.Qt.ShiftModifier or modifiers & QtCore.Qt.AltModifier):
                 return
             pos = self._plot.getViewBox().mapSceneToView(ev.scenePos())
             if modifiers & QtCore.Qt.ShiftModifier:
@@ -1891,9 +1798,6 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             if modifiers & QtCore.Qt.AltModifier:
                 idx = int(np.abs(self._lags - pos.x()).argmin())
                 self._apply_manual_lag("echo", float(self._lags[idx]))
-            if held_echo_slot is not None:
-                idx = int(np.abs(self._lags - pos.x()).argmin())
-                self._apply_manual_echo_slot(int(held_echo_slot), float(self._lags[idx]))
 
         self._plot._review_click_handler = _handle_click
         scene.sigMouseClicked.connect(_handle_click)
@@ -2002,12 +1906,6 @@ def _build_crosscorr_ctx(
             int(manual_echo_idx),
             *[int(idx) for idx in filtered_echo_indices if int(idx) != int(manual_echo_idx)],
         ]
-    filtered_echo_indices = _apply_manual_echo_slots(
-        los_lags,
-        [int(idx) for idx in filtered_echo_indices],
-        manual_lags,
-        slots=5,
-    )
 
     peak = float(np.max(mag)) if mag.size else 0.0
     if compare_available:
@@ -2832,13 +2730,6 @@ def _plot_on_pg(
     colors = PLOT_COLORS
     step = max(1, int(reduction_step))
     scene = plot.scene()
-    if scene is not None and hasattr(plot, "_xcorr_key_hold_filter"):
-        try:
-            scene.removeEventFilter(plot._xcorr_key_hold_filter)
-        except (RuntimeError, TypeError):
-            pass
-        delattr(plot, "_xcorr_key_hold_filter")
-    plot._xcorr_held_echo_slot = None
     if scene is not None and hasattr(plot, "_xcorr_click_handler"):
         try:
             scene.sigMouseClicked.disconnect(plot._xcorr_click_handler)
@@ -2978,13 +2869,8 @@ def _plot_on_pg(
                 },
             )
             if echo_idx_local is not None:
-                indices = [int(echo_idx_local), *[int(idx) for idx in indices if int(idx) != int(echo_idx_local)]]
-            return _apply_manual_echo_slots(
-                los_lags,
-                [int(idx) for idx in indices],
-                manual_lags,
-                slots=5,
-            )
+                return [int(echo_idx_local), *[int(idx) for idx in indices if int(idx) != int(echo_idx_local)]]
+            return [int(idx) for idx in indices]
 
         def _update_echo_text() -> None:
             adj_los_idx, _ = _resolve_manual_los_idx(
@@ -3139,22 +3025,14 @@ def _plot_on_pg(
             los_magnitudes=los_mag,
         )
         if scene is not None and manual_lags is not None:
-            key_filter = _XcorrKeyHoldFilter(plot)
-            scene.installEventFilter(key_filter)
-            plot._xcorr_key_hold_filter = key_filter
-            for view in scene.views():
-                try:
-                    view.setFocusPolicy(QtCore.Qt.StrongFocus)
-                except Exception:
-                    continue
-
             def _handle_click(ev) -> None:
                 if ev.button() != QtCore.Qt.LeftButton:
                     return
                 modifiers = ev.modifiers()
-                has_modifier = bool(modifiers & QtCore.Qt.ShiftModifier or modifiers & QtCore.Qt.AltModifier)
-                held_echo_slot = getattr(plot, "_xcorr_held_echo_slot", None)
-                if not has_modifier and held_echo_slot is None:
+                if not (
+                    modifiers & QtCore.Qt.ShiftModifier
+                    or modifiers & QtCore.Qt.AltModifier
+                ):
                     return
                 pos = plot.getViewBox().mapSceneToView(ev.scenePos())
                 if modifiers & QtCore.Qt.ShiftModifier:
@@ -3169,16 +3047,6 @@ def _plot_on_pg(
                 if modifiers & QtCore.Qt.AltModifier:
                     idx = int(np.abs(lags - pos.x()).argmin())
                     lag_value = float(lags[idx])
-                    manual_lags["echo"] = int(round(lag_value))
-                    if echo_marker is not None:
-                        echo_marker.set_index(idx)
-                    callback = echo_drag_callback or echo_end_callback
-                    if callback is not None:
-                        callback(idx, lag_value)
-                if held_echo_slot is not None:
-                    idx = int(np.abs(los_lags - pos.x()).argmin())
-                    lag_value = float(los_lags[idx])
-                    manual_lags[_manual_echo_slot_key(int(held_echo_slot))] = int(round(lag_value))
                     manual_lags["echo"] = int(round(lag_value))
                     if echo_marker is not None:
                         echo_marker.set_index(idx)
