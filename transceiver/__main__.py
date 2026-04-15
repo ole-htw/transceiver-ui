@@ -1586,22 +1586,15 @@ def _update_echo_indices_after_manual_drag(
     """Update one Echo marker slot to the nearest lag index.
 
     ``marker_slot`` refers to the visible Echo marker order (Echo 1..N).
-    Duplicate indices are removed while preserving left-to-right marker order.
+    Duplicate indices are intentionally preserved so overlapping markers can
+    be separated again by dragging one marker away afterwards.
     """
     if marker_slot < 0 or marker_slot >= len(echo_indices):
         return [int(idx) for idx in echo_indices]
     updated = [int(idx) for idx in echo_indices]
     nearest_idx = int(np.abs(np.asarray(lags) - float(lag_value)).argmin())
     updated[marker_slot] = nearest_idx
-
-    deduplicated: list[int] = []
-    seen: set[int] = set()
-    for idx in updated:
-        if idx in seen:
-            continue
-        seen.add(idx)
-        deduplicated.append(idx)
-    return deduplicated
+    return updated
 
 
 class MissionMeasurementReviewDialog(QtWidgets.QDialog):
@@ -1686,7 +1679,7 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
 
     @property
     def selected_echo_indices(self) -> list[int]:
-        return list(self._selected_echo_indices)
+        return MissionMeasurementReviewDialog._unique_echo_indices(self._selected_echo_indices)
 
     @property
     def echo_delays(self) -> list[int]:
@@ -1694,11 +1687,23 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         if los_idx is None:
             return []
         delays: list[int] = []
-        for echo_idx in self._selected_echo_indices:
+        for echo_idx in MissionMeasurementReviewDialog._unique_echo_indices(self._selected_echo_indices):
             delay = _echo_delay_samples(self._lags, los_idx, int(echo_idx))
             if delay is not None:
                 delays.append(int(delay))
         return delays
+
+    @staticmethod
+    def _unique_echo_indices(echo_indices: list[int]) -> list[int]:
+        unique_indices: list[int] = []
+        seen: set[int] = set()
+        for idx in echo_indices:
+            normalized_idx = int(idx)
+            if normalized_idx in seen:
+                continue
+            seen.add(normalized_idx)
+            unique_indices.append(normalized_idx)
+        return unique_indices
 
     def _render_plot(self) -> None:
         self._plot.clear()
