@@ -1817,31 +1817,24 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
     def _apply_manual_lag(self, kind: str, lag_value: float) -> None:
         if kind not in ("los", "echo"):
             return
+
+        nearest_idx = int(np.abs(self._lags - float(lag_value)).argmin())
         self._manual_lags[kind] = int(round(lag_value))
-        base_echo_idx = None
-        if self._selected_los_idx is not None and self._base_echo_indices:
-            base_echo_idx = min(
-                self._base_echo_indices,
-                key=lambda idx: abs(float(self._lags[int(idx)]) - float(self._lags[int(self._selected_los_idx)])),
+
+        if kind == "los":
+            self._selected_los_idx = nearest_idx
+            self._render_plot()
+            return
+
+        if self._selected_echo_indices:
+            self._selected_echo_indices = _update_echo_indices_after_manual_drag(
+                self._lags,
+                self._selected_echo_indices,
+                0,
+                float(lag_value),
             )
-        los_idx, echo_idx = _apply_manual_lags(
-            self._lags,
-            self._selected_los_idx,
-            base_echo_idx,
-            self._manual_lags,
-        )
-        self._selected_los_idx = los_idx
-        if los_idx is None:
-            self._selected_echo_indices = []
-        else:
-            reordered = [int(echo_idx)] if echo_idx is not None else []
-            reordered.extend(
-                int(idx)
-                for idx in self._base_echo_indices
-                if echo_idx is None or int(idx) != int(echo_idx)
-            )
-            self._selected_echo_indices = reordered
-        self._render_plot()
+            self._base_echo_indices = [int(idx) for idx in self._selected_echo_indices]
+            self._render_plot()
 
     def _apply_manual_echo_lag(self, marker_slot: int, lag_value: float) -> None:
         self._manual_lags["echo"] = int(round(lag_value))
