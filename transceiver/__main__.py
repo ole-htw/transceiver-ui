@@ -1721,30 +1721,12 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
 
         if self._selected_los_idx is not None:
             los_idx_int = int(self._selected_los_idx)
-            self._plot.plot(
-                [float(self._lags[los_idx_int])],
-                [float(self._magnitudes[los_idx_int])],
-                pen=None,
-                symbol="o",
-                symbolSize=9,
-                symbolBrush=pg.mkBrush(PLOT_COLORS["los"]),
-                symbolPen=pg.mkPen(PLOT_COLORS["los"]),
-            )
             los_label_item = pg.TextItem("LOS", color=PLOT_COLORS["text"], anchor=(0, 1))
             los_label_item.setPos(float(self._lags[los_idx_int]), float(self._magnitudes[los_idx_int]))
             self._plot.addItem(los_label_item)
 
         for peak_idx in self._selected_echo_indices:
             idx = int(peak_idx)
-            self._plot.plot(
-                [float(self._lags[idx])],
-                [float(self._magnitudes[idx])],
-                pen=None,
-                symbol="o",
-                symbolSize=8,
-                symbolBrush=pg.mkBrush(PLOT_COLORS["echo"]),
-                symbolPen=pg.mkPen(PLOT_COLORS["echo"]),
-            )
             label_value = peak_labels.get(idx)
             label_text = f"Echo {label_value}" if label_value is not None else "Echo"
             label_item = pg.TextItem(label_text, color=PLOT_COLORS["text"], anchor=(0, 1))
@@ -3072,8 +3054,11 @@ def _plot_on_pg(
 
         peak_labels = _crosscorr_peak_labels(visible_group_indices)
 
+        selected_echo_idx_set = {int(idx) for idx in filtered_echo_indices}
         for color_idx, peak_idx in enumerate(visible_peak_indices):
             if peak_idx == los_idx:
+                continue
+            if int(peak_idx) in selected_echo_idx_set:
                 continue
             c = XCORR_EXTRA_PEAK_COLORS[color_idx % len(XCORR_EXTRA_PEAK_COLORS)]
             plot.plot(
