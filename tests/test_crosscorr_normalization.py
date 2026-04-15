@@ -270,6 +270,24 @@ def test_review_manual_echo_click_updates_first_echo_distance() -> None:
     assert delays == [10, 30]
 
 
+def test_review_manual_echo_drag_fallback_updates_nearest_echo_slot() -> None:
+    dialog = types.SimpleNamespace()
+    dialog._lags = np.array([0.0, 10.0, 20.0, 30.0, 40.0, 50.0], dtype=float)
+    dialog._manual_lags = {"los": None, "echo": None}
+    dialog._selected_los_idx = 0
+    dialog._selected_echo_indices = [1, 4]
+    dialog._base_echo_indices = [1, 4]
+    dialog._render_plot = lambda: None
+
+    from transceiver.__main__ import MissionMeasurementReviewDialog
+
+    MissionMeasurementReviewDialog._apply_manual_lag(dialog, "echo", 30.0)
+
+    delays = MissionMeasurementReviewDialog.echo_delays.fget(dialog)
+    assert dialog._selected_echo_indices == [1, 3]
+    assert delays == [10, 30]
+
+
 def test_review_drag_preview_updates_echo_distances_live() -> None:
     dialog = types.SimpleNamespace()
     dialog._lags = np.array([0.0, 10.0, 20.0, 30.0], dtype=float)
@@ -286,6 +304,24 @@ def test_review_drag_preview_updates_echo_distances_live() -> None:
     delays = MissionMeasurementReviewDialog.echo_delays.fget(dialog)
     assert dialog._selected_los_idx == 1
     assert delays == [10, 20]
+
+
+def test_review_echo_drag_preview_fallback_updates_nearest_echo_slot() -> None:
+    dialog = types.SimpleNamespace()
+    dialog._lags = np.array([0.0, 10.0, 20.0, 30.0, 40.0, 50.0], dtype=float)
+    dialog._manual_lags = {"los": None, "echo": None}
+    dialog._selected_los_idx = 0
+    dialog._selected_echo_indices = [1, 4]
+    dialog._base_echo_indices = [1, 4]
+    dialog._update_stats_label = lambda: None
+
+    from transceiver.__main__ import MissionMeasurementReviewDialog
+
+    MissionMeasurementReviewDialog._preview_manual_lag(dialog, "echo", 30.0)
+
+    delays = MissionMeasurementReviewDialog.echo_delays.fget(dialog)
+    assert dialog._selected_echo_indices == [1, 3]
+    assert delays == [10, 30]
 
 
 def test_review_echo_drag_preview_updates_selected_slot_live() -> None:
