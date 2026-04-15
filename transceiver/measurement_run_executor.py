@@ -55,6 +55,17 @@ class MeasurementService(Protocol):
         ...
 
 
+class NavigationFailurePolicy(Protocol):
+    def __call__(
+        self,
+        *,
+        point_context: "PointExecutionContext",
+        navigation_state: TerminalNavigationState,
+        error: str,
+    ) -> bool:
+        ...
+
+
 class RunSummaryStore(Protocol):
     def __call__(self, payload: dict[str, Any]) -> None:
         ...
@@ -169,6 +180,7 @@ class MeasurementRunExecutor:
         persist_run_summary: RunSummaryStore | None = None,
         run_log_store: JsonRunLogStore | None = None,
         on_runtime_event: Callable[[dict[str, Any]], None] | None = None,
+        continue_after_navigation_failure: NavigationFailurePolicy | None = None,
         config: MeasurementRunExecutorConfig | None = None,
     ) -> None:
         self.mission = mission
@@ -181,6 +193,7 @@ class MeasurementRunExecutor:
         self.persist_run_summary = persist_run_summary
         self.run_log_store = run_log_store
         self.on_runtime_event = on_runtime_event
+        self.continue_after_navigation_failure = continue_after_navigation_failure
         self.config = config or MeasurementRunExecutorConfig()
         self._validate_start_point_index()
 
@@ -397,14 +410,107 @@ class MeasurementRunExecutor:
             self._cancel_confirmed = True
 
         if nav_state != "succeeded":
+            point_context = PointExecutionContext(
+                mission_name=self.mission.name,
+                cycle=cycle,
+                point_index=point_index,
+                global_index=global_index,
+                point=point,
+            )
             error = (
                 "run_cancelled.manual_stop"
                 if self._cancel_requested and nav_state == "canceled"
                 else f"navigation_failed.{nav_state}"
             )
-            status: PointExecutionStatus = "skipped" if self._cancel_requested and nav_state == "canceled" else "failed"
+            status: PointExecutionStatus = (
+                "skipped" if self._cancel_requested and nav_state == "canceled" else "failed"
+            )
             measurement_status = "skipped"
-            
+            if (
+                status == "failed"
+                and self.config.enable_measurements
+                and self.continue_after_navigation_failure is not None
+            ):
+                try:
+                    continue_measurement = self.continue_after_navigation_failure(
+                        point_context=point_context,
+                        navigation_state=nav_state,
+                        error=error,
+                    )
+                except Exception:
+                    continue_measurement = False
+                if continue_measurement:
+                    navigation_done_at = time.time()
+                    try:
+                        measurement_result = self.measurement_service.trigger(point_context)
+                    except Exception as exc:
+                        error_code = str(exc)
+                        review_reason: str | None = None
+                        review_detail: str | None = None
+                        if isinstance(exc, RuntimeError) and exc.args:
+                            first = exc.args[0]
+                            if isinstance(first, str) and first.strip():
+                                error_code = first.strip()
+                            if len(exc.args) > 1 and isinstance(exc.args[1], str) and exc.args[1].strip():
+                                review_reason = exc.args[1].strip()
+                            if len(exc.args) > 2 and isinstance(exc.args[2], str) and exc.args[2].strip():
+                                review_detail = exc.args[2].strip()
+                        failed_measurement_payload: dict[str, Any] | None = None
+                        if review_reason is not None or review_detail is not None:
+                            failed_measurement_payload = {
+                                "review": {
+                                    "approved": False,
+                                    "reason": review_reason,
+                                    "detail": review_detail,
+                                }
+                            }
+                        record = PointExecutionRecord(
+                            index=global_index,
+                            point_id=point.id,
+                            point_name=point.name,
+                            status="failed",
+                            navigation_state=nav_state,
+                            navigation_attempts=attempt,
+                            measurement_result=None,
+                            error=error_code,
+                        )
+                        self._persist_point_log(
+                            point=point,
+                            point_index=point_index,
+                            cycle=cycle,
+                            global_index=global_index,
+                            navigation_state=nav_state,
+                            navigation_attempts=attempt,
+                            point_started_at=point_started_at,
+                            measurement_result=failed_measurement_payload,
+                            measurement_status="failed",
+                            error=record.error,
+                            navigation_duration_s=max(0.0, navigation_done_at - point_started_at),
+                        )
+                        return record
+                    self._persist_point_log(
+                        point=point,
+                        point_index=point_index,
+                        cycle=cycle,
+                        global_index=global_index,
+                        navigation_state=nav_state,
+                        navigation_attempts=attempt,
+                        point_started_at=point_started_at,
+                        measurement_result=measurement_result,
+                        measurement_status="succeeded",
+                        error=error,
+                        navigation_duration_s=max(0.0, navigation_done_at - point_started_at),
+                    )
+                    return PointExecutionRecord(
+                        index=global_index,
+                        point_id=point.id,
+                        point_name=point.name,
+                        status="succeeded",
+                        navigation_state=nav_state,
+                        navigation_attempts=attempt,
+                        measurement_result=measurement_result,
+                        error=error,
+                    )
             record = PointExecutionRecord(
                 index=global_index,
                 point_id=point.id,

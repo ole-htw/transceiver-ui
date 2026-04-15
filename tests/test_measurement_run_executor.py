@@ -146,6 +146,51 @@ def test_navigation_failure_retries_then_stop_mission() -> None:
     assert executor.records[0].status == "failed"
 
 
+def test_navigation_failure_can_continue_with_measurement_when_operator_confirms() -> None:
+    nav = FakeNavigator(["timeout"])
+    measured: list[str] = []
+
+    executor = MeasurementRunExecutor(
+        mission=MeasurementMission(name="m2", points=[_mission().points[0]], repeat=1),
+        navigator=nav,
+        trigger_measurement=lambda point: measured.append(point.id or "") or {"ok": True},
+        continue_after_navigation_failure=lambda **_kwargs: True,
+        persist_result=lambda _payload: None,
+        config=MeasurementRunExecutorConfig(on_point_error="stop"),
+    )
+
+    final_state = executor.start()
+
+    assert final_state == "completed"
+    assert measured == ["p1"]
+    assert len(executor.records) == 1
+    assert executor.records[0].status == "succeeded"
+    assert executor.records[0].navigation_state == "timeout"
+    assert executor.records[0].error == "navigation_failed.timeout"
+
+
+def test_navigation_failure_skips_measurement_when_operator_declines() -> None:
+    nav = FakeNavigator(["timeout"])
+    measured: list[str] = []
+
+    executor = MeasurementRunExecutor(
+        mission=MeasurementMission(name="m2", points=[_mission().points[0]], repeat=1),
+        navigator=nav,
+        trigger_measurement=lambda point: measured.append(point.id or "") or {"ok": True},
+        continue_after_navigation_failure=lambda **_kwargs: False,
+        persist_result=lambda _payload: None,
+        config=MeasurementRunExecutorConfig(on_point_error="continue"),
+    )
+
+    final_state = executor.start()
+
+    assert final_state == "completed"
+    assert measured == []
+    assert len(executor.records) == 1
+    assert executor.records[0].status == "failed"
+    assert executor.records[0].navigation_state == "timeout"
+
+
 def test_state_transitions_start_pause_resume_stop() -> None:
     class CancelAwareNavigator(FakeNavigator):
         def __init__(self) -> None:
