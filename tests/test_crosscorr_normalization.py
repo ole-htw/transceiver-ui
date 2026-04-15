@@ -268,3 +268,39 @@ def test_review_manual_echo_click_updates_first_echo_distance() -> None:
     delays = MissionMeasurementReviewDialog.echo_delays.fget(dialog)
     assert dialog._selected_echo_indices == [1, 3]
     assert delays == [10, 30]
+
+
+def test_review_drag_preview_updates_echo_distances_live() -> None:
+    dialog = types.SimpleNamespace()
+    dialog._lags = np.array([0.0, 10.0, 20.0, 30.0], dtype=float)
+    dialog._manual_lags = {"los": None, "echo": None}
+    dialog._selected_los_idx = 0
+    dialog._selected_echo_indices = [2, 3]
+    dialog._base_echo_indices = [2, 3]
+    dialog._update_stats_label = lambda: None
+
+    from transceiver.__main__ import MissionMeasurementReviewDialog
+
+    MissionMeasurementReviewDialog._preview_manual_lag(dialog, "los", 10.0)
+
+    delays = MissionMeasurementReviewDialog.echo_delays.fget(dialog)
+    assert dialog._selected_los_idx == 1
+    assert delays == [10, 20]
+
+
+def test_review_echo_drag_preview_updates_selected_slot_live() -> None:
+    dialog = types.SimpleNamespace()
+    dialog._lags = np.array([0.0, 10.0, 20.0, 30.0], dtype=float)
+    dialog._manual_lags = {"los": None, "echo": None}
+    dialog._selected_los_idx = 0
+    dialog._selected_echo_indices = [2, 3]
+    dialog._base_echo_indices = [2, 3]
+    dialog._update_stats_label = lambda: None
+
+    from transceiver.__main__ import MissionMeasurementReviewDialog
+
+    MissionMeasurementReviewDialog._preview_manual_echo_lag(dialog, 1, 10.0)
+
+    delays = MissionMeasurementReviewDialog.echo_delays.fget(dialog)
+    assert dialog._selected_echo_indices == [2, 1]
+    assert delays == [20, 10]
