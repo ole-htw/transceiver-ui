@@ -23,7 +23,6 @@ from .measurement_run_executor import (
     JsonRunLogStore,
     MeasurementRunExecutor,
     MeasurementRunExecutorConfig,
-    PointExecutionRecord,
 )
 from .mission_measurement_service import (
     MissionRxMeasurementService,
@@ -2119,7 +2118,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             persist_result=_persist,
             run_log_store=store,
             on_runtime_event=self._on_executor_runtime_event,
-            continue_after_point_failure=self._handle_point_failure_decision,
             config=MeasurementRunExecutorConfig(
                 on_point_error="stop",
                 goal_reached_timeout_s=self._runtime_config.goal_reached_timeout_s,
@@ -2135,53 +2133,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._set_run_buttons(running=True, paused=False)
         self._run_thread = threading.Thread(target=self._run_executor_thread, daemon=True)
         self._run_thread.start()
-
-    def _handle_point_failure_decision(self, record: PointExecutionRecord) -> bool:
-        if not (record.error or "").startswith("navigation_failed."):
-            return False
-        point_label = record.point_id or record.point_name or f"#{record.index + 1}"
-        prompt = (
-            f"Navigation zu Punkt {point_label} ist fehlgeschlagen.\n\n"
-            "Soll die Messung trotzdem mit dem nächsten Punkt fortgesetzt werden?"
-        )
-        should_continue = self._ask_yes_no_on_ui_thread(
-            title="Navigation fehlgeschlagen",
-            message=prompt,
-            default=False,
-        )
-        if should_continue:
-            self._append_validation(
-                f"⚠️ Navigation fehlgeschlagen ({record.error}) – Mission wird auf Operator-Wunsch fortgesetzt."
-            )
-        else:
-            self._append_validation(
-                f"❌ Navigation fehlgeschlagen ({record.error}) – Mission wird beendet."
-            )
-        return should_continue
-
-    def _ask_yes_no_on_ui_thread(self, *, title: str, message: str, default: bool = False) -> bool:
-        if threading.current_thread() is threading.main_thread():
-            try:
-                return bool(messagebox.askyesno(title, message, parent=self))
-            except Exception:
-                return default
-        result = {"value": default}
-        done = threading.Event()
-
-        def _ask() -> None:
-            try:
-                result["value"] = bool(messagebox.askyesno(title, message, parent=self))
-            except Exception:
-                result["value"] = default
-            finally:
-                done.set()
-
-        try:
-            self.after(0, _ask)
-        except Exception:
-            return default
-        done.wait()
-        return bool(result["value"])
 
     def _ensure_transmitter_before_run(self) -> bool:
         is_active_fn = getattr(self.master, "is_transmitter_active_for_mission", None)

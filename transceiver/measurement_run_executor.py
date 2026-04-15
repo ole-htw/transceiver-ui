@@ -60,11 +60,6 @@ class RunSummaryStore(Protocol):
         ...
 
 
-class ContinueAfterPointFailureHandler(Protocol):
-    def __call__(self, record: PointExecutionRecord) -> bool:
-        ...
-
-
 @dataclass(frozen=True)
 class PointExecutionContext:
     mission_name: str
@@ -174,7 +169,6 @@ class MeasurementRunExecutor:
         persist_run_summary: RunSummaryStore | None = None,
         run_log_store: JsonRunLogStore | None = None,
         on_runtime_event: Callable[[dict[str, Any]], None] | None = None,
-        continue_after_point_failure: ContinueAfterPointFailureHandler | None = None,
         config: MeasurementRunExecutorConfig | None = None,
     ) -> None:
         self.mission = mission
@@ -187,7 +181,6 @@ class MeasurementRunExecutor:
         self.persist_run_summary = persist_run_summary
         self.run_log_store = run_log_store
         self.on_runtime_event = on_runtime_event
-        self.continue_after_point_failure = continue_after_point_failure
         self.config = config or MeasurementRunExecutorConfig()
         self._validate_start_point_index()
 
@@ -263,8 +256,6 @@ class MeasurementRunExecutor:
                 self.records.append(record)
 
                 if record.status == "failed" and self.config.on_point_error == "stop":
-                    if self._should_continue_after_point_failure(record):
-                        continue
                     with self._state_lock:
                         self._state = "failed"
                     abort_reason = record.error
@@ -305,14 +296,6 @@ class MeasurementRunExecutor:
             points_per_cycle=points_per_cycle,
         )
         return self.state
-
-    def _should_continue_after_point_failure(self, record: PointExecutionRecord) -> bool:
-        if self.continue_after_point_failure is None:
-            return False
-        try:
-            return bool(self.continue_after_point_failure(record))
-        except Exception:
-            return False
 
     @staticmethod
     def _resolve_measurement_service(
