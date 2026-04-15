@@ -1622,6 +1622,8 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         self._selected_los_idx = int(los_idx) if los_idx is not None else None
         self._base_echo_indices = [int(idx) for idx in echo_indices]
         self._selected_echo_indices = [int(idx) for idx in echo_indices]
+        self._los_label_item: pg.TextItem | None = None
+        self._echo_label_items: list[pg.TextItem] = []
         try:
             interpolation_factor_value = float(interpolation_factor)
         except (TypeError, ValueError):
@@ -1707,6 +1709,8 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
 
     def _render_plot(self) -> None:
         self._plot.clear()
+        self._los_label_item = None
+        self._echo_label_items = []
         # Keep left-button drag gestures reserved for LOS/Echo marker edits.
         # Otherwise the default ViewBox panning consumes the drag and only
         # shifts the viewport instead of moving the selected marker.
@@ -1729,6 +1733,7 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             los_label_item = pg.TextItem("LOS", color=PLOT_COLORS["text"], anchor=(0, 1))
             los_label_item.setPos(float(self._lags[los_idx_int]), float(self._magnitudes[los_idx_int]))
             self._plot.addItem(los_label_item)
+            self._los_label_item = los_label_item
 
         for peak_idx in self._selected_echo_indices:
             idx = int(peak_idx)
@@ -1737,6 +1742,7 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             label_item = pg.TextItem(label_text, color=PLOT_COLORS["text"], anchor=(0, 1))
             label_item.setPos(float(self._lags[idx]), float(self._magnitudes[idx]))
             self._plot.addItem(label_item)
+            self._echo_label_items.append(label_item)
 
         focus_range = self._focused_x_range()
         if focus_range is not None:
@@ -1784,6 +1790,22 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             self._plot.addItem(echo_marker)
 
         self._update_stats_label()
+
+    def _update_peak_label_positions(self) -> None:
+        if self._los_label_item is not None and self._selected_los_idx is not None:
+            los_idx_int = int(self._selected_los_idx)
+            self._los_label_item.setPos(
+                float(self._lags[los_idx_int]),
+                float(self._magnitudes[los_idx_int]),
+            )
+        for marker_slot, label_item in enumerate(self._echo_label_items):
+            if marker_slot >= len(self._selected_echo_indices):
+                break
+            echo_idx_int = int(self._selected_echo_indices[marker_slot])
+            label_item.setPos(
+                float(self._lags[echo_idx_int]),
+                float(self._magnitudes[echo_idx_int]),
+            )
 
     def _focused_x_range(self) -> tuple[float, float] | None:
         if self._lags.size == 0:
@@ -1834,6 +1856,7 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
 
         if kind == "los":
             self._selected_los_idx = nearest_idx
+            self._update_peak_label_positions()
             self._update_stats_label()
             return
 
@@ -1844,6 +1867,7 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
                 0,
                 float(lag_value),
             )
+            self._update_peak_label_positions()
             self._update_stats_label()
 
     def _apply_manual_echo_lag(self, marker_slot: int, lag_value: float) -> None:
@@ -1865,6 +1889,7 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             int(marker_slot),
             float(lag_value),
         )
+        self._update_peak_label_positions()
         self._update_stats_label()
 
     def _update_stats_label(self) -> None:
