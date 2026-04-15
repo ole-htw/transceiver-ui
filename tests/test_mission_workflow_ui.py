@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import math
 from types import SimpleNamespace
 
+import pytest
+
 from transceiver.measurement_mission import MeasurementPoint
-from transceiver.mission_workflow_ui import MissionWorkflowWindow
+from transceiver.mission_workflow_ui import MissionWorkflowWindow, _compute_bistatic_echo_ellipse_axes
 
 
 def test_format_echo_distances_for_table_returns_only_meter_values_for_first_five_echoes() -> None:
@@ -207,6 +210,46 @@ def test_build_waypoint_arrow_polygon_points_up_for_ninety_degree_yaw() -> None:
     assert round(left_y, 3) == 54.0
     assert round(right_x, 3) == 96.0
     assert round(right_y, 3) == 54.0
+
+
+def test_compute_bistatic_echo_ellipse_axes_uses_sum_path_geometry() -> None:
+    axes = _compute_bistatic_echo_ellipse_axes(distance_rx_to_point=10.0, echo_distance_m=6.0)
+
+    assert axes is not None
+    c, a, b = axes
+    assert c == 5.0
+    assert a == 8.0
+    assert b == pytest.approx(math.sqrt(39.0))
+
+
+def test_compute_bistatic_echo_ellipse_points_satisfy_focus_distance_sum() -> None:
+    axes = _compute_bistatic_echo_ellipse_axes(distance_rx_to_point=10.0, echo_distance_m=6.0)
+
+    assert axes is not None
+    c, a, b = axes
+    d = 10.0
+    delta = 6.0
+    for step in range(0, 65):
+        t = (2.0 * math.pi * step) / 64.0
+        x = a * math.cos(t)
+        y = b * math.sin(t)
+        distance_to_focus_1 = math.hypot(x + c, y)
+        distance_to_focus_2 = math.hypot(x - c, y)
+        assert distance_to_focus_1 + distance_to_focus_2 == pytest.approx(d + delta, abs=1e-9)
+
+
+def test_compute_bistatic_echo_ellipse_axes_handles_zero_delta_without_crash() -> None:
+    axes = _compute_bistatic_echo_ellipse_axes(distance_rx_to_point=10.0, echo_distance_m=0.0)
+
+    assert axes is not None
+    c, a, b = axes
+    assert c == 5.0
+    assert a == 5.0
+    assert b == 0.0
+
+
+def test_compute_bistatic_echo_ellipse_axes_rejects_negative_delta() -> None:
+    assert _compute_bistatic_echo_ellipse_axes(distance_rx_to_point=10.0, echo_distance_m=-0.1) is None
 
 
 class _FakeAdapter:
