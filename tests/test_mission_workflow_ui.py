@@ -7,6 +7,7 @@ import pytest
 
 from transceiver.measurement_mission import MeasurementPoint
 from transceiver.mission_workflow_ui import MissionWorkflowWindow, _compute_bistatic_echo_ellipse_axes
+import transceiver.mission_workflow_ui as mission_workflow_ui
 
 
 def test_format_echo_distances_for_table_returns_only_meter_values_for_first_five_echoes() -> None:
@@ -90,6 +91,39 @@ def test_compose_table_outcome_includes_navigation_and_measurement_for_failures(
         MissionWorkflowWindow._compose_table_outcome(payload, "navigation_failed.aborted")
         == "navigation aborted, measurement skipped: navigation_failed.aborted"
     )
+
+
+def test_confirm_measurement_after_navigation_failure_uses_point_index_in_prompt() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window.after = lambda _delay, callback: callback()
+    logs: list[str] = []
+    window._append_validation = logs.append
+
+    observed: dict[str, str] = {}
+
+    def _askyesno(title, message, parent):  # type: ignore[no-untyped-def]
+        observed["title"] = title
+        observed["message"] = message
+        assert parent is window
+        return True
+
+    original_askyesno = mission_workflow_ui.messagebox.askyesno
+    mission_workflow_ui.messagebox.askyesno = _askyesno
+    try:
+        decision = window._confirm_measurement_after_navigation_failure(
+            point_context=SimpleNamespace(global_index=2, point=SimpleNamespace(id="p003")),
+            navigation_state="timeout",
+            error="navigation_failed.timeout",
+        )
+    finally:
+        mission_workflow_ui.messagebox.askyesno = original_askyesno
+
+    assert decision is True
+    assert observed["title"] == "Navigation fehlgeschlagen"
+    assert "Punktindex 3" in observed["message"]
+    assert "p003" not in observed["message"]
+    assert logs
+    assert "Punktindex 3" in logs[0]
 
 
 def test_format_distance_to_rx_for_table_uses_measurement_point_coordinates() -> None:

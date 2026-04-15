@@ -2118,6 +2118,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             persist_result=_persist,
             run_log_store=store,
             on_runtime_event=self._on_executor_runtime_event,
+            continue_after_navigation_failure=self._confirm_measurement_after_navigation_failure,
             config=MeasurementRunExecutorConfig(
                 on_point_error="stop",
                 goal_reached_timeout_s=self._runtime_config.goal_reached_timeout_s,
@@ -2133,6 +2134,45 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._set_run_buttons(running=True, paused=False)
         self._run_thread = threading.Thread(target=self._run_executor_thread, daemon=True)
         self._run_thread.start()
+
+    def _confirm_measurement_after_navigation_failure(  # type: ignore[no-untyped-def]
+        self,
+        *,
+        point_context,
+        navigation_state,
+        error,
+    ) -> bool:
+        decision_holder: dict[str, bool] = {"continue": False}
+        decision_ready = threading.Event()
+
+        def _ask_operator() -> None:
+            point_index = int(getattr(point_context, "global_index", 0)) + 1
+            state_label = str(navigation_state)
+            decision = messagebox.askyesno(
+                "Navigation fehlgeschlagen",
+                f"Navigation zu Punktindex {point_index} ist fehlgeschlagen ({state_label}).\n\n"
+                "Soll die Messung trotzdem durchgeführt werden?",
+                parent=self,
+            )
+            decision_holder["continue"] = bool(decision)
+            if decision:
+                self._append_validation(
+                    f"⚠️ Navigation fehlgeschlagen ({error}) bei Punktindex {point_index}; "
+                    "Messung wird trotzdem durchgeführt."
+                )
+            else:
+                self._append_validation(
+                    f"ℹ️ Navigation fehlgeschlagen ({error}) bei Punktindex {point_index}; "
+                    "Messung wird übersprungen."
+                )
+            decision_ready.set()
+
+        try:
+            self.after(0, _ask_operator)
+        except tk.TclError:
+            return False
+        decision_ready.wait()
+        return decision_holder["continue"]
 
     def _ensure_transmitter_before_run(self) -> bool:
         is_active_fn = getattr(self.master, "is_transmitter_active_for_mission", None)
