@@ -1487,6 +1487,69 @@ class DraggableLagMarker(pg.ScatterPlotItem):
         ev.accept()
 
 
+class AxisWheelZoomViewBox(pg.ViewBox):
+    """ViewBox with axis-aware mouse-wheel zoom for review plots."""
+
+    def __init__(self, *, plot_item_resolver=None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._plot_item_resolver = plot_item_resolver
+
+    def _resolve_plot_item(self):
+        resolver = self._plot_item_resolver
+        if resolver is None:
+            return None
+        try:
+            return resolver()
+        except Exception:
+            return None
+
+    def _axis_name_at_scene_pos(self, scene_pos) -> str | None:
+        plot_item = self._resolve_plot_item()
+        if plot_item is None:
+            return None
+        for axis_name in ("bottom", "left"):
+            axis_item = plot_item.getAxis(axis_name)
+            if axis_item is None or not axis_item.isVisible():
+                continue
+            if axis_item.sceneBoundingRect().contains(scene_pos):
+                return axis_name
+        return None
+
+    @staticmethod
+    def _event_delta_y(ev) -> float:
+        angle_delta = getattr(ev, "angleDelta", None)
+        if callable(angle_delta):
+            point = angle_delta()
+            if point is not None and hasattr(point, "y"):
+                return float(point.y())
+        delta = getattr(ev, "delta", None)
+        if callable(delta):
+            return float(delta())
+        if delta is not None:
+            return float(delta)
+        return 0.0
+
+    def wheelEvent(self, ev, axis=None) -> None:
+        scene_pos = ev.scenePos() if hasattr(ev, "scenePos") else None
+        axis_name = self._axis_name_at_scene_pos(scene_pos) if scene_pos is not None else None
+        if axis_name not in {"bottom", "left"}:
+            super().wheelEvent(ev, axis=axis)
+            return
+
+        delta_y = AxisWheelZoomViewBox._event_delta_y(ev)
+        if delta_y == 0:
+            super().wheelEvent(ev, axis=axis)
+            return
+
+        zoom_factor = 0.9 if delta_y > 0 else 1.1
+        center = self.mapSceneToView(scene_pos)
+        if axis_name == "bottom":
+            self.scaleBy(x=zoom_factor, y=None, center=center)
+        else:
+            self.scaleBy(x=None, y=zoom_factor, center=center)
+        ev.accept()
+
+
 def _add_draggable_markers(
     plot: pg.PlotItem,
     lags: np.ndarray,
@@ -1637,7 +1700,10 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         )
         layout.addWidget(header)
 
-        plot_widget = pg.PlotWidget()
+        self._review_view_box = AxisWheelZoomViewBox(
+            plot_item_resolver=lambda: getattr(self, "_plot", None),
+        )
+        plot_widget = pg.PlotWidget(viewBox=self._review_view_box)
         self._plot = plot_widget.getPlotItem()
         _style_pg_preview_axes(self._plot, PLOT_COLORS["text"])
         self._plot.showGrid(x=True, y=True, alpha=0.2)
