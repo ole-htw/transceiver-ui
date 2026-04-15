@@ -220,6 +220,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._live_label_ticker_active = False
         self.lidar_reference_enabled_var = tk.BooleanVar(value=True)
         self.manual_review_enabled_var = tk.BooleanVar(value=True)
+        self.test_run_enabled_var = tk.BooleanVar(value=False)
         self.live_pose_stream_enabled_var = tk.BooleanVar(value=False)
         self._live_pose_stream_active = False
 
@@ -467,12 +468,18 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             variable=self.manual_review_enabled_var,
             command=self._on_manual_review_toggle_changed,
         ).grid(row=3, column=2, padx=(8, 3), pady=(0, 4), sticky="w")
+        ctk.CTkCheckBox(
+            controls,
+            text="Testlauf (ohne Messung)",
+            variable=self.test_run_enabled_var,
+            command=self._on_test_run_toggle_changed,
+        ).grid(row=3, column=3, padx=(8, 3), pady=(0, 4), sticky="w")
         ctk.CTkSwitch(
             controls,
             text="Live-Position aktivieren",
             variable=self.live_pose_stream_enabled_var,
             command=self._on_live_pose_stream_switch_changed,
-        ).grid(row=3, column=3, columnspan=2, padx=(8, 8), pady=(0, 4), sticky="w")
+        ).grid(row=3, column=4, columnspan=1, padx=(8, 8), pady=(0, 4), sticky="w")
 
         self.live_var = tk.StringVar(value="Punkt: - | Navigation: idle | Messung: idle | Verbleibend: - | Live-Status: Karte nicht geladen")
         ctk.CTkLabel(controls, textvariable=self.live_var, anchor="w", justify="left").grid(
@@ -1821,6 +1828,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "rx_antenna_global_position": self._serialize_rx_antenna_global_position(),
             "lidar_reference_enabled": bool(self.lidar_reference_enabled_var.get()),
             "manual_review_enabled": bool(self.manual_review_enabled_var.get()),
+            "test_run_enabled": bool(self.test_run_enabled_var.get()),
             "reverse_point_order": bool(self.reverse_point_order_var.get()),
             "live_pose_stream_enabled": bool(self.live_pose_stream_enabled_var.get()),
         }
@@ -1901,6 +1909,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 self._set_rx_antenna_position(x=rx_position[0], y=rx_position[1], persist=False)
             self.lidar_reference_enabled_var.set(bool(payload.get("lidar_reference_enabled", True)))
             self.manual_review_enabled_var.set(bool(payload.get("manual_review_enabled", True)))
+            self.test_run_enabled_var.set(bool(payload.get("test_run_enabled", False)))
             self.reverse_point_order_var.set(bool(payload.get("reverse_point_order", False)))
             self.live_pose_stream_enabled_var.set(bool(payload.get("live_pose_stream_enabled", False)))
             self._refresh_points_table()
@@ -2003,8 +2012,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             )
             self._append_validation("❌ Run-Start blockiert: " + " | ".join(reasons))
             return
-        if not self._ensure_transmitter_before_run():
+        test_run_enabled = self._is_test_run_enabled()
+        if not test_run_enabled and not self._ensure_transmitter_before_run():
             return
+        if test_run_enabled:
+            self._append_validation("ℹ️ Testlauf aktiv: Wegpunkte werden ohne Messung angefahren.")
         start_point_index = self._selected_start_point_index()
 
         self.results_table.delete(*self.results_table.get_children())
@@ -2051,6 +2063,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 navigation_retry_attempts=self._runtime_config.navigation_retry_attempts,
                 start_point_index=start_point_index,
                 reverse_point_order=bool(self.reverse_point_order_var.get()),
+                enable_measurements=not test_run_enabled,
             ),
         )
 
@@ -2259,7 +2272,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if not any(point.enabled for point in self._mission_points):
             reasons.append("Keine aktiven Wegpunkte vorhanden. Bitte mindestens einen Punkt aktivieren.")
         reasons.extend(self._runtime_guard_reasons())
-        if bool(self.manual_review_enabled_var.get()):
+        if not self._is_test_run_enabled() and bool(self.manual_review_enabled_var.get()):
             review_fn = getattr(self.master, "review_measurement_for_mission", None)
             if not callable(review_fn):
                 reasons.append(
@@ -2301,6 +2314,10 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._persist_workflow_state()
         self._refresh_review_ready_indicator()
 
+    def _on_test_run_toggle_changed(self) -> None:
+        self._persist_workflow_state()
+        self._refresh_review_ready_indicator()
+
     def _on_live_pose_stream_switch_changed(self) -> None:
         self._persist_workflow_state()
         self._sync_live_pose_stream_state()
@@ -2325,6 +2342,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         cont_thread = getattr(self.master, "_cont_thread", None)
         return bool(cont_thread is not None and cont_thread.is_alive())
 
+    def _is_test_run_enabled(self) -> bool:
+        var = getattr(self, "test_run_enabled_var", None)
+        getter = getattr(var, "get", None)
+        return bool(getter()) if callable(getter) else False
+
     def _runtime_guard_reasons(self) -> list[str]:
         reasons: list[str] = []
         if self._is_continuous_active():
@@ -2340,6 +2362,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
     def _refresh_review_ready_indicator(self, prerequisites_ok: bool | None = None) -> None:
         if prerequisites_ok is None:
             prerequisites_ok, _ = self._check_run_prerequisites()
+        if self._is_test_run_enabled():
+            self.review_ready_var.set("Review: Testlauf ✅")
+            return
         if not bool(self.manual_review_enabled_var.get()):
             self.review_ready_var.set("Review: automatisch ✅")
             return

@@ -79,6 +79,34 @@ def test_executes_points_strictly_in_order_and_persists_context() -> None:
     assert persisted[1]["point"]["id"] == "p2"
 
 
+
+
+def test_test_run_mode_navigates_without_measurements() -> None:
+    nav = FakeNavigator(["succeeded", "succeeded"])
+    measured: list[str] = []
+    persisted: list[dict] = []
+
+    def trigger(point: MeasurementPoint) -> dict:
+        measured.append(point.id or "")
+        return {"value": point.x + point.y}
+
+    executor = MeasurementRunExecutor(
+        mission=_mission(),
+        navigator=nav,
+        trigger_measurement=trigger,
+        persist_result=persisted.append,
+        config=MeasurementRunExecutorConfig(enable_measurements=False),
+    )
+
+    final_state = executor.start()
+
+    assert final_state == "completed"
+    assert measured == []
+    assert len(persisted) == 2
+    assert persisted[0]["measurement"]["status"] == "skipped"
+    assert persisted[0]["measurement"]["result"] == {"mode": "test_run"}
+    assert all(rec.status == "succeeded" for rec in executor.records)
+
 def test_navigation_failure_retries_then_continue() -> None:
     nav = FakeNavigator(["timeout", "aborted", "succeeded"])
     persisted: list[dict] = []

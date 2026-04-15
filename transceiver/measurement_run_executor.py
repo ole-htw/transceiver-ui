@@ -131,6 +131,7 @@ class MeasurementRunExecutorConfig:
     on_point_error: OnPointError = "continue"
     start_point_index: int = 0
     reverse_point_order: bool = False
+    enable_measurements: bool = True
 
 
 @dataclass(frozen=True)
@@ -453,6 +454,31 @@ class MeasurementRunExecutor:
                 navigation_duration_s=max(0.0, navigation_done_at - point_started_at),
             )
             return record
+
+        if not self.config.enable_measurements:
+            self._persist_point_log(
+                point=point,
+                point_index=point_index,
+                cycle=cycle,
+                global_index=global_index,
+                navigation_state=nav_state,
+                navigation_attempts=attempt,
+                point_started_at=point_started_at,
+                measurement_result={"mode": "test_run"},
+                measurement_status="skipped",
+                error=None,
+                navigation_duration_s=max(0.0, navigation_done_at - point_started_at),
+            )
+            return PointExecutionRecord(
+                index=global_index,
+                point_id=point.id,
+                point_name=point.name,
+                status="succeeded",
+                navigation_state=nav_state,
+                navigation_attempts=attempt,
+                measurement_result={"mode": "test_run"},
+                error=None,
+            )
 
         try:
             measurement_result = self.measurement_service.trigger(
