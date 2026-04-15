@@ -155,67 +155,6 @@ CONTINUOUS_INPUT_SLOT_COUNT = 4
 CONTINUOUS_INPUT_SLOT_MIN_BYTES = 4 * 1024 * 1024
 CONTINUOUS_INPUT_SLOT_MAX_BYTES = 64 * 1024 * 1024
 CONTINUOUS_INPUT_SLOT_HEADROOM = 1.35
-def _qt_key_code(name: str, fallback: int) -> int:
-    value = getattr(getattr(QtCore, "Qt", object()), name, fallback)
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return int(fallback)
-
-
-_QT_KEY_0 = _qt_key_code("Key_0", 48)
-_ECHO_SLOT_KEYS: tuple[int, ...] = (
-    _qt_key_code("Key_1", 49),
-    _qt_key_code("Key_2", 50),
-    _qt_key_code("Key_3", 51),
-    _qt_key_code("Key_4", 52),
-    _qt_key_code("Key_5", 53),
-)
-_digit_key_tracker = None
-_QT_OBJECT_BASE = QtCore.QObject if isinstance(getattr(QtCore, "QObject", None), type) else object
-
-
-class _DigitKeyTracker(_QT_OBJECT_BASE):
-    """Track held number keys (1-5) globally for click+key interactions."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._pressed_slots: set[int] = set()
-
-    def eventFilter(self, _obj, event) -> bool:  # type: ignore[override]
-        event_type = event.type() if hasattr(event, "type") else None
-        if event_type == QtCore.QEvent.KeyPress:
-            key = int(getattr(event, "key", lambda: -1)())
-            if key in _ECHO_SLOT_KEYS:
-                self._pressed_slots.add(key - _QT_KEY_0)
-        elif event_type == QtCore.QEvent.KeyRelease:
-            key = int(getattr(event, "key", lambda: -1)())
-            if key in _ECHO_SLOT_KEYS:
-                self._pressed_slots.discard(key - _QT_KEY_0)
-        return False
-
-    def active_slot(self) -> int | None:
-        if not self._pressed_slots:
-            return None
-        return min(self._pressed_slots)
-
-
-def _ensure_digit_key_tracker() -> _DigitKeyTracker | None:
-    global _digit_key_tracker
-    app = QtWidgets.QApplication.instance()
-    if app is None:
-        return None
-    if _digit_key_tracker is None:
-        _digit_key_tracker = _DigitKeyTracker()
-        app.installEventFilter(_digit_key_tracker)
-    return _digit_key_tracker
-
-
-def _active_echo_slot_from_keyboard() -> int | None:
-    tracker = _ensure_digit_key_tracker()
-    if tracker is None:
-        return None
-    return tracker.active_slot()
 
 
 def _repetition_period_samples_from_tx(tx_length_samples: int, lag_step: int = 1) -> int:
@@ -1636,15 +1575,7 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         self._confirmed = False
         self._lags = np.asarray(lags)
         self._magnitudes = np.asarray(magnitudes)
-        self._manual_lags: dict[str, int | None] = {
-            "los": None,
-            "echo": None,
-            "echo_1": None,
-            "echo_2": None,
-            "echo_3": None,
-            "echo_4": None,
-            "echo_5": None,
-        }
+        self._manual_lags: dict[str, int | None] = {"los": None, "echo": None}
         self._selected_los_idx = int(los_idx) if los_idx is not None else None
         self._base_echo_indices = [int(idx) for idx in echo_indices]
         self._selected_echo_indices = [int(idx) for idx in echo_indices]
@@ -1805,15 +1736,10 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         zoom_half_window = float(np.clip(50.0, 10.0, max_half_window))
         return (center - zoom_half_window, center + zoom_half_window)
 
-    def _apply_manual_lag(self, kind: str, lag_value: float, *, echo_slot: int | None = None) -> None:
+    def _apply_manual_lag(self, kind: str, lag_value: float) -> None:
         if kind not in ("los", "echo"):
             return
-        rounded_lag = int(round(lag_value))
-        self._manual_lags[kind] = rounded_lag
-        if kind == "echo" and echo_slot is not None and 1 <= int(echo_slot) <= 5:
-            self._manual_lags[f"echo_{int(echo_slot)}"] = rounded_lag
-            if int(echo_slot) == 1:
-                self._manual_lags["echo"] = rounded_lag
+        self._manual_lags[kind] = int(round(lag_value))
         base_echo_idx = None
         if self._selected_los_idx is not None and self._base_echo_indices:
             base_echo_idx = min(
@@ -1836,17 +1762,6 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
                 for idx in self._base_echo_indices
                 if echo_idx is None or int(idx) != int(echo_idx)
             )
-            for slot in range(1, 6):
-                manual_slot_lag = self._manual_lags.get(f"echo_{slot}")
-                if manual_slot_lag is None:
-                    continue
-                slot_idx = int(np.abs(self._lags - float(manual_slot_lag)).argmin())
-                reordered = [int(idx) for idx in reordered if int(idx) != int(slot_idx)]
-                target_pos = slot - 1
-                if target_pos >= len(reordered):
-                    reordered.append(int(slot_idx))
-                else:
-                    reordered.insert(target_pos, int(slot_idx))
             self._selected_echo_indices = reordered
         self._render_plot()
 
@@ -1866,7 +1781,6 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         self._stats_label.setText("LOS-Echos:\n" + "\n".join(rows) if rows else "LOS-Echos: --")
 
     def _connect_click_handler(self) -> None:
-        _ensure_digit_key_tracker()
         scene = self._plot.scene()
         if scene is None:
             return
@@ -1874,13 +1788,8 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         def _handle_click(ev) -> None:
             if ev.button() != QtCore.Qt.LeftButton:
                 return
-            active_echo_slot = _active_echo_slot_from_keyboard()
             modifiers = ev.modifiers()
-            if not (
-                modifiers & QtCore.Qt.ShiftModifier
-                or modifiers & QtCore.Qt.AltModifier
-                or active_echo_slot is not None
-            ):
+            if not (modifiers & QtCore.Qt.ShiftModifier or modifiers & QtCore.Qt.AltModifier):
                 return
             pos = self._plot.getViewBox().mapSceneToView(ev.scenePos())
             if modifiers & QtCore.Qt.ShiftModifier:
@@ -1889,13 +1798,6 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             if modifiers & QtCore.Qt.AltModifier:
                 idx = int(np.abs(self._lags - pos.x()).argmin())
                 self._apply_manual_lag("echo", float(self._lags[idx]))
-            if active_echo_slot is not None:
-                idx = int(np.abs(self._lags - pos.x()).argmin())
-                self._apply_manual_lag(
-                    "echo",
-                    float(self._lags[idx]),
-                    echo_slot=int(active_echo_slot),
-                )
 
         self._plot._review_click_handler = _handle_click
         scene.sigMouseClicked.connect(_handle_click)
@@ -2004,20 +1906,6 @@ def _build_crosscorr_ctx(
             int(manual_echo_idx),
             *[int(idx) for idx in filtered_echo_indices if int(idx) != int(manual_echo_idx)],
         ]
-    if manual_lags:
-        for slot in range(1, 6):
-            manual_slot_lag = manual_lags.get(f"echo_{slot}")
-            if manual_slot_lag is None:
-                continue
-            slot_target_idx = int(np.abs(los_lags - float(manual_slot_lag)).argmin())
-            insert_pos = slot - 1
-            filtered_echo_indices = [
-                int(idx) for idx in filtered_echo_indices if int(idx) != int(slot_target_idx)
-            ]
-            if insert_pos >= len(filtered_echo_indices):
-                filtered_echo_indices.append(int(slot_target_idx))
-            else:
-                filtered_echo_indices.insert(insert_pos, int(slot_target_idx))
 
     peak = float(np.max(mag)) if mag.size else 0.0
     if compare_available:
@@ -3137,16 +3025,13 @@ def _plot_on_pg(
             los_magnitudes=los_mag,
         )
         if scene is not None and manual_lags is not None:
-            _ensure_digit_key_tracker()
             def _handle_click(ev) -> None:
                 if ev.button() != QtCore.Qt.LeftButton:
                     return
-                active_echo_slot = _active_echo_slot_from_keyboard()
                 modifiers = ev.modifiers()
                 if not (
                     modifiers & QtCore.Qt.ShiftModifier
                     or modifiers & QtCore.Qt.AltModifier
-                    or active_echo_slot is not None
                 ):
                     return
                 pos = plot.getViewBox().mapSceneToView(ev.scenePos())
@@ -3168,17 +3053,6 @@ def _plot_on_pg(
                     callback = echo_drag_callback or echo_end_callback
                     if callback is not None:
                         callback(idx, lag_value)
-                if active_echo_slot is not None:
-                    idx = int(np.abs(lags - pos.x()).argmin())
-                    lag_value = float(lags[idx])
-                    manual_lags[f"echo_{active_echo_slot}"] = int(round(lag_value))
-                    if active_echo_slot == 1:
-                        manual_lags["echo"] = int(round(lag_value))
-                        if echo_marker is not None:
-                            echo_marker.set_index(idx)
-                        callback = echo_drag_callback or echo_end_callback
-                        if callback is not None:
-                            callback(idx, lag_value)
 
             plot._xcorr_click_handler = _handle_click
             scene.sigMouseClicked.connect(_handle_click)
