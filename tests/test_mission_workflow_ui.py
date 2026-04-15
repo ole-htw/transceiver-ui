@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from transceiver.measurement_mission import MeasurementPoint
+from transceiver.measurement_run_executor import PointExecutionRecord
 from transceiver.mission_workflow_ui import MissionWorkflowWindow, _compute_bistatic_echo_ellipse_axes
 
 
@@ -270,6 +271,28 @@ def test_compute_bistatic_echo_ellipse_axes_handles_zero_delta_without_crash() -
 
 def test_compute_bistatic_echo_ellipse_axes_rejects_negative_delta() -> None:
     assert _compute_bistatic_echo_ellipse_axes(distance_rx_to_point=10.0, echo_distance_m=-0.1) is None
+
+
+def test_handle_point_failure_decision_continues_when_operator_confirms() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    logs: list[str] = []
+    window._append_validation = logs.append
+    window._ask_yes_no_on_ui_thread = lambda **_kwargs: True
+    record = PointExecutionRecord(
+        index=0,
+        point_id="p1",
+        point_name="A",
+        status="failed",
+        navigation_state="timeout",
+        navigation_attempts=1,
+        measurement_result=None,
+        error="navigation_failed.timeout",
+    )
+
+    should_continue = window._handle_point_failure_decision(record)
+
+    assert should_continue is True
+    assert "fortgesetzt" in logs[0]
 
 
 class _FakeAdapter:
