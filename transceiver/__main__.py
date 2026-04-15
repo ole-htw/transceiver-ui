@@ -2870,10 +2870,6 @@ def _plot_on_pg(
             plot.setTitle("No TX data")
             plot.showGrid(x=True, y=True)
             return
-        # Keep left-button dragging dedicated to LOS/echo marker interaction.
-        # Otherwise the default ViewBox panning steals drag gestures and moves
-        # only the viewport instead of the selected marker.
-        plot.getViewBox().setMouseEnabled(x=False, y=False)
         step_r = step
         compare_available = crosscorr_compare is not None and crosscorr_compare.size
         if reduce_data:
