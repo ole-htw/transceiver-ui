@@ -522,6 +522,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "position",
             "live_position",
             "distance_to_rx_m",
+            "live_distance_to_rx_m",
             "echo_1_m",
             "echo_2_m",
             "echo_3_m",
@@ -537,6 +538,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "position": "Pos.",
             "live_position": "Live Pos.",
             "distance_to_rx_m": "Abstand",
+            "live_distance_to_rx_m": "Live Abstand",
             "echo_1_m": f"{ECHO_HEADING_MARKERS[0]} E1",
             "echo_2_m": f"{ECHO_HEADING_MARKERS[1]} E2",
             "echo_3_m": f"{ECHO_HEADING_MARKERS[2]} E3",
@@ -551,6 +553,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.results_table.column("position", width=100)
         self.results_table.column("live_position", width=100)
         self.results_table.column("distance_to_rx_m", width=90)
+        self.results_table.column("live_distance_to_rx_m", width=90)
         self.results_table.column("echo_1_m", width=80)
         self.results_table.column("echo_2_m", width=80)
         self.results_table.column("echo_3_m", width=80)
@@ -2577,6 +2580,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         position_text = self._format_position_for_table(payload)
         live_position_text = self._format_live_position_for_table(payload)
         distance_to_rx = self._format_distance_to_rx_for_table(payload)
+        live_distance_to_rx = self._format_live_distance_to_rx_for_table(payload)
         self.results_table.insert(
             "",
             "end",
@@ -2586,6 +2590,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 position_text,
                 live_position_text,
                 distance_to_rx,
+                live_distance_to_rx,
                 *echo_distances,
                 combined_status,
             ),
@@ -2669,6 +2674,26 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if point is None:
             return "-"
         distance_m = math.hypot(point.x - rx_position[0], point.y - rx_position[1])
+        if not math.isfinite(distance_m):
+            return "-"
+        return f"{distance_m:.2f}".rstrip("0").rstrip(".")
+
+    def _format_live_distance_to_rx_for_table(self, payload: dict[str, Any]) -> str:
+        rx_position = self._rx_antenna_global_position
+        if rx_position is None:
+            return "-"
+        position = payload.get("live_position_at_measurement")
+        if not isinstance(position, dict):
+            return "-"
+        x_value = position.get("x")
+        y_value = position.get("y")
+        if not isinstance(x_value, (int, float)) or not isinstance(y_value, (int, float)):
+            return "-"
+        x = float(x_value)
+        y = float(y_value)
+        if not math.isfinite(x) or not math.isfinite(y):
+            return "-"
+        distance_m = math.hypot(x - rx_position[0], y - rx_position[1])
         if not math.isfinite(distance_m):
             return "-"
         return f"{distance_m:.2f}".rstrip("0").rstrip(".")
