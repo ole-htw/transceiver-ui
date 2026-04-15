@@ -1577,6 +1577,33 @@ def _echo_delay_samples(
     return int(abs(lags[echo_idx] - lags[los_idx]))
 
 
+def _update_echo_indices_after_manual_drag(
+    lags: np.ndarray,
+    echo_indices: list[int],
+    marker_slot: int,
+    lag_value: float,
+) -> list[int]:
+    """Update one Echo marker slot to the nearest lag index.
+
+    ``marker_slot`` refers to the visible Echo marker order (Echo 1..N).
+    Duplicate indices are removed while preserving left-to-right marker order.
+    """
+    if marker_slot < 0 or marker_slot >= len(echo_indices):
+        return [int(idx) for idx in echo_indices]
+    updated = [int(idx) for idx in echo_indices]
+    nearest_idx = int(np.abs(np.asarray(lags) - float(lag_value)).argmin())
+    updated[marker_slot] = nearest_idx
+
+    deduplicated: list[int] = []
+    seen: set[int] = set()
+    for idx in updated:
+        if idx in seen:
+            continue
+        seen.add(idx)
+        deduplicated.append(idx)
+    return deduplicated
+
+
 class MissionMeasurementReviewDialog(QtWidgets.QDialog):
     """Blocking review dialog for mission cross-correlation peaks."""
 
@@ -1743,15 +1770,29 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         if y_range is not None:
             self._plot.setYRange(*y_range, padding=0.0)
 
-        _add_draggable_markers(
-            self._plot,
-            self._lags,
-            self._magnitudes,
-            self._selected_los_idx,
-            self._selected_echo_indices,
-            on_los_drag_end=lambda _idx, lag: self._apply_manual_lag("los", lag),
-            on_echo_drag_end=lambda _idx, lag: self._apply_manual_lag("echo", lag),
-        )
+        view_box = self._plot.getViewBox()
+        if self._selected_los_idx is not None:
+            los_marker = DraggableLagMarker(
+                view_box,
+                self._lags,
+                self._magnitudes,
+                self._selected_los_idx,
+                PLOT_COLORS["los"],
+                on_drag_end=lambda _idx, lag: self._apply_manual_lag("los", lag),
+            )
+            self._plot.addItem(los_marker)
+        echo_palette = [PLOT_COLORS["echo"], *XCORR_EXTRA_PEAK_COLORS]
+        for marker_slot, echo_idx in enumerate(self._selected_echo_indices):
+            marker_color = echo_palette[marker_slot % len(echo_palette)]
+            echo_marker = DraggableLagMarker(
+                view_box,
+                self._lags,
+                self._magnitudes,
+                int(echo_idx),
+                marker_color,
+                on_drag_end=lambda _idx, lag, slot=marker_slot: self._apply_manual_echo_lag(slot, lag),
+            )
+            self._plot.addItem(echo_marker)
 
         self._update_stats_label()
 
@@ -1800,6 +1841,17 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
                 if echo_idx is None or int(idx) != int(echo_idx)
             )
             self._selected_echo_indices = reordered
+        self._render_plot()
+
+    def _apply_manual_echo_lag(self, marker_slot: int, lag_value: float) -> None:
+        self._manual_lags["echo"] = int(round(lag_value))
+        self._selected_echo_indices = _update_echo_indices_after_manual_drag(
+            self._lags,
+            self._selected_echo_indices,
+            int(marker_slot),
+            float(lag_value),
+        )
+        self._base_echo_indices = [int(idx) for idx in self._selected_echo_indices]
         self._render_plot()
 
     def _update_stats_label(self) -> None:
