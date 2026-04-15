@@ -55,6 +55,7 @@ from transceiver.__main__ import (
     _build_crosscorr_ctx,
     _format_echo_delay_display,
     _format_rx_stats_rows,
+    _update_echo_indices_after_manual_drag,
 )
 
 
@@ -178,6 +179,28 @@ def test_format_rx_stats_rows_does_not_scale_echo_when_interpolation_not_applied
 
     as_dict = dict(rows)
     assert as_dict["LOS-Echo"] == "12 samp (18.0 m)"
+
+
+def test_update_echo_indices_after_manual_drag_updates_selected_marker_slot() -> None:
+    lags = np.array([-20, -10, 0, 10, 20], dtype=float)
+    updated = _update_echo_indices_after_manual_drag(
+        lags,
+        echo_indices=[1, 3, 4],
+        marker_slot=1,
+        lag_value=0.1,
+    )
+    assert updated == [1, 2, 4]
+
+
+def test_update_echo_indices_after_manual_drag_deduplicates_indices() -> None:
+    lags = np.array([-20, -10, 0, 10, 20], dtype=float)
+    updated = _update_echo_indices_after_manual_drag(
+        lags,
+        echo_indices=[1, 3, 4],
+        marker_slot=2,
+        lag_value=10.0,
+    )
+    assert updated == [1, 3]
 
 
 class _DummyEntryWidget:
