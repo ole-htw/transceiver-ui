@@ -89,6 +89,30 @@ def _operator_error_code(event_type: str, detail: str) -> str:
         return "navigation_failed.aborted"
     return f"navigation_failed.{event_type}"
 
+
+def _compute_bistatic_echo_ellipse_axes(
+    *,
+    distance_rx_to_point: float,
+    echo_distance_m: float,
+) -> tuple[float, float, float] | None:
+    if (
+        not math.isfinite(distance_rx_to_point)
+        or not math.isfinite(echo_distance_m)
+        or distance_rx_to_point < 0.0
+        or echo_distance_m < 0.0
+    ):
+        return None
+    semi_focal_distance = distance_rx_to_point / 2.0
+    semi_major_axis = (distance_rx_to_point + echo_distance_m) / 2.0
+    semi_minor_squared = semi_major_axis * semi_major_axis - semi_focal_distance * semi_focal_distance
+    if semi_minor_squared < 0.0 and abs(semi_minor_squared) < 1e-12:
+        semi_minor_squared = 0.0
+    if semi_minor_squared < 0.0:
+        return None
+    semi_minor_axis = math.sqrt(semi_minor_squared)
+    return (semi_focal_distance, semi_major_axis, semi_minor_axis)
+
+
 class _UiNavigator:
     def __init__(self, *, adapter: NavigationAdapter, on_status, on_operator_message) -> None:
         self._adapter = adapter
@@ -1216,16 +1240,25 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if not math.isfinite(resolution) or resolution <= 0.0:
             return
         rx_x, rx_y = rx_position
-        distance_rx_to_point = math.hypot(point.x - rx_x, point.y - rx_y)
-        if not math.isfinite(distance_rx_to_point):
+        if (
+            not math.isfinite(rx_x)
+            or not math.isfinite(rx_y)
+            or not math.isfinite(point.x)
+            or not math.isfinite(point.y)
+            or not math.isfinite(echo_distance_m)
+            or echo_distance_m < 0.0
+        ):
             return
-        echo_radius = abs(distance_rx_to_point - echo_distance_m)
-        semi_focal_distance = distance_rx_to_point / 2.0
-        semi_major_axis = semi_focal_distance + echo_radius
-        if semi_major_axis <= semi_focal_distance:
-            semi_major_axis = semi_focal_distance + 0.05
-        semi_minor_squared = max(0.0, semi_major_axis * semi_major_axis - semi_focal_distance * semi_focal_distance)
-        semi_minor_axis = max(0.05, math.sqrt(semi_minor_squared))
+        distance_rx_to_point = math.hypot(point.x - rx_x, point.y - rx_y)
+        ellipse_axes = _compute_bistatic_echo_ellipse_axes(
+            distance_rx_to_point=distance_rx_to_point,
+            echo_distance_m=echo_distance_m,
+        )
+        if ellipse_axes is None:
+            return
+        semi_focal_distance, semi_major_axis, semi_minor_axis = ellipse_axes
+        if semi_minor_axis <= 0.0:
+            return
         center_x = (rx_x + point.x) / 2.0
         center_y = (rx_y + point.y) / 2.0
         angle = math.atan2(point.y - rx_y, point.x - rx_x)
@@ -1249,10 +1282,10 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                     map_pixel[0] * scale_x + offset_x,
                     map_pixel[1] * scale_y + offset_y,
                 )
-            )
+        )
         if len(preview_points) < 6:
             return
-        line_width = max(1, int(round((echo_radius / resolution) * self._map_preview_scale[0] * 0.03)))
+        line_width = max(1, int(round((echo_distance_m / resolution) * self._map_preview_scale[0] * 0.03)))
         self.map_preview_canvas.create_line(
             *preview_points,
             fill=color,
