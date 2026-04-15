@@ -354,6 +354,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._map_image_size: tuple[int, int] | None = None
         self._live_position: dict[str, Any] | None = None
         self._live_position_received_at: float | None = None
+        self._live_position_at_measurement_start: dict[str, Any] | None = None
         self._selected_point_index: int | None = None
         self._selected_result_index: int | None = None
         self._lidar_reference_scan_cache: dict[str, dict[str, Any] | None] = {}
@@ -519,6 +520,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "measurement_idx",
             "idx",
             "position",
+            "live_position",
             "distance_to_rx_m",
             "echo_1_m",
             "echo_2_m",
@@ -533,6 +535,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "measurement_idx": "Messung",
             "idx": "Punktindex",
             "position": "Pos.",
+            "live_position": "Live Pos.",
             "distance_to_rx_m": "Abstand",
             "echo_1_m": f"{ECHO_HEADING_MARKERS[0]} E1",
             "echo_2_m": f"{ECHO_HEADING_MARKERS[1]} E2",
@@ -546,6 +549,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self.results_table.column(key, stretch=True, width=110)
         self.results_table.column("measurement_idx", width=80)
         self.results_table.column("position", width=100)
+        self.results_table.column("live_position", width=100)
         self.results_table.column("distance_to_rx_m", width=90)
         self.results_table.column("echo_1_m", width=80)
         self.results_table.column("echo_2_m", width=80)
@@ -2455,6 +2459,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.stop_btn.configure(state="normal" if running else "disabled")
 
     def _on_stage_update(self, stage: str, status: str) -> None:
+        if stage == "measurement" and status == "running":
+            self._live_position_at_measurement_start = self._copy_live_position()
         self.after(0, lambda: self._update_live_label(stage=stage, status=status))
 
     def _on_executor_runtime_event(self, payload: dict[str, Any]) -> None:
@@ -2553,6 +2559,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         )
 
     def _on_record(self, payload: dict[str, Any]) -> None:
+        payload["live_position_at_measurement"] = self._live_position_at_measurement_start
+        self._live_position_at_measurement_start = None
         self._records.append(payload)
         meas = payload.get("measurement", {})
         result = meas.get("result", {}) if isinstance(meas.get("result"), dict) else {}
@@ -2567,6 +2575,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         combined_status = self._compose_table_outcome(payload, error_text)
         echo_distances = self._format_echo_distances_for_table(result.get("echo_delays"))
         position_text = self._format_position_for_table(payload)
+        live_position_text = self._format_live_position_for_table(payload)
         distance_to_rx = self._format_distance_to_rx_for_table(payload)
         self.results_table.insert(
             "",
@@ -2575,6 +2584,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 self._format_one_based_index(payload.get("global_index")),
                 self._format_one_based_index(payload.get("point_index")),
                 position_text,
+                live_position_text,
                 distance_to_rx,
                 *echo_distances,
                 combined_status,
@@ -2668,6 +2678,25 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if point is None:
             return "-"
         return f"{point.x:.1f},{point.y:.1f}"
+
+    def _format_live_position_for_table(self, payload: dict[str, Any]) -> str:
+        position = payload.get("live_position_at_measurement")
+        if not isinstance(position, dict):
+            return "-"
+        x_value = position.get("x")
+        y_value = position.get("y")
+        if not isinstance(x_value, (int, float)) or not isinstance(y_value, (int, float)):
+            return "-"
+        x = float(x_value)
+        y = float(y_value)
+        if not math.isfinite(x) or not math.isfinite(y):
+            return "-"
+        return f"{x:.1f},{y:.1f}"
+
+    def _copy_live_position(self) -> dict[str, Any] | None:
+        if not isinstance(self._live_position, dict):
+            return None
+        return dict(self._live_position)
 
     def _on_run_finished(self, state: str) -> None:
         self._stop_live_label_ticker()
