@@ -124,6 +124,29 @@ def test_crosscorr_normalization_keeps_los_and_echo_indices_stable() -> None:
     assert ctx_raw["peak_source_highest_idx"] == ctx_normalized["peak_source_highest_idx"]
 
 
+def test_crosscorr_manual_echo_slots_reorder_echo_indices() -> None:
+    ref, rx = _make_reference_and_rx()
+    base_ctx = _build_crosscorr_ctx(rx, ref, normalize=False)
+    lags = base_ctx["lags"]
+    assert isinstance(lags, np.ndarray)
+    first_idx = 5
+    second_idx = 10
+    manual_ctx = _build_crosscorr_ctx(
+        rx,
+        ref,
+        normalize=False,
+        manual_lags={
+            "echo_1": int(round(float(lags[second_idx]))),
+            "echo_2": int(round(float(lags[first_idx]))),
+        },
+    )
+
+    manual_echo_indices = list(manual_ctx["echo_indices"])
+    assert len(manual_echo_indices) >= 2
+    assert int(manual_echo_indices[0]) == second_idx
+    assert int(manual_echo_indices[1]) == first_idx
+
+
 def test_format_echo_delay_display_with_and_without_interpolation_factor() -> None:
     plain = _format_echo_delay_display(12, interpolation_enabled=False, interpolation_factor=2.0)
     assert plain == "12 samp (18.0 m)"
