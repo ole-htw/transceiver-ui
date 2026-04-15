@@ -335,3 +335,26 @@ def test_review_echo_delays_hide_duplicates_for_overlapping_markers() -> None:
     delays = MissionMeasurementReviewDialog.echo_delays.fget(dialog)
 
     assert delays == [20, 30]
+
+
+def test_review_scale_range_zooms_around_center() -> None:
+    from transceiver.__main__ import MissionMeasurementReviewDialog
+
+    scaled = MissionMeasurementReviewDialog._scale_range((0.0, 100.0), 0.5)
+
+    assert scaled == (25.0, 75.0)
+
+
+def test_review_scale_range_uses_custom_anchor() -> None:
+    from transceiver.__main__ import MissionMeasurementReviewDialog
+
+    scaled = MissionMeasurementReviewDialog._scale_range((0.0, 100.0), 0.5, center=20.0)
+
+    assert scaled == (-5.0, 45.0)
+
+
+def test_review_scale_range_rejects_invalid_inputs() -> None:
+    from transceiver.__main__ import MissionMeasurementReviewDialog
+
+    assert MissionMeasurementReviewDialog._scale_range((10.0, 10.0), 0.5) is None
+    assert MissionMeasurementReviewDialog._scale_range((0.0, 100.0), 0.0) is None
