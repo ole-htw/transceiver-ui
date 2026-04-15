@@ -146,6 +146,43 @@ def test_navigation_failure_retries_then_stop_mission() -> None:
     assert executor.records[0].status == "failed"
 
 
+def test_navigation_failure_can_run_measurement_after_operator_confirmation() -> None:
+    nav = FakeNavigator(["timeout", "aborted"])
+    measured: list[int] = []
+    persisted: list[dict] = []
+    confirmations: list[tuple[int, str]] = []
+
+    def _confirm(point_context, nav_state: str) -> bool:
+        confirmations.append((point_context.global_index, nav_state))
+        return True
+
+    def _trigger(point: MeasurementPoint) -> dict:
+        measured.append(1)
+        return {"ok": point.id}
+
+    executor = MeasurementRunExecutor(
+        mission=MeasurementMission(name="m2", points=[_mission().points[0]], repeat=1),
+        navigator=nav,
+        trigger_measurement=_trigger,
+        persist_result=persisted.append,
+        config=MeasurementRunExecutorConfig(
+            navigation_retry_attempts=1,
+            on_point_error="stop",
+            confirm_measurement_after_navigation_failure=_confirm,
+        ),
+    )
+
+    final_state = executor.start()
+
+    assert final_state == "completed"
+    assert confirmations == [(0, "aborted")]
+    assert measured == [1]
+    assert executor.records[0].status == "succeeded"
+    assert executor.records[0].navigation_state == "aborted"
+    assert persisted[0]["measurement"]["status"] == "succeeded"
+    assert persisted[0]["navigation"]["state"] == "aborted"
+
+
 def test_state_transitions_start_pause_resume_stop() -> None:
     class CancelAwareNavigator(FakeNavigator):
         def __init__(self) -> None:

@@ -515,6 +515,35 @@ def test_review_measurement_auto_approves_when_manual_review_disabled() -> None:
     }
 
 
+def test_confirm_measurement_after_navigation_failure_uses_point_index_in_prompt(monkeypatch) -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    messages: list[str] = []
+    asked: dict[str, str] = {}
+    window.after = lambda _delay, callback: callback()
+    window._append_validation = messages.append
+
+    def _askyesno(title: str, message: str, parent=None) -> bool:
+        asked["title"] = title
+        asked["message"] = message
+        return True
+
+    monkeypatch.setattr("transceiver.mission_workflow_ui.messagebox.askyesno", _askyesno)
+
+    decision = window._confirm_measurement_after_navigation_failure(
+        point_context=SimpleNamespace(
+            global_index=3,
+            point=SimpleNamespace(id="point-007", name="Alpha"),
+        ),
+        navigation_state="timeout",
+    )
+
+    assert decision is True
+    assert asked["title"] == "Navigation fehlgeschlagen"
+    assert "Punktindex 3" in asked["message"]
+    assert "point-007" not in asked["message"]
+    assert any("Punktindex 3" in msg for msg in messages)
+
+
 def test_check_run_prerequisites_skips_review_requirements_when_manual_review_disabled() -> None:
     window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
     window.manual_review_enabled_var = SimpleNamespace(get=lambda: False)

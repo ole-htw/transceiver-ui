@@ -2125,6 +2125,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 start_point_index=start_point_index,
                 reverse_point_order=bool(self.reverse_point_order_var.get()),
                 enable_measurements=not test_run_enabled,
+                confirm_measurement_after_navigation_failure=self._confirm_measurement_after_navigation_failure,
             ),
         )
 
@@ -2209,8 +2210,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _review_measurement(self, *, point_context, output_file: str) -> dict[str, object]:  # type: ignore[no-untyped-def]
         manual_review_enabled = bool(self.manual_review_enabled_var.get())
-        point_id = point_context.point.id or point_context.point.name or f"point-{point_context.global_index}"
-        point_label = f"Punkt {point_context.global_index} ({point_id})"
+        point_label = f"Punktindex {point_context.global_index}"
         review_fn = getattr(self.master, "review_measurement_for_mission", None)
         if not manual_review_enabled and callable(review_fn):
             try:
@@ -2270,6 +2270,40 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         result_payload["reason"] = reason_text
         result_payload["detail"] = detail_text
         return result_payload
+
+    def _confirm_measurement_after_navigation_failure(self, point_context, navigation_state: str) -> bool:  # type: ignore[no-untyped-def]
+        decision_ready = threading.Event()
+        decision = {"continue": False}
+
+        def _ask_operator() -> None:
+            detail = (
+                f"Navigation zu Punktindex {point_context.global_index} ist fehlgeschlagen "
+                f"({navigation_state}).\n\n"
+                "Soll die Messung an der aktuellen Position trotzdem durchgeführt werden?"
+            )
+            decision["continue"] = bool(
+                messagebox.askyesno(
+                    "Navigation fehlgeschlagen",
+                    detail,
+                    parent=self,
+                )
+            )
+            decision_ready.set()
+
+        try:
+            self.after(0, _ask_operator)
+        except tk.TclError:
+            return False
+        decision_ready.wait()
+        if decision["continue"]:
+            self._append_validation(
+                f"⚠️ Navigation zu Punktindex {point_context.global_index} fehlgeschlagen ({navigation_state}); Messung wird trotzdem ausgeführt."
+            )
+        else:
+            self._append_validation(
+                f"⚠️ Navigation zu Punktindex {point_context.global_index} fehlgeschlagen ({navigation_state}); Messung wird übersprungen."
+            )
+        return bool(decision["continue"])
 
     def _get_crosscorr_reference_for_mission(self) -> Any:
         get_reference = getattr(self.master, "_get_crosscorr_reference", None)
