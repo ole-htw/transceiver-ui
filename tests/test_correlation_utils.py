@@ -151,6 +151,30 @@ def test_resolve_manual_los_idx_resets_outdated_group_selection() -> None:
     assert manual_lags["los"] is None
 
 
+
+
+def test_resolve_manual_los_idx_keeps_manual_selection_when_unconstrained() -> None:
+    lags = np.array([-50, -40, -30, -20, -10, 0, 10, 20, 30, 40, 50], dtype=float)
+    base_los_idx = 8
+    highest_idx = 8
+    period_samples = 40
+    peak_group_indices = [7, 8, 9]
+    manual_lags = {"los": -20, "echo": None}
+
+    los_idx, was_reset = resolve_manual_los_idx(
+        lags,
+        base_los_idx,
+        manual_lags,
+        peak_group_indices=peak_group_indices,
+        highest_idx=highest_idx,
+        period_samples=period_samples,
+        constrain_to_peak_group=False,
+    )
+
+    assert was_reset is False
+    assert los_idx == 3
+    assert manual_lags["los"] == -20
+
 def test_classify_peak_group_returns_sorted_group_and_echoes() -> None:
     n = 220
     mag = _sinc_lobe(n, 80, 0.9) + _sinc_lobe(n, 120, 1.0) + _sinc_lobe(n, 150, 0.75)
