@@ -1477,7 +1477,7 @@ def _add_draggable_markers(
     lags: np.ndarray,
     magnitudes: np.ndarray,
     los_idx: int | None,
-    echo_idx: int | None,
+    echo_indices: list[int] | tuple[int, ...] | None,
     on_los_drag=None,
     on_echo_drag=None,
     on_los_drag_end=None,
@@ -1487,8 +1487,8 @@ def _add_draggable_markers(
     los_magnitudes: np.ndarray | None = None,
     echo_lags: np.ndarray | None = None,
     echo_magnitudes: np.ndarray | None = None,
-) -> tuple[DraggableLagMarker | None, DraggableLagMarker | None]:
-    """Attach draggable LOS/echo markers to a plot."""
+) -> tuple[DraggableLagMarker | None, list[DraggableLagMarker]]:
+    """Attach draggable LOS and Echo 1..N markers to a plot."""
     view_box = plot.getViewBox()
     los_lags = np.asarray(los_lags) if los_lags is not None else np.asarray(lags)
     echo_lags = np.asarray(echo_lags) if echo_lags is not None else np.asarray(lags)
@@ -1503,7 +1503,12 @@ def _add_draggable_markers(
         else np.asarray(magnitudes)
     )
     los_marker = None
-    echo_marker = None
+    echo_markers: list[DraggableLagMarker] = []
+    echo_indices_list = [
+        int(idx)
+        for idx in (echo_indices or [])
+        if idx is not None
+    ]
     if los_idx is not None:
         los_marker = DraggableLagMarker(
             view_box,
@@ -1515,18 +1520,21 @@ def _add_draggable_markers(
             on_drag_end=on_los_drag_end,
         )
         plot.addItem(los_marker)
-    if echo_idx is not None:
+    echo_palette = [PLOT_COLORS["echo"], *XCORR_EXTRA_PEAK_COLORS]
+    for marker_idx, echo_idx in enumerate(echo_indices_list):
+        marker_color = echo_palette[marker_idx % len(echo_palette)]
         echo_marker = DraggableLagMarker(
             view_box,
             echo_lags,
             echo_magnitudes,
             echo_idx,
-            "g",
+            marker_color,
             on_drag=on_echo_drag,
             on_drag_end=on_echo_drag_end,
         )
         plot.addItem(echo_marker)
-    return los_marker, echo_marker
+        echo_markers.append(echo_marker)
+    return los_marker, echo_markers
 
 
 def _crosscorr_peak_labels(group_indices: list[int]) -> dict[int, str]:
@@ -3011,12 +3019,12 @@ def _plot_on_pg(
         echo_drag_callback = _wrap_drag(on_echo_drag)
         los_end_callback = _wrap_drag(on_los_drag_end)
         echo_end_callback = _wrap_drag(on_echo_drag_end)
-        los_marker, echo_marker = _add_draggable_markers(
+        los_marker, echo_markers = _add_draggable_markers(
             plot,
             lags,
             mag,
             los_idx,
-            echo_idx,
+            filtered_echo_indices,
             on_los_drag=los_drag_callback,
             on_echo_drag=echo_drag_callback,
             on_los_drag_end=los_end_callback,
@@ -3048,7 +3056,7 @@ def _plot_on_pg(
                     idx = int(np.abs(lags - pos.x()).argmin())
                     lag_value = float(lags[idx])
                     manual_lags["echo"] = int(round(lag_value))
-                    if echo_marker is not None:
+                    for echo_marker in echo_markers:
                         echo_marker.set_index(idx)
                     callback = echo_drag_callback or echo_end_callback
                     if callback is not None:
