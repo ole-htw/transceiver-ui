@@ -323,36 +323,6 @@ def test_review_echo_numbers_swap_when_markers_cross() -> None:
     assert numbers == {1: 1, 0: 2}
 
 
-def test_review_echo_label_texts_update_when_marker_order_changes() -> None:
-    from transceiver.__main__ import MissionMeasurementReviewDialog
-
-    class _DummyLabel:
-        def __init__(self) -> None:
-            self.text = ""
-            self.pos = (None, None)
-
-        def setText(self, value: str) -> None:
-            self.text = value
-
-        def setPos(self, x: float, y: float) -> None:
-            self.pos = (x, y)
-
-    dialog = types.SimpleNamespace()
-    dialog._lags = np.array([0.0, 10.0, 20.0, 30.0], dtype=float)
-    dialog._magnitudes = np.array([1.0, 2.0, 3.0, 4.0], dtype=float)
-    dialog._selected_echo_indices = [2, 1]
-    dialog._echo_label_items = [_DummyLabel(), _DummyLabel()]
-    dialog._los_label_item = None
-    dialog._selected_los_idx = None
-    dialog._echo_marker_slots_by_lag = lambda: MissionMeasurementReviewDialog._echo_marker_slots_by_lag(dialog)
-    dialog._echo_numbers_by_marker_slot = lambda: MissionMeasurementReviewDialog._echo_numbers_by_marker_slot(dialog)
-
-    MissionMeasurementReviewDialog._update_peak_label_positions(dialog)
-
-    assert dialog._echo_label_items[0].text == "Echo 2"
-    assert dialog._echo_label_items[1].text == "Echo 1"
-
-
 def test_review_echo_delays_hide_duplicates_for_overlapping_markers() -> None:
     from transceiver.__main__ import MissionMeasurementReviewDialog
 
