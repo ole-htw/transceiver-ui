@@ -2699,9 +2699,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         return f"{x:.1f},{y:.1f}"
 
     def _format_live_distance_to_tx_for_table(self, payload: dict[str, Any]) -> str:
-        point = self._selected_record_point(payload)
+        tx_position = self._tx_position_for_record(payload)
         position = payload.get("live_position_at_measurement")
-        if point is None or not isinstance(position, dict):
+        if tx_position is None or not isinstance(position, dict):
             return "-"
         x_value = position.get("x")
         y_value = position.get("y")
@@ -2711,10 +2711,27 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         live_y = float(y_value)
         if not math.isfinite(live_x) or not math.isfinite(live_y):
             return "-"
-        distance_m = math.hypot(point.x - live_x, point.y - live_y)
+        distance_m = math.hypot(tx_position[0] - live_x, tx_position[1] - live_y)
         if not math.isfinite(distance_m):
             return "-"
         return f"{distance_m:.2f}".rstrip("0").rstrip(".")
+
+    def _tx_position_for_record(self, payload: dict[str, Any]) -> tuple[float, float] | None:
+        point_payload = payload.get("point")
+        if isinstance(point_payload, dict):
+            target = point_payload.get("target")
+            if isinstance(target, dict):
+                x_value = target.get("x")
+                y_value = target.get("y")
+                if isinstance(x_value, (int, float)) and isinstance(y_value, (int, float)):
+                    x = float(x_value)
+                    y = float(y_value)
+                    if math.isfinite(x) and math.isfinite(y):
+                        return (x, y)
+        point = self._selected_record_point(payload)
+        if point is None:
+            return None
+        return (point.x, point.y)
 
     def _copy_live_position(self) -> dict[str, Any] | None:
         if not isinstance(self._live_position, dict):
