@@ -1638,6 +1638,7 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         layout.addWidget(header)
 
         plot_widget = pg.PlotWidget()
+        self._plot_widget = plot_widget
         self._plot = plot_widget.getPlotItem()
         _style_pg_preview_axes(self._plot, PLOT_COLORS["text"])
         self._plot.showGrid(x=True, y=True, alpha=0.2)
@@ -1652,6 +1653,7 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         layout.addWidget(self._stats_label)
         self._render_plot()
         self._connect_click_handler()
+        plot_widget.viewport().installEventFilter(self)
 
         button_row = QtWidgets.QHBoxLayout()
         button_row.addStretch(1)
@@ -1918,6 +1920,82 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         for display_number, marker_slot in enumerate(self._echo_marker_slots_by_lag(), start=1):
             numbers[int(marker_slot)] = int(display_number)
         return numbers
+
+    @staticmethod
+    def _scale_range(
+        current_range: tuple[float, float],
+        zoom_factor: float,
+        *,
+        center: float | None = None,
+        min_span: float = 1e-9,
+    ) -> tuple[float, float] | None:
+        start = float(current_range[0])
+        end = float(current_range[1])
+        if not np.isfinite(start) or not np.isfinite(end):
+            return None
+        span = float(abs(end - start))
+        if span <= 0.0 or not np.isfinite(span):
+            return None
+        factor = float(zoom_factor)
+        if factor <= 0.0 or not np.isfinite(factor):
+            return None
+        anchor = float((start + end) / 2.0) if center is None else float(center)
+        if not np.isfinite(anchor):
+            anchor = float((start + end) / 2.0)
+        new_half_span = max(float(min_span) / 2.0, (span * factor) / 2.0)
+        return (anchor - new_half_span, anchor + new_half_span)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 (Qt API)
+        wheel_type = getattr(QtCore.QEvent, "Wheel", QtCore.QEvent.Type.Wheel)
+        plot_widget = getattr(self, "_plot_widget", None)
+        viewport = plot_widget.viewport() if plot_widget is not None else None
+        if watched is viewport and event.type() == wheel_type:
+            if self._handle_axis_wheel_zoom(event):
+                return True
+        return super().eventFilter(watched, event)
+
+    def _axis_for_scene_pos(self, scene_pos: QtCore.QPointF) -> str | None:
+        scene = self._plot.scene()
+        if scene is None:
+            return None
+        for item in scene.items(scene_pos):
+            orientation = getattr(item, "orientation", None)
+            if orientation in ("bottom", "top"):
+                return "x"
+            if orientation in ("left", "right"):
+                return "y"
+        return None
+
+    def _handle_axis_wheel_zoom(self, event) -> bool:
+        angle_delta = event.angleDelta()
+        delta_y = int(angle_delta.y()) if angle_delta is not None else 0
+        if delta_y == 0:
+            return False
+
+        pos = event.position() if hasattr(event, "position") else event.pos()
+        scene_pos = self._plot_widget.mapToScene(QtCore.QPoint(int(pos.x()), int(pos.y())))
+        axis = self._axis_for_scene_pos(scene_pos)
+        if axis not in ("x", "y"):
+            return False
+
+        zoom_factor = 0.9 if delta_y > 0 else (1.0 / 0.9)
+        view_box = self._plot.getViewBox()
+        current_x, current_y = view_box.viewRange()
+        view_pos = view_box.mapSceneToView(scene_pos)
+
+        if axis == "x":
+            new_x = self._scale_range((float(current_x[0]), float(current_x[1])), zoom_factor, center=float(view_pos.x()))
+            if new_x is None:
+                return False
+            self._plot.setXRange(*new_x, padding=0.0)
+        else:
+            new_y = self._scale_range((float(current_y[0]), float(current_y[1])), zoom_factor, center=float(view_pos.y()))
+            if new_y is None:
+                return False
+            self._plot.setYRange(*new_y, padding=0.0)
+
+        event.accept()
+        return True
 
     def _connect_click_handler(self) -> None:
         scene = self._plot.scene()
