@@ -203,6 +203,17 @@ def test_update_echo_indices_after_manual_drag_keeps_overlapping_slots() -> None
     assert updated == [1, 3, 3]
 
 
+def test_update_echo_indices_after_manual_drag_reorders_echoes_by_lag_position() -> None:
+    lags = np.array([-20, -10, 0, 10, 20], dtype=float)
+    updated = _update_echo_indices_after_manual_drag(
+        lags,
+        echo_indices=[1, 2],
+        marker_slot=0,
+        lag_value=15.0,
+    )
+    assert updated == [2, 3]
+
+
 class _DummyEntryWidget:
     def __init__(self, text: str) -> None:
         self._text = text
@@ -277,6 +288,7 @@ def test_review_drag_preview_updates_echo_distances_live() -> None:
     dialog._selected_los_idx = 0
     dialog._selected_echo_indices = [2, 3]
     dialog._base_echo_indices = [2, 3]
+    dialog._update_peak_label_positions = lambda: None
     dialog._update_stats_label = lambda: None
 
     from transceiver.__main__ import MissionMeasurementReviewDialog
@@ -295,6 +307,7 @@ def test_review_echo_drag_preview_updates_selected_slot_live() -> None:
     dialog._selected_los_idx = 0
     dialog._selected_echo_indices = [2, 3]
     dialog._base_echo_indices = [2, 3]
+    dialog._update_peak_label_positions = lambda: None
     dialog._update_stats_label = lambda: None
 
     from transceiver.__main__ import MissionMeasurementReviewDialog
@@ -302,8 +315,8 @@ def test_review_echo_drag_preview_updates_selected_slot_live() -> None:
     MissionMeasurementReviewDialog._preview_manual_echo_lag(dialog, 1, 10.0)
 
     delays = MissionMeasurementReviewDialog.echo_delays.fget(dialog)
-    assert dialog._selected_echo_indices == [2, 1]
-    assert delays == [20, 10]
+    assert dialog._selected_echo_indices == [1, 2]
+    assert delays == [10, 20]
 
 
 def test_review_echo_delays_hide_duplicates_for_overlapping_markers() -> None:
