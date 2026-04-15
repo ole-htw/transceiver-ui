@@ -409,6 +409,66 @@ def test_ui_navigator_navigation_succeeds_without_feedback_position(monkeypatch)
     assert position_updates
 
 
+def test_manual_prompt_navigator_prompts_and_returns_succeeded(monkeypatch) -> None:
+    from transceiver import mission_workflow_ui as module
+
+    parent = SimpleNamespace(after=lambda _delay, callback: callback())
+    status_updates: list[tuple[str, str]] = []
+    operator_messages: list[str] = []
+    prompts: list[str] = []
+
+    def _askokcancel(title: str, message: str, parent=None) -> bool:
+        assert title == "Manuelle Navigation"
+        prompts.append(message)
+        return True
+
+    monkeypatch.setattr("transceiver.mission_workflow_ui.messagebox.askokcancel", _askokcancel)
+    navigator = module._ManualPromptNavigator(
+        parent=parent,
+        on_status=lambda stage, status: status_updates.append((stage, status)),
+        on_operator_message=operator_messages.append,
+        start_index=2,
+    )
+
+    nav_events: list[dict[str, object]] = []
+    result = navigator.navigate_to_point(
+        module.NavigationPoint(x=1.234, y=5.678, z=0.0, qx=0.0, qy=0.0, qz=0.0, qw=1.0),
+        timeout_s=5.0,
+        on_navigation_event=nav_events.append,
+    )
+
+    assert result == "succeeded"
+    assert status_updates == [("navigation", "running"), ("navigation", "succeeded")]
+    assert operator_messages == []
+    assert prompts == ["Roboter zur Position 2 bringen: 1.234,5.678"]
+    assert nav_events == [{"type": "position_update", "position": {"x": 1.234, "y": 5.678, "z": 0.0}}]
+
+
+def test_manual_prompt_navigator_returns_canceled_on_abort(monkeypatch) -> None:
+    from transceiver import mission_workflow_ui as module
+
+    parent = SimpleNamespace(after=lambda _delay, callback: callback())
+    status_updates: list[tuple[str, str]] = []
+    operator_messages: list[str] = []
+
+    monkeypatch.setattr("transceiver.mission_workflow_ui.messagebox.askokcancel", lambda *_args, **_kwargs: False)
+    navigator = module._ManualPromptNavigator(
+        parent=parent,
+        on_status=lambda stage, status: status_updates.append((stage, status)),
+        on_operator_message=operator_messages.append,
+        start_index=0,
+    )
+
+    result = navigator.navigate_to_point(
+        module.NavigationPoint(x=0.0, y=0.0, z=0.0, qx=0.0, qy=0.0, qz=0.0, qw=1.0),
+        timeout_s=5.0,
+    )
+
+    assert result == "canceled"
+    assert status_updates == [("navigation", "running"), ("navigation", "canceled")]
+    assert any("Punktindex 0" in msg for msg in operator_messages)
+
+
 def test_on_map_canvas_click_ignores_click_when_pick_mode_disabled() -> None:
     window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
     window._waypoint_map_pick_mode_enabled = False

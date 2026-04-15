@@ -146,3 +146,19 @@ def test_save_and_load_json_dict_preserves_live_pose_stream_enabled_flag(tmp_pat
     loaded = _load_json_dict(state_file)
 
     assert loaded["live_pose_stream_enabled"] is True
+
+
+def test_save_and_load_json_dict_preserves_manual_navigation_enabled_flag(tmp_path) -> None:
+    state_file = tmp_path / "mission-workflow-state.json"
+    payload = {
+        "name": "scan-manual-navigation-toggle",
+        "repeat": 1,
+        "start_point_index": 0,
+        "manual_navigation_enabled": True,
+        "points": [{"id": "p001", "x": 0.0, "y": 0.0, "z": 0.0, "yaw": 0.0, "enabled": True}],
+    }
+
+    _save_json_dict(state_file, payload)
+    loaded = _load_json_dict(state_file)
+
+    assert loaded["manual_navigation_enabled"] is True

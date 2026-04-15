@@ -35,7 +35,9 @@ from .navigation_adapter import (
     NavigationAdapter,
     NavigationAdapterConfig,
     NavigationEvent,
+    NavigationPoint,
     RosbridgePoseStreamTransport,
+    TerminalNavigationState,
 )
 from .window_utils import configure_child_window
 
@@ -216,6 +218,85 @@ class _UiNavigator:
         self._adapter.cancel_current_goal()
 
 
+class _ManualPromptNavigator:
+    def __init__(
+        self,
+        *,
+        parent: tk.Misc,
+        on_status: Callable[[str, str], None],
+        on_operator_message: Callable[[str], None],
+        start_index: int,
+    ) -> None:
+        self._parent = parent
+        self._on_status = on_status
+        self._on_operator_message = on_operator_message
+        self._next_global_index = max(0, start_index)
+        self._index_lock = threading.Lock()
+        self._cancel_requested = threading.Event()
+
+    def navigate_to_point(
+        self,
+        point: NavigationPoint,
+        *,
+        timeout_s: float,
+        on_navigation_event: Callable[[dict[str, Any]], None] | None = None,
+    ) -> TerminalNavigationState:
+        del timeout_s
+        if self._cancel_requested.is_set():
+            return "canceled"
+        with self._index_lock:
+            current_index = self._next_global_index
+            self._next_global_index += 1
+        self._on_status("navigation", "running")
+        decision_ready = threading.Event()
+        decision: dict[str, bool] = {"ok": False}
+
+        def _ask_operator() -> None:
+            if self._cancel_requested.is_set():
+                decision_ready.set()
+                return
+            prompt = (
+                f"Roboter zur Position {current_index} bringen: "
+                f"{point.x:.3f},{point.y:.3f}"
+            )
+            decision["ok"] = bool(
+                messagebox.askokcancel(
+                    "Manuelle Navigation",
+                    prompt,
+                    parent=self._parent,
+                )
+            )
+            decision_ready.set()
+
+        try:
+            self._parent.after(0, _ask_operator)
+        except tk.TclError:
+            return "aborted"
+        while not decision_ready.wait(timeout=0.1):
+            if self._cancel_requested.is_set():
+                return "canceled"
+        if self._cancel_requested.is_set():
+            return "canceled"
+        if not decision["ok"]:
+            self._on_status("navigation", "canceled")
+            self._on_operator_message(
+                f"⚠️ Manuelle Navigation für Punktindex {current_index} wurde abgebrochen."
+            )
+            return "canceled"
+        if on_navigation_event is not None:
+            on_navigation_event(
+                {
+                    "type": "position_update",
+                    "position": {"x": point.x, "y": point.y, "z": point.z},
+                }
+            )
+        self._on_status("navigation", "succeeded")
+        return "succeeded"
+
+    def cancel_current_goal(self) -> None:
+        self._cancel_requested.set()
+
+
 class MissionWorkflowWindow(ctk.CTkToplevel):
     def __init__(self, parent: ctk.CTk) -> None:
         super().__init__(parent)
@@ -245,6 +326,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.lidar_reference_enabled_var = tk.BooleanVar(value=True)
         self.manual_review_enabled_var = tk.BooleanVar(value=True)
         self.test_run_enabled_var = tk.BooleanVar(value=False)
+        self.manual_navigation_enabled_var = tk.BooleanVar(value=False)
         self.live_pose_stream_enabled_var = tk.BooleanVar(value=False)
         self._live_pose_stream_active = False
 
@@ -499,16 +581,22 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             variable=self.test_run_enabled_var,
             command=self._on_test_run_toggle_changed,
         ).grid(row=3, column=3, padx=(8, 3), pady=(0, 4), sticky="w")
+        ctk.CTkCheckBox(
+            controls,
+            text="Manuelle Navigation",
+            variable=self.manual_navigation_enabled_var,
+            command=self._persist_workflow_state,
+        ).grid(row=3, column=4, padx=(8, 3), pady=(0, 4), sticky="w")
         ctk.CTkSwitch(
             controls,
             text="Live-Position aktivieren",
             variable=self.live_pose_stream_enabled_var,
             command=self._on_live_pose_stream_switch_changed,
-        ).grid(row=3, column=4, columnspan=1, padx=(8, 8), pady=(0, 4), sticky="w")
+        ).grid(row=4, column=0, columnspan=2, padx=(8, 3), pady=(0, 4), sticky="w")
 
         self.live_var = tk.StringVar(value="Punkt: - | Navigation: idle | Messung: idle | Verbleibend: - | Live-Status: Karte nicht geladen")
         ctk.CTkLabel(controls, textvariable=self.live_var, anchor="w", justify="left").grid(
-            row=4, column=0, columnspan=5, sticky="nsew", padx=8, pady=(4, 8)
+            row=5, column=0, columnspan=5, sticky="nsew", padx=8, pady=(4, 8)
         )
 
         table_frame = ctk.CTkFrame(self)
@@ -1890,6 +1978,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "lidar_reference_enabled": bool(self.lidar_reference_enabled_var.get()),
             "manual_review_enabled": bool(self.manual_review_enabled_var.get()),
             "test_run_enabled": bool(self.test_run_enabled_var.get()),
+            "manual_navigation_enabled": bool(self.manual_navigation_enabled_var.get()),
             "reverse_point_order": bool(self.reverse_point_order_var.get()),
             "live_pose_stream_enabled": bool(self.live_pose_stream_enabled_var.get()),
         }
@@ -1971,6 +2060,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self.lidar_reference_enabled_var.set(bool(payload.get("lidar_reference_enabled", True)))
             self.manual_review_enabled_var.set(bool(payload.get("manual_review_enabled", True)))
             self.test_run_enabled_var.set(bool(payload.get("test_run_enabled", False)))
+            self.manual_navigation_enabled_var.set(bool(payload.get("manual_navigation_enabled", False)))
             self.reverse_point_order_var.set(bool(payload.get("reverse_point_order", False)))
             self.live_pose_stream_enabled_var.set(bool(payload.get("live_pose_stream_enabled", False)))
             self._refresh_points_table()
@@ -2097,7 +2187,15 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self.after(0, self._on_record, payload)
 
         self._sync_live_pose_stream_state()
-        navigator = self._ensure_navigator()
+        if bool(self.manual_navigation_enabled_var.get()):
+            navigator = _ManualPromptNavigator(
+                parent=self,
+                on_status=self._on_stage_update,
+                on_operator_message=self._append_validation,
+                start_index=start_point_index,
+            )
+        else:
+            navigator = self._ensure_navigator()
 
         self._executor = MeasurementRunExecutor(
             mission=self._mission,
