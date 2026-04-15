@@ -252,6 +252,7 @@ def resolve_manual_los_idx(
     peak_group_indices: list[int] | None = None,
     highest_idx: int | None = None,
     period_samples: int | None = None,
+    constrain_to_peak_group: bool = True,
 ) -> tuple[int | None, bool]:
     """Return LOS idx with optional validation against the active peak group.
 
@@ -273,7 +274,7 @@ def resolve_manual_los_idx(
     manual_idx = int(np.abs(lags - manual_los).argmin())
     allow_manual = True
 
-    if peak_group_indices:
+    if constrain_to_peak_group and peak_group_indices:
         normalized = {
             int(idx)
             for idx in peak_group_indices
@@ -283,7 +284,8 @@ def resolve_manual_los_idx(
             allow_manual = False
 
     if (
-        allow_manual
+        constrain_to_peak_group
+        and allow_manual
         and highest_idx is not None
         and period_samples is not None
         and period_samples > 1

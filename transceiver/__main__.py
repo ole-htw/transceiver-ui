@@ -1892,6 +1892,7 @@ def _build_crosscorr_ctx(
         peak_group_indices=current_peak_group,
         highest_idx=highest_idx,
         period_samples=period_samples,
+        constrain_to_peak_group=False,
     )
     filtered_echo_indices = _filter_peak_indices_to_period_group(
         los_lags,
@@ -2888,6 +2889,7 @@ def _plot_on_pg(
                 peak_group_indices=current_peak_group,
                 highest_idx=peak_source_highest_idx,
                 period_samples=period_samples,
+                constrain_to_peak_group=False,
             )
             adj_echo_indices = _echo_indices_for_los(adj_los_idx)
             adj_group_indices = (
@@ -3334,6 +3336,7 @@ def _plot_on_mpl(
             peak_group_indices=current_peak_group,
             highest_idx=highest_idx,
             period_samples=period_samples,
+            constrain_to_peak_group=False,
         )
         filtered_echo_indices = _filter_peak_indices_to_period_group(
             los_lags,
