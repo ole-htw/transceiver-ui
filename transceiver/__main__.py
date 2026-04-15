@@ -1675,6 +1675,10 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
 
     def _render_plot(self) -> None:
         self._plot.clear()
+        # Keep left-button drag gestures reserved for LOS/Echo marker edits.
+        # Otherwise the default ViewBox panning consumes the drag and only
+        # shifts the viewport instead of moving the selected marker.
+        self._plot.getViewBox().setMouseEnabled(x=False, y=False)
         self._plot.plot(
             self._lags,
             self._magnitudes,
@@ -1738,6 +1742,16 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         )
         if y_range is not None:
             self._plot.setYRange(*y_range, padding=0.0)
+
+        _add_draggable_markers(
+            self._plot,
+            self._lags,
+            self._magnitudes,
+            self._selected_los_idx,
+            self._selected_echo_indices,
+            on_los_drag_end=lambda _idx, lag: self._apply_manual_lag("los", lag),
+            on_echo_drag_end=lambda _idx, lag: self._apply_manual_lag("echo", lag),
+        )
 
         self._update_stats_label()
 
