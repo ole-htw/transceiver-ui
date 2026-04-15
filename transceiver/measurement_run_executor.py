@@ -382,7 +382,9 @@ class MeasurementRunExecutor:
 
         for attempt in range(1, attempts + 1):
             nav_state = self.navigator.navigate_to_point(
-                self._to_navigation_point(point),
+                self._to_navigation_point(
+                    point, rotate_heading_by_pi=self.config.reverse_point_order
+                ),
                 timeout_s=self.config.goal_reached_timeout_s,
                 on_navigation_event=_emit_navigation_event,
             )
@@ -685,26 +687,42 @@ class MeasurementRunExecutor:
         return active_points
 
     @staticmethod
-    def _to_navigation_point(point: MeasurementPoint) -> NavigationPoint:
+    def _to_navigation_point(
+        point: MeasurementPoint, *, rotate_heading_by_pi: bool = False
+    ) -> NavigationPoint:
+        yaw_offset = math.pi if rotate_heading_by_pi else 0.0
         if point.yaw is not None:
+            yaw = point.yaw + yaw_offset
             return NavigationPoint(
                 x=point.x,
                 y=point.y,
                 z=point.z,
                 qx=0.0,
                 qy=0.0,
-                qz=math.sin(point.yaw / 2.0),
-                qw=math.cos(point.yaw / 2.0),
+                qz=math.sin(yaw / 2.0),
+                qw=math.cos(yaw / 2.0),
             )
+        qx = point.qx if point.qx is not None else 0.0
+        qy = point.qy if point.qy is not None else 0.0
+        qz = point.qz if point.qz is not None else 0.0
+        qw = point.qw if point.qw is not None else 1.0
+        if rotate_heading_by_pi:
+            qx, qy, qz, qw = _rotate_quaternion_z_by_pi(qx, qy, qz, qw)
         return NavigationPoint(
             x=point.x,
             y=point.y,
             z=point.z,
-            qx=point.qx if point.qx is not None else 0.0,
-            qy=point.qy if point.qy is not None else 0.0,
-            qz=point.qz if point.qz is not None else 0.0,
-            qw=point.qw if point.qw is not None else 1.0,
+            qx=qx,
+            qy=qy,
+            qz=qz,
+            qw=qw,
         )
+
+
+def _rotate_quaternion_z_by_pi(
+    qx: float, qy: float, qz: float, qw: float
+) -> tuple[float, float, float, float]:
+    return (-qy, qx, qw, -qz)
 
 
 def _extract_measurement_id(measurement_result: dict[str, Any] | None) -> Any:

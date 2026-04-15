@@ -567,6 +567,8 @@ def test_reverse_point_order_executes_active_points_backwards() -> None:
 
     assert final_state == "completed"
     assert measured == ["p3", "p1"]
+    assert nav.calls[0][2] == pytest.approx(1.0)
+    assert nav.calls[1][2] == pytest.approx(1.0)
     assert summaries[0]["reverse_point_order"] is True
 
 
@@ -586,6 +588,41 @@ def test_reverse_point_order_applies_to_start_point_index() -> None:
 
     assert final_state == "completed"
     assert measured == ["p1"]
+    assert nav.calls[0][2] == pytest.approx(1.0)
+
+
+def test_reverse_point_order_rotates_quaternion_heading_by_180_deg() -> None:
+    nav = FakeNavigator(["succeeded"])
+    mission = MeasurementMission(
+        name="reverse-order-quaternion",
+        points=[
+            MeasurementPoint(
+                id="p1",
+                name="Q",
+                x=1.0,
+                y=2.0,
+                qx=0.0,
+                qy=0.0,
+                qz=0.0,
+                qw=1.0,
+                enabled=True,
+            ),
+        ],
+        repeat=1,
+    )
+
+    executor = MeasurementRunExecutor(
+        mission=mission,
+        navigator=nav,
+        trigger_measurement=lambda _point: {"ok": True},
+        persist_result=lambda _payload: None,
+        config=MeasurementRunExecutorConfig(reverse_point_order=True),
+    )
+
+    final_state = executor.start()
+
+    assert final_state == "completed"
+    assert nav.calls[0][2] == pytest.approx(1.0)
 
 
 def test_start_fails_when_mission_has_no_active_points() -> None:
