@@ -1440,7 +1440,8 @@ class DraggableLagMarker(pg.ScatterPlotItem):
         brush = pg.mkBrush(color)
         super().__init__(symbol="o", size=size, pen=pen, brush=brush)
         self.setZValue(10)
-        self.setAcceptedMouseButtons(QtCore.Qt.LeftButton)
+        left_button = getattr(QtCore.Qt, "LeftButton", QtCore.Qt.MouseButton.LeftButton)
+        self.setAcceptedMouseButtons(left_button)
         self._update_position(self._index)
 
     def _update_position(self, index: int) -> None:
@@ -1452,11 +1453,17 @@ class DraggableLagMarker(pg.ScatterPlotItem):
         self._update_position(index)
 
     def mouseDragEvent(self, ev) -> None:
-        if ev.button() != QtCore.Qt.LeftButton:
+        left_button = getattr(QtCore.Qt, "LeftButton", QtCore.Qt.MouseButton.LeftButton)
+        active_buttons = getattr(ev, "buttons", lambda: left_button)()
+        if ev.isStart() and ev.button() != left_button:
+            ev.ignore()
+            return
+        if not ev.isStart() and not (active_buttons & left_button):
             ev.ignore()
             return
         if ev.isStart():
             self._dragging = True
+            ev.accept()
         if not self._dragging:
             ev.ignore()
             return
@@ -1794,16 +1801,19 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             return
 
         def _handle_click(ev) -> None:
-            if ev.button() != QtCore.Qt.LeftButton:
+            left_button = getattr(QtCore.Qt, "LeftButton", QtCore.Qt.MouseButton.LeftButton)
+            shift_modifier = getattr(QtCore.Qt, "ShiftModifier", QtCore.Qt.KeyboardModifier.ShiftModifier)
+            alt_modifier = getattr(QtCore.Qt, "AltModifier", QtCore.Qt.KeyboardModifier.AltModifier)
+            if ev.button() != left_button:
                 return
             modifiers = ev.modifiers()
-            if not (modifiers & QtCore.Qt.ShiftModifier or modifiers & QtCore.Qt.AltModifier):
+            if not (modifiers & shift_modifier or modifiers & alt_modifier):
                 return
             pos = self._plot.getViewBox().mapSceneToView(ev.scenePos())
-            if modifiers & QtCore.Qt.ShiftModifier:
+            if modifiers & shift_modifier:
                 idx = int(np.abs(self._lags - pos.x()).argmin())
                 self._apply_manual_lag("los", float(self._lags[idx]))
-            if modifiers & QtCore.Qt.AltModifier:
+            if modifiers & alt_modifier:
                 idx = int(np.abs(self._lags - pos.x()).argmin())
                 self._apply_manual_lag("echo", float(self._lags[idx]))
 
@@ -3038,16 +3048,19 @@ def _plot_on_pg(
         )
         if scene is not None and manual_lags is not None:
             def _handle_click(ev) -> None:
-                if ev.button() != QtCore.Qt.LeftButton:
+                left_button = getattr(QtCore.Qt, "LeftButton", QtCore.Qt.MouseButton.LeftButton)
+                shift_modifier = getattr(QtCore.Qt, "ShiftModifier", QtCore.Qt.KeyboardModifier.ShiftModifier)
+                alt_modifier = getattr(QtCore.Qt, "AltModifier", QtCore.Qt.KeyboardModifier.AltModifier)
+                if ev.button() != left_button:
                     return
                 modifiers = ev.modifiers()
                 if not (
-                    modifiers & QtCore.Qt.ShiftModifier
-                    or modifiers & QtCore.Qt.AltModifier
+                    modifiers & shift_modifier
+                    or modifiers & alt_modifier
                 ):
                     return
                 pos = plot.getViewBox().mapSceneToView(ev.scenePos())
-                if modifiers & QtCore.Qt.ShiftModifier:
+                if modifiers & shift_modifier:
                     idx = int(np.abs(los_lags - pos.x()).argmin())
                     lag_value = float(los_lags[idx])
                     manual_lags["los"] = int(round(lag_value))
@@ -3056,7 +3069,7 @@ def _plot_on_pg(
                     callback = los_drag_callback or los_end_callback
                     if callback is not None:
                         callback(idx, lag_value)
-                if modifiers & QtCore.Qt.AltModifier:
+                if modifiers & alt_modifier:
                     idx = int(np.abs(lags - pos.x()).argmin())
                     lag_value = float(lags[idx])
                     manual_lags["echo"] = int(round(lag_value))
