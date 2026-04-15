@@ -8045,7 +8045,7 @@ class TransceiverUI(ctk.CTk):
             return True
         return bool(self._tx_running)
 
-    def activate_transmitter_for_mission(self, timeout_s: float = 15.0) -> tuple[bool, str]:
+    def activate_transmitter_for_mission(self, timeout_s: float = 18.0) -> tuple[bool, str]:
         if self.is_transmitter_active_for_mission():
             return True, "already_active"
 
