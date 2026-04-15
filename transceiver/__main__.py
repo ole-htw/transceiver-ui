@@ -1604,29 +1604,6 @@ def _update_echo_indices_after_manual_drag(
     return deduplicated
 
 
-def _nearest_echo_marker_slot(
-    lags: np.ndarray,
-    echo_indices: list[int],
-    lag_value: float,
-) -> int:
-    """Return the Echo marker slot whose current lag is nearest to ``lag_value``."""
-    if not echo_indices:
-        return 0
-    lag_array = np.asarray(lags, dtype=float)
-    target_lag = float(lag_value)
-    nearest_slot = 0
-    nearest_distance = float("inf")
-    for slot, echo_idx in enumerate(echo_indices):
-        idx = int(echo_idx)
-        if idx < 0 or idx >= lag_array.size:
-            continue
-        distance = abs(float(lag_array[idx]) - target_lag)
-        if distance < nearest_distance:
-            nearest_distance = distance
-            nearest_slot = slot
-    return int(nearest_slot)
-
-
 class MissionMeasurementReviewDialog(QtWidgets.QDialog):
     """Blocking review dialog for mission cross-correlation peaks."""
 
@@ -1834,15 +1811,10 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             return
 
         if self._selected_echo_indices:
-            marker_slot = _nearest_echo_marker_slot(
-                self._lags,
-                self._selected_echo_indices,
-                float(lag_value),
-            )
             self._selected_echo_indices = _update_echo_indices_after_manual_drag(
                 self._lags,
                 self._selected_echo_indices,
-                marker_slot,
+                0,
                 float(lag_value),
             )
             self._base_echo_indices = [int(idx) for idx in self._selected_echo_indices]
@@ -1861,15 +1833,10 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             return
 
         if self._selected_echo_indices:
-            marker_slot = _nearest_echo_marker_slot(
-                self._lags,
-                self._selected_echo_indices,
-                float(lag_value),
-            )
             self._selected_echo_indices = _update_echo_indices_after_manual_drag(
                 self._lags,
                 self._selected_echo_indices,
-                marker_slot,
+                0,
                 float(lag_value),
             )
             self._update_stats_label()
