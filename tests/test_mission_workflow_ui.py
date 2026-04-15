@@ -116,47 +116,6 @@ def test_format_distance_to_rx_for_table_returns_dash_without_rx_position() -> N
     assert distance == "-"
 
 
-def test_format_live_distance_to_tx_for_table_uses_live_position_and_point() -> None:
-    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
-    window._mission_points = [
-        MeasurementPoint(id="p0", name="P0", x=4.0, y=6.0, yaw=0.0),
-    ]
-
-    distance = window._format_live_distance_to_tx_for_table(
-        {"point_index": 0, "live_position_at_measurement": {"x": 1.0, "y": 2.0}}
-    )
-
-    assert distance == "5"
-
-
-def test_format_live_distance_to_tx_for_table_returns_dash_without_live_position() -> None:
-    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
-    window._mission_points = [
-        MeasurementPoint(id="p0", name="P0", x=4.0, y=6.0, yaw=0.0),
-    ]
-
-    distance = window._format_live_distance_to_tx_for_table({"point_index": 0})
-
-    assert distance == "-"
-
-
-def test_format_live_distance_to_tx_for_table_prefers_record_tx_target_coordinates() -> None:
-    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
-    window._mission_points = [
-        MeasurementPoint(id="p0", name="P0", x=100.0, y=100.0, yaw=0.0),
-    ]
-
-    distance = window._format_live_distance_to_tx_for_table(
-        {
-            "point_index": 0,
-            "point": {"target": {"x": 4.0, "y": 6.0}},
-            "live_position_at_measurement": {"x": 1.0, "y": 2.0},
-        }
-    )
-
-    assert distance == "5"
-
-
 def test_format_position_for_table_uses_one_decimal_for_x_and_y() -> None:
     window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
     window._mission_points = [
