@@ -617,8 +617,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         headings = {
             "measurement_idx": "Messung",
             "idx": "Punktindex",
-            "live_position": "Live Pos.",
-            "live_distance_to_rx_m": "Live Abstand",
+            "live_position": "Position",
+            "live_distance_to_rx_m": "Abstand",
             "echo_1_m": f"{ECHO_HEADING_MARKERS[0]} E1",
             "echo_2_m": f"{ECHO_HEADING_MARKERS[1]} E2",
             "echo_3_m": f"{ECHO_HEADING_MARKERS[2]} E3",
