@@ -1803,7 +1803,12 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             unique_indices.append(normalized_idx)
         return unique_indices
 
-    def _render_plot(self) -> None:
+    def _render_plot(
+        self,
+        *,
+        preserve_x_range: tuple[float, float] | None = None,
+        preserve_y_range: tuple[float, float] | None = None,
+    ) -> None:
         self._plot.clear()
         self._los_label_item = None
         self._echo_label_items = []
@@ -1835,9 +1840,12 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             self._plot.addItem(label_item)
             self._echo_label_items.append(label_item)
 
-        focus_range = self._focused_x_range()
-        if focus_range is not None:
-            self._plot.setXRange(*focus_range, padding=0.0)
+        if preserve_x_range is not None:
+            self._plot.setXRange(*preserve_x_range, padding=0.0)
+        else:
+            focus_range = self._focused_x_range()
+            if focus_range is not None:
+                self._plot.setXRange(*focus_range, padding=0.0)
 
         visible_x = self._plot.getViewBox().viewRange()[0]
         x_min, x_max = float(visible_x[0]), float(visible_x[1])
@@ -1846,13 +1854,16 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             visible_peak = float(np.max(self._magnitudes[visible_mask]))
         else:
             visible_peak = float(np.max(self._magnitudes)) if self._magnitudes.size else 0.0
-        current_y = self._plot.getViewBox().viewRange()[1]
-        y_range = _crosscorr_dynamic_y_range(
-            (float(current_y[0]), float(current_y[1])),
-            visible_peak,
-        )
-        if y_range is not None:
-            self._plot.setYRange(*y_range, padding=0.0)
+        if preserve_y_range is not None:
+            self._plot.setYRange(*preserve_y_range, padding=0.0)
+        else:
+            current_y = self._plot.getViewBox().viewRange()[1]
+            y_range = _crosscorr_dynamic_y_range(
+                (float(current_y[0]), float(current_y[1])),
+                visible_peak,
+            )
+            if y_range is not None:
+                self._plot.setYRange(*y_range, padding=0.0)
 
         view_box = self._plot.getViewBox()
         if self._selected_los_idx is not None:
@@ -2049,7 +2060,8 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
     def _remove_echo_marker_near_lag(self, target_lag: float) -> bool:
         if not self._selected_echo_indices:
             return False
-        visible_x = self._plot.getViewBox().viewRange()[0]
+        view_range = self._plot.getViewBox().viewRange()
+        visible_x = view_range[0]
         visible_width = max(0.0, float(visible_x[1]) - float(visible_x[0]))
         max_lag_distance = float(np.clip(visible_width * 0.02, 2.0, 25.0))
         marker_slot = _find_echo_marker_slot_near_lag(
@@ -2064,7 +2076,10 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         self._base_echo_indices = [int(idx) for idx in self._selected_echo_indices]
         if not self._selected_echo_indices:
             self._manual_lags["echo"] = None
-        self._render_plot()
+        self._render_plot(
+            preserve_x_range=(float(view_range[0][0]), float(view_range[0][1])),
+            preserve_y_range=(float(view_range[1][0]), float(view_range[1][1])),
+        )
         return True
 
 
