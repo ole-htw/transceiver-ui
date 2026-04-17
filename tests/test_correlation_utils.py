@@ -233,6 +233,18 @@ def test_find_los_echo_from_mag_keeps_echo_above_los_threshold() -> None:
     assert echo_idx == 110
 
 
+def test_find_los_echo_from_mag_ignores_echo_before_los_peak() -> None:
+    mag = np.zeros(220, dtype=float)
+    mag[90] = 0.45
+    mag[120] = 1.0
+    mag[150] = 0.4
+
+    los_idx, echo_idx = find_los_echo_from_mag(mag)
+
+    assert los_idx == 120
+    assert echo_idx == 150
+
+
 def test_from_mag_variants_match_cc_wrappers() -> None:
     n = 320
     mag = _sinc_lobe(n, 120, 1.0) + _sinc_lobe(n, 150, 0.72) + _sinc_lobe(n, 180, 0.66)
