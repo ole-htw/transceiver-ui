@@ -6928,6 +6928,8 @@ class TransceiverUI(ctk.CTk):
             self._proc = proc
         if proc.stdout is not None:
             for line in proc.stdout:
+                if self._should_suppress_rx_log_line(line):
+                    continue
                 self._out_queue.put(line)
         return_code = proc.wait()
         if mission_mode:
@@ -6946,6 +6948,16 @@ class TransceiverUI(ctk.CTk):
         if return_code != 0:
             raise RuntimeError(f"rx_to_file exited with return code {return_code}")
         return return_code
+
+    @staticmethod
+    def _should_suppress_rx_log_line(line: str) -> bool:
+        normalized = line.strip()
+        if not normalized:
+            return False
+        return (
+            "[rmw_cyclonedds_cpp]: Failed to parse type hash for topic" in normalized
+            and "from USER_DATA '(null)'." in normalized
+        )
 
     def _extract_output_file_from_args(self, arg_list: list[str]) -> str | None:
         try:
