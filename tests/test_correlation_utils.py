@@ -211,6 +211,25 @@ def test_find_los_echo_uses_classified_peak_group() -> None:
     assert echo_idx == (expected_echoes[0] if expected_echoes else None)
 
 
+
+
+def test_classify_peak_group_from_mag_with_los_threshold_filters_weak_echoes() -> None:
+    mag = np.zeros(180, dtype=float)
+    mag[90] = 1.0
+    mag[110] = 0.25
+
+    highest_idx, los_idx, echo_indices, group_indices = classify_peak_group_from_mag(
+        mag,
+        peaks_before=0,
+        peaks_after=1,
+        min_rel_height=0.3,
+    )
+
+    assert highest_idx == 90
+    assert los_idx == 90
+    assert echo_indices == []
+    assert group_indices == [90]
+
 def test_find_los_echo_from_mag_uses_stricter_los_threshold() -> None:
     mag = np.zeros(180, dtype=float)
     mag[90] = 1.0
