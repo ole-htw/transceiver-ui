@@ -603,9 +603,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         columns = (
             "measurement_idx",
             "idx",
-            "position",
             "live_position",
-            "distance_to_rx_m",
             "live_distance_to_rx_m",
             "echo_1_m",
             "echo_2_m",
@@ -619,9 +617,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         headings = {
             "measurement_idx": "Messung",
             "idx": "Punktindex",
-            "position": "Pos.",
             "live_position": "Live Pos.",
-            "distance_to_rx_m": "Abstand",
             "live_distance_to_rx_m": "Live Abstand",
             "echo_1_m": f"{ECHO_HEADING_MARKERS[0]} E1",
             "echo_2_m": f"{ECHO_HEADING_MARKERS[1]} E2",
@@ -634,9 +630,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self.results_table.heading(key, text=title)
             self.results_table.column(key, stretch=True, width=110)
         self.results_table.column("measurement_idx", width=80)
-        self.results_table.column("position", width=100)
         self.results_table.column("live_position", width=100)
-        self.results_table.column("distance_to_rx_m", width=90)
         self.results_table.column("live_distance_to_rx_m", width=90)
         self.results_table.column("echo_1_m", width=80)
         self.results_table.column("echo_2_m", width=80)
@@ -2725,9 +2719,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             error_text = f"{error_text}: {review_detail}" if error_text else review_detail
         combined_status = self._compose_table_outcome(payload, error_text)
         echo_distances = self._format_echo_distances_for_table(result.get("echo_delays"))
-        position_text = self._format_position_for_table(payload)
         live_position_text = self._format_live_position_for_table(payload)
-        distance_to_rx = self._format_distance_to_rx_for_table(payload)
         live_distance_to_rx = self._format_live_distance_to_rx_for_table(payload)
         self.results_table.insert(
             "",
@@ -2735,9 +2727,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             values=(
                 self._format_one_based_index(payload.get("global_index")),
                 self._format_one_based_index(payload.get("point_index")),
-                position_text,
                 live_position_text,
-                distance_to_rx,
                 live_distance_to_rx,
                 *echo_distances,
                 combined_status,
