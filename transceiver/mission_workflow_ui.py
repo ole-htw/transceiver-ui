@@ -49,6 +49,8 @@ ECHO_HEADING_MARKERS = ("🟥", "🟦", "🟩", "🟨", "🟪")
 LIDAR_OVERLAY_MAX_DRAWN_BEAMS = 450
 LIDAR_OVERLAY_CELL_SIZE_PX = 3.0
 LIDAR_OVERLAY_MAX_BEAMS_PER_CELL = 1
+MEASUREMENT_START_LIVE_POSITION_WAIT_TIMEOUT_S = 1.6
+MEASUREMENT_START_LIVE_POSITION_WAIT_INTERVAL_S = 0.1
 
 
 def _load_json_dict(path: Path) -> dict[str, Any]:
@@ -430,6 +432,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._live_position: dict[str, Any] | None = None
         self._live_position_received_at: float | None = None
         self._live_position_at_measurement_start: dict[str, Any] | None = None
+        self._measurement_start_live_position_event = threading.Event()
         self._selected_point_index: int | None = None
         self._selected_result_index: int | None = None
         self._lidar_reference_scan_cache: dict[str, dict[str, Any] | None] = {}
@@ -2606,7 +2609,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _on_stage_update(self, stage: str, status: str) -> None:
         if stage == "measurement" and status == "running":
-            self._live_position_at_measurement_start = self._copy_live_position()
+            self._live_position_at_measurement_start = self._wait_for_valid_live_position_for_measurement_start()
         self.after(0, lambda: self._update_live_label(stage=stage, status=status))
 
     def _on_executor_runtime_event(self, payload: dict[str, Any]) -> None:
@@ -2667,6 +2670,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._live_position = position if isinstance(position, dict) else None
         if self._live_position is not None:
             self._live_position_received_at = now
+            if self._copy_valid_live_position() is not None:
+                self._measurement_start_live_position_event.set()
 
     def _update_live_label(self, *, stage: str | None = None, status: str | None = None) -> None:
         total = len(self._mission.points) * (self._mission.repeat or 1) if self._mission else 0
@@ -2865,6 +2870,40 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if not isinstance(self._live_position, dict):
             return None
         return dict(self._live_position)
+
+    def _copy_valid_live_position(self) -> dict[str, Any] | None:
+        position = self._copy_live_position()
+        if not isinstance(position, dict):
+            return None
+        x_value = position.get("x")
+        y_value = position.get("y")
+        if not isinstance(x_value, (int, float)) or not isinstance(y_value, (int, float)):
+            return None
+        x = float(x_value)
+        y = float(y_value)
+        if not math.isfinite(x) or not math.isfinite(y):
+            return None
+        return position
+
+    def _wait_for_valid_live_position_for_measurement_start(self) -> dict[str, Any] | None:
+        valid_position = self._copy_valid_live_position()
+        if valid_position is not None:
+            return valid_position
+        self._measurement_start_live_position_event.clear()
+        deadline = time.time() + MEASUREMENT_START_LIVE_POSITION_WAIT_TIMEOUT_S
+        while time.time() < deadline:
+            wait_timeout = min(
+                MEASUREMENT_START_LIVE_POSITION_WAIT_INTERVAL_S,
+                max(0.0, deadline - time.time()),
+            )
+            if wait_timeout <= 0.0:
+                break
+            self._measurement_start_live_position_event.wait(timeout=wait_timeout)
+            valid_position = self._copy_valid_live_position()
+            if valid_position is not None:
+                return valid_position
+            self._measurement_start_live_position_event.clear()
+        return self._copy_valid_live_position()
 
     def _on_run_finished(self, state: str) -> None:
         self._stop_live_label_ticker()
