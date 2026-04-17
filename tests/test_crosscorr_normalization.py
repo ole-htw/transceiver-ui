@@ -53,6 +53,7 @@ sys.modules.setdefault("uhd", types.ModuleType("uhd"))
 from transceiver.__main__ import (
     TransceiverUI,
     _build_crosscorr_ctx,
+    _find_echo_marker_slot_near_lag,
     _format_echo_delay_display,
     _format_rx_stats_rows,
     _update_echo_indices_after_manual_drag,
@@ -203,6 +204,28 @@ def test_update_echo_indices_after_manual_drag_keeps_overlapping_slots() -> None
     assert updated == [1, 3, 3]
 
 
+def test_find_echo_marker_slot_near_lag_returns_nearest_slot_within_threshold() -> None:
+    lags = np.array([-20, -10, 0, 10, 20], dtype=float)
+    marker_slot = _find_echo_marker_slot_near_lag(
+        lags,
+        echo_indices=[1, 3, 4],
+        target_lag=9.2,
+        max_lag_distance=1.5,
+    )
+    assert marker_slot == 1
+
+
+def test_find_echo_marker_slot_near_lag_returns_none_outside_threshold() -> None:
+    lags = np.array([-20, -10, 0, 10, 20], dtype=float)
+    marker_slot = _find_echo_marker_slot_near_lag(
+        lags,
+        echo_indices=[1, 3, 4],
+        target_lag=0.0,
+        max_lag_distance=0.5,
+    )
+    assert marker_slot is None
+
+
 class _DummyEntryWidget:
     def __init__(self, text: str) -> None:
         self._text = text
@@ -335,3 +358,43 @@ def test_review_echo_delays_hide_duplicates_for_overlapping_markers() -> None:
     delays = MissionMeasurementReviewDialog.echo_delays.fget(dialog)
 
     assert delays == [20, 30]
+
+
+def test_review_remove_echo_marker_near_lag_removes_matching_marker() -> None:
+    from transceiver.__main__ import MissionMeasurementReviewDialog
+
+    dialog = types.SimpleNamespace()
+    dialog._lags = np.array([0.0, 10.0, 20.0, 30.0], dtype=float)
+    dialog._selected_echo_indices = [1, 2, 3]
+    dialog._base_echo_indices = [1, 2, 3]
+    dialog._manual_lags = {"los": None, "echo": 20}
+    dialog._render_plot = lambda: None
+    dialog._plot = types.SimpleNamespace(
+        getViewBox=lambda: types.SimpleNamespace(viewRange=lambda: ((0.0, 100.0), (0.0, 1.0)))
+    )
+
+    removed = MissionMeasurementReviewDialog._remove_echo_marker_near_lag(dialog, 20.5)
+
+    assert removed is True
+    assert dialog._selected_echo_indices == [1, 3]
+    assert dialog._base_echo_indices == [1, 3]
+
+
+def test_review_remove_echo_marker_near_lag_resets_manual_echo_when_last_removed() -> None:
+    from transceiver.__main__ import MissionMeasurementReviewDialog
+
+    dialog = types.SimpleNamespace()
+    dialog._lags = np.array([0.0, 10.0, 20.0], dtype=float)
+    dialog._selected_echo_indices = [2]
+    dialog._base_echo_indices = [2]
+    dialog._manual_lags = {"los": None, "echo": 20}
+    dialog._render_plot = lambda: None
+    dialog._plot = types.SimpleNamespace(
+        getViewBox=lambda: types.SimpleNamespace(viewRange=lambda: ((0.0, 100.0), (0.0, 1.0)))
+    )
+
+    removed = MissionMeasurementReviewDialog._remove_echo_marker_near_lag(dialog, 20.0)
+
+    assert removed is True
+    assert dialog._selected_echo_indices == []
+    assert dialog._manual_lags["echo"] is None
