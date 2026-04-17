@@ -38,18 +38,37 @@ def _put_latest_result(result_queue: multiprocessing.Queue, payload: dict[str, o
 
 
 def _load_tx_samples(path: object) -> np.ndarray:
-    if not path:
-        return np.array([], dtype=np.complex64)
-    try:
-        raw = np.fromfile(str(path), dtype=np.int16)
-    except Exception:
-        return np.array([], dtype=np.complex64)
-    if raw.size % 2:
-        raw = raw[:-1]
-    if raw.size == 0:
-        return np.array([], dtype=np.complex64)
-    raw = raw.reshape(-1, 2).astype(np.float32)
-    return raw[:, 0] + 1j * raw[:, 1]
+    candidates: list[str] = []
+    if path:
+        primary = str(path).strip()
+        if primary:
+            candidates.append(primary)
+            suffix = "_zeros"
+            try:
+                stem, ext = primary.rsplit(".", 1)
+                if stem.endswith(suffix):
+                    candidates.append(f"{stem[:-len(suffix)]}.{ext}")
+            except ValueError:
+                if primary.endswith(suffix):
+                    candidates.append(primary[:-len(suffix)])
+
+    # Fallback auf persistiertes Standardsignal aus der letzten Session.
+    if "tx_signal.bin" not in candidates:
+        candidates.append("tx_signal.bin")
+
+    for candidate in candidates:
+        try:
+            raw = np.fromfile(candidate, dtype=np.int16)
+        except Exception:
+            continue
+        if raw.size % 2:
+            raw = raw[:-1]
+        if raw.size == 0:
+            continue
+        raw = raw.reshape(-1, 2).astype(np.float32)
+        return raw[:, 0] + 1j * raw[:, 1]
+
+    return np.array([], dtype=np.complex64)
 
 
 def _select_channel_and_trim(
