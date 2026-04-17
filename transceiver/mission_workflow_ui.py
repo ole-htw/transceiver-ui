@@ -1312,6 +1312,26 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             return None
         return (x, y)
 
+    def _selected_record_overlay_point(
+        self,
+        record: dict[str, Any],
+        *,
+        measurement_position: tuple[float, float],
+    ) -> MeasurementPoint | None:
+        x, y = measurement_position
+        live_position = record.get("live_position_at_measurement")
+        live_yaw = live_position.get("yaw") if isinstance(live_position, dict) else None
+        yaw: float | None = None
+        if isinstance(live_yaw, (int, float)) and math.isfinite(float(live_yaw)):
+            yaw = float(live_yaw)
+        else:
+            point = self._selected_record_point(record)
+            if point is not None and isinstance(point.yaw, (int, float)) and math.isfinite(float(point.yaw)):
+                yaw = float(point.yaw)
+        if yaw is None:
+            return None
+        return MeasurementPoint(id=None, name=None, x=x, y=y, yaw=yaw)
+
     @staticmethod
     def _extract_echo_distances(value: Any, *, limit: int) -> list[float]:
         if not isinstance(value, list) or limit <= 0:
@@ -1404,8 +1424,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         record = self._selected_record_payload()
         if record is None:
             return
-        point = self._selected_record_point(record)
-        if point is None:
+        measurement_position = self._selected_record_measurement_position(record)
+        if measurement_position is None:
             return
         measurement = record.get("measurement")
         if not isinstance(measurement, dict):
@@ -1422,7 +1442,10 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         scan = self._load_lidar_scan_for_overlay(lidar_file)
         if scan is None:
             return
-        self._draw_lidar_scan_overlay_for_point(point=point, scan=scan)
+        overlay_point = self._selected_record_overlay_point(record, measurement_position=measurement_position)
+        if overlay_point is None:
+            return
+        self._draw_lidar_scan_overlay_for_point(point=overlay_point, scan=scan)
 
     def _selected_record_payload(self) -> dict[str, Any] | None:
         selected_idx = self._selected_result_index

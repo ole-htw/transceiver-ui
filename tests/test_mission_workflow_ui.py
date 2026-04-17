@@ -171,6 +171,45 @@ def test_draw_selected_echo_overlay_uses_live_measurement_position() -> None:
     assert calls[0]["measurement_position"] == (7.0, -2.0)
 
 
+def test_selected_record_overlay_point_prefers_live_yaw() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._mission_points = [MeasurementPoint(id="p0", name="P0", x=50.0, y=50.0, yaw=0.5)]
+
+    overlay_point = window._selected_record_overlay_point(
+        {"point_index": 0, "live_position_at_measurement": {"x": 7.0, "y": -2.0, "yaw": 1.25}},
+        measurement_position=(7.0, -2.0),
+    )
+
+    assert overlay_point is not None
+    assert overlay_point.x == 7.0
+    assert overlay_point.y == -2.0
+    assert overlay_point.yaw == 1.25
+
+
+def test_draw_selected_lidar_reference_overlay_uses_live_measurement_position() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._selected_result_index = 0
+    window._records = [
+        {
+            "point_index": 0,
+            "live_position_at_measurement": {"x": 7.0, "y": -2.0, "yaw": 0.25},
+            "measurement": {"result": {"lidar_reference": {"output_file": "scan.yaml"}}},
+        }
+    ]
+    window._mission_points = [MeasurementPoint(id="p0", name="P0", x=50.0, y=50.0, yaw=0.0)]
+    window._load_lidar_scan_for_overlay = lambda _path: {"angle_min": 0.0, "angle_increment": 0.1, "ranges": [1.0]}
+    calls: list[dict[str, object]] = []
+    window._draw_lidar_scan_overlay_for_point = lambda **kwargs: calls.append(kwargs)
+
+    window._draw_selected_lidar_reference_overlay()
+
+    assert len(calls) == 1
+    point = calls[0]["point"]
+    assert isinstance(point, MeasurementPoint)
+    assert point.x == 7.0
+    assert point.y == -2.0
+
+
 def test_format_position_for_table_uses_one_decimal_for_x_and_y() -> None:
     window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
     window._mission_points = [
