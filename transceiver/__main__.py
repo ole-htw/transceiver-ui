@@ -7021,6 +7021,91 @@ class TransceiverUI(ctk.CTk):
         except Exception:
             return True
 
+    def get_live_echo_distances_for_mission_preview(self, *, limit: int = 5) -> list[float]:
+        if limit <= 0:
+            return []
+        payload = getattr(self, "_last_continuous_payload", None)
+        if not isinstance(payload, dict):
+            return []
+        cont_thread = getattr(self, "_cont_thread", None)
+        if cont_thread is None or not cont_thread.is_alive():
+            return []
+
+        raw_data = payload.get("plot_data")
+        data = np.asarray(raw_data) if raw_data is not None else np.array([], dtype=np.complex64)
+        if data.size == 0:
+            return []
+
+        ref_data = np.asarray(payload.get("plot_ref_data", np.array([], dtype=np.complex64)))
+        if ref_data.size == 0:
+            ref_candidate = None
+            get_reference = getattr(self, "_get_crosscorr_reference", None)
+            if callable(get_reference):
+                try:
+                    reference_payload = get_reference()
+                except Exception:
+                    reference_payload = None
+                if isinstance(reference_payload, tuple) and reference_payload:
+                    ref_candidate = reference_payload[0]
+                else:
+                    ref_candidate = reference_payload
+            if ref_candidate is None:
+                return []
+            ref_data = np.asarray(ref_candidate)
+        if ref_data.size == 0:
+            return []
+
+        try:
+            reduced_data, reduced_ref, lag_step = _reduce_pair(np.asarray(data), np.asarray(ref_data))
+            ctx = _build_crosscorr_ctx(
+                reduced_data,
+                reduced_ref,
+                normalize=bool(getattr(self, "rx_xcorr_normalized_enable", None).get())
+                if hasattr(getattr(self, "rx_xcorr_normalized_enable", None), "get")
+                else False,
+                lag_step=lag_step,
+            )
+        except Exception:
+            return []
+
+        lags = ctx.get("lags2")
+        if not isinstance(lags, np.ndarray):
+            lags = ctx.get("lags")
+        if not isinstance(lags, np.ndarray) or lags.size == 0:
+            return []
+        los_idx = ctx.get("los_idx")
+        echo_indices = ctx.get("echo_indices")
+        if los_idx is None or not isinstance(echo_indices, list):
+            return []
+
+        try:
+            los_lag = float(lags[int(los_idx)])
+        except Exception:
+            return []
+
+        interpolation_factor = 1.0
+        if bool(getattr(self, "_latest_rx_data_interpolated", False)):
+            try:
+                interpolation_factor = float(self._rx_effective_interpolation_factor())
+            except Exception:
+                interpolation_factor = 1.0
+            if not np.isfinite(interpolation_factor) or interpolation_factor <= 0.0:
+                interpolation_factor = 1.0
+
+        distances_m: list[float] = []
+        for idx in echo_indices:
+            if len(distances_m) >= limit:
+                break
+            try:
+                echo_lag = float(lags[int(idx)])
+            except Exception:
+                continue
+            delay_samples = abs(echo_lag - los_lag) / interpolation_factor
+            if not np.isfinite(delay_samples) or delay_samples <= 0.0:
+                continue
+            distances_m.append(float(delay_samples * 1.5))
+        return distances_m
+
     def _build_receive_arg_list(self, *, output_file: str | None = None) -> tuple[list[str], int, float]:
         out_file = output_file if output_file is not None else ""
         rx_args = self.rx_args.get()
