@@ -398,3 +398,45 @@ def test_review_remove_echo_marker_near_lag_resets_manual_echo_when_last_removed
     assert removed is True
     assert dialog._selected_echo_indices == []
     assert dialog._manual_lags["echo"] is None
+
+
+def test_review_add_echo_marker_near_lag_adds_marker_at_nearest_lag() -> None:
+    from transceiver.__main__ import MissionMeasurementReviewDialog
+
+    dialog = types.SimpleNamespace()
+    dialog._lags = np.array([0.0, 10.0, 20.0, 30.0], dtype=float)
+    dialog._selected_echo_indices = [1, 3]
+    dialog._base_echo_indices = [1, 3]
+    dialog._manual_lags = {"los": None, "echo": None}
+    dialog._render_plot = lambda: None
+    dialog._plot = types.SimpleNamespace(
+        getViewBox=lambda: types.SimpleNamespace(viewRange=lambda: ((0.0, 100.0), (0.0, 1.0)))
+    )
+
+    added = MissionMeasurementReviewDialog._add_echo_marker_near_lag(dialog, 21.0)
+
+    assert added is True
+    assert dialog._selected_echo_indices == [1, 3, 2]
+    assert dialog._base_echo_indices == [1, 3, 2]
+    assert dialog._manual_lags["echo"] == 20
+
+
+def test_review_add_echo_marker_near_lag_ignores_existing_marker() -> None:
+    from transceiver.__main__ import MissionMeasurementReviewDialog
+
+    dialog = types.SimpleNamespace()
+    dialog._lags = np.array([0.0, 10.0, 20.0], dtype=float)
+    dialog._selected_echo_indices = [1]
+    dialog._base_echo_indices = [1]
+    dialog._manual_lags = {"los": None, "echo": None}
+    dialog._render_plot = lambda: None
+    dialog._plot = types.SimpleNamespace(
+        getViewBox=lambda: types.SimpleNamespace(viewRange=lambda: ((0.0, 100.0), (0.0, 1.0)))
+    )
+
+    added = MissionMeasurementReviewDialog._add_echo_marker_near_lag(dialog, 11.0)
+
+    assert added is False
+    assert dialog._selected_echo_indices == [1]
+    assert dialog._base_echo_indices == [1]
+    assert dialog._manual_lags["echo"] is None
