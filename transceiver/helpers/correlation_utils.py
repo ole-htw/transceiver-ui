@@ -70,7 +70,7 @@ def classify_peak_group(
     *,
     peaks_before: int = 3,
     peaks_after: int = 3,
-    min_rel_height: float = 0.3,
+    min_rel_height: float = 0.1,
     repetition_period_samples: int | None = None,
 ) -> tuple[int | None, int | None, list[int], list[int]]:
     """Return (highest_idx, los_idx, echo_indices, group_indices)."""
@@ -88,7 +88,7 @@ def classify_peak_group_from_mag(
     *,
     peaks_before: int = 3,
     peaks_after: int = 3,
-    min_rel_height: float = 0.3,
+    min_rel_height: float = 0.1,
     repetition_period_samples: int | None = None,
 ) -> tuple[int | None, int | None, list[int], list[int]]:
     """Return (highest_idx, los_idx, echo_indices, group_indices)."""
@@ -123,7 +123,7 @@ def find_local_maxima_around_peak(
     *,
     peaks_before: int = 3,
     peaks_after: int = 3,
-    min_rel_height: float = 0.3,
+    min_rel_height: float = 0.1,
     repetition_period_samples: int | None = None,
 ) -> list[int]:
     """Return local maxima indices around a center peak (before + after)."""
@@ -143,7 +143,7 @@ def find_local_maxima_around_peak_from_mag(
     *,
     peaks_before: int = 3,
     peaks_after: int = 3,
-    min_rel_height: float = 0.3,
+    min_rel_height: float = 0.1,
     repetition_period_samples: int | None = None,
 ) -> list[int]:
     """Return local maxima indices around a center peak (before + after)."""
@@ -207,8 +207,10 @@ def find_local_maxima_around_peak_from_mag(
     before = [i for i in local_maxima if i < center_idx]
     after = [i for i in local_maxima if i > center_idx]
 
-    before_sel = before[-max(0, peaks_before) :]
-    after_sel = after[: max(0, peaks_after)]
+    before_count = max(0, int(peaks_before))
+    after_count = max(0, int(peaks_after))
+    before_sel = before[-before_count:] if before_count > 0 else []
+    after_sel = after[:after_count] if after_count > 0 else []
     return before_sel + [center_idx] + after_sel
 
 
