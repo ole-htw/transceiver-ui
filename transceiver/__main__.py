@@ -141,6 +141,7 @@ SHM_SIZE_THRESHOLD_BYTES = 25 * 1024 * 1024  # 25 MB
 XCORR_EXTRA_PEAKS_BEFORE = 4
 XCORR_EXTRA_PEAKS_AFTER = 4
 XCORR_EXTRA_PEAK_MIN_REL_HEIGHT = 0.1
+XCORR_LOS_PEAK_MIN_REL_HEIGHT = 0.3
 XCORR_EXTRA_PEAK_COLORS = (
     "#FFB300",
     "#8E24AA",
@@ -169,16 +170,27 @@ def _classify_visible_xcorr_peaks(
     peaks_before: int = XCORR_EXTRA_PEAKS_BEFORE,
     peaks_after: int = XCORR_EXTRA_PEAKS_AFTER,
     min_rel_height: float = XCORR_EXTRA_PEAK_MIN_REL_HEIGHT,
+    los_min_rel_height: float = XCORR_LOS_PEAK_MIN_REL_HEIGHT,
 ) -> tuple[int | None, int | None, list[int]]:
     """Return (highest_idx, los_idx, echo_indices) from visible local maxima."""
-    highest_idx, los_idx, echo_indices, _group_indices = _classify_peak_group_from_mag(
+    highest_idx, visible_los_idx, visible_echo_indices, _visible_group_indices = _classify_peak_group_from_mag(
         mag,
         peaks_before=peaks_before,
         peaks_after=peaks_after,
         min_rel_height=min_rel_height,
         repetition_period_samples=repetition_period_samples,
     )
-    return highest_idx, los_idx, echo_indices
+    _los_highest_idx, los_idx, los_echo_indices, _los_group_indices = _classify_peak_group_from_mag(
+        mag,
+        peaks_before=peaks_before,
+        peaks_after=peaks_after,
+        min_rel_height=los_min_rel_height,
+        repetition_period_samples=repetition_period_samples,
+    )
+    if los_idx is None:
+        los_idx = visible_los_idx
+        los_echo_indices = visible_echo_indices
+    return highest_idx, los_idx, los_echo_indices
 
 
 def _current_peak_group_indices(
