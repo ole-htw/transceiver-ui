@@ -2041,7 +2041,9 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             is_double_click = bool(getattr(ev, "double", lambda: False)())
             if is_double_click and not (modifiers & shift_modifier or modifiers & alt_modifier):
                 pos = self._plot.getViewBox().mapSceneToView(ev.scenePos())
-                self._remove_echo_marker_near_lag(float(pos.x()))
+                target_lag = float(pos.x())
+                if not self._remove_echo_marker_near_lag(target_lag):
+                    self._add_echo_marker_near_lag(target_lag)
                 ev.accept()
                 return
             if not (modifiers & shift_modifier or modifiers & alt_modifier):
@@ -2081,6 +2083,23 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             preserve_y_range=(float(view_range[1][0]), float(view_range[1][1])),
         )
         return True
+
+    def _add_echo_marker_near_lag(self, target_lag: float) -> bool:
+        if self._lags.size == 0:
+            return False
+        view_range = self._plot.getViewBox().viewRange()
+        nearest_idx = int(np.abs(self._lags - float(target_lag)).argmin())
+        if nearest_idx in self._selected_echo_indices:
+            return False
+        self._selected_echo_indices.append(nearest_idx)
+        self._base_echo_indices = [int(idx) for idx in self._selected_echo_indices]
+        self._manual_lags["echo"] = int(round(float(self._lags[nearest_idx])))
+        self._render_plot(
+            preserve_x_range=(float(view_range[0][0]), float(view_range[0][1])),
+            preserve_y_range=(float(view_range[1][0]), float(view_range[1][1])),
+        )
+        return True
+
 
 
 def _build_crosscorr_ctx(
