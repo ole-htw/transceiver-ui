@@ -3,7 +3,7 @@ import threading
 
 import numpy as np
 
-from transceiver.helpers.continuous_processing import continuous_processing_worker
+from transceiver.helpers.continuous_processing import _load_tx_samples, continuous_processing_worker
 
 
 def test_continuous_worker_is_importable_from_non_main_module():
@@ -159,3 +159,19 @@ def test_continuous_worker_does_not_inject_default_interpolation_factor_when_mis
     worker.join(timeout=5)
 
     assert result["interpolation_factor"] is None
+
+
+def test_load_tx_samples_falls_back_to_persisted_session_signal(monkeypatch):
+    persisted = np.array([1, 2, 3, 4], dtype=np.int16)
+
+    def _fake_fromfile(path, dtype):
+        if str(path) == "tx_signal.bin":
+            return persisted
+        raise OSError("missing file")
+
+    monkeypatch.setattr(np, "fromfile", _fake_fromfile)
+
+    out = _load_tx_samples("signals/tx/new_not_yet_created.bin")
+
+    assert out.size == 2
+    assert np.allclose(out, np.array([1 + 2j, 3 + 4j], dtype=np.complex64))
