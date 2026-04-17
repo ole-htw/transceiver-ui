@@ -1660,6 +1660,36 @@ def _update_echo_indices_after_manual_drag(
     return updated
 
 
+def _find_echo_marker_slot_near_lag(
+    lags: np.ndarray,
+    echo_indices: list[int],
+    target_lag: float,
+    *,
+    max_lag_distance: float,
+) -> int | None:
+    """Return nearest echo marker slot for ``target_lag`` when within threshold."""
+    if not echo_indices:
+        return None
+    try:
+        threshold = float(max_lag_distance)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(threshold) or threshold < 0.0:
+        return None
+
+    nearest_slot: int | None = None
+    nearest_distance: float | None = None
+    target_lag_value = float(target_lag)
+    for marker_slot, peak_idx in enumerate(echo_indices):
+        lag_distance = abs(float(lags[int(peak_idx)]) - target_lag_value)
+        if nearest_distance is None or lag_distance < nearest_distance:
+            nearest_slot = int(marker_slot)
+            nearest_distance = float(lag_distance)
+    if nearest_slot is None or nearest_distance is None or nearest_distance > threshold:
+        return None
+    return nearest_slot
+
+
 class MissionMeasurementReviewDialog(QtWidgets.QDialog):
     """Blocking review dialog for mission cross-correlation peaks."""
 
@@ -1997,6 +2027,12 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             if ev.button() != left_button:
                 return
             modifiers = ev.modifiers()
+            is_double_click = bool(getattr(ev, "double", lambda: False)())
+            if is_double_click and not (modifiers & shift_modifier or modifiers & alt_modifier):
+                pos = self._plot.getViewBox().mapSceneToView(ev.scenePos())
+                self._remove_echo_marker_near_lag(float(pos.x()))
+                ev.accept()
+                return
             if not (modifiers & shift_modifier or modifiers & alt_modifier):
                 return
             pos = self._plot.getViewBox().mapSceneToView(ev.scenePos())
@@ -2009,6 +2045,27 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
 
         self._plot._review_click_handler = _handle_click
         scene.sigMouseClicked.connect(_handle_click)
+
+    def _remove_echo_marker_near_lag(self, target_lag: float) -> bool:
+        if not self._selected_echo_indices:
+            return False
+        visible_x = self._plot.getViewBox().viewRange()[0]
+        visible_width = max(0.0, float(visible_x[1]) - float(visible_x[0]))
+        max_lag_distance = float(np.clip(visible_width * 0.02, 2.0, 25.0))
+        marker_slot = _find_echo_marker_slot_near_lag(
+            self._lags,
+            self._selected_echo_indices,
+            target_lag,
+            max_lag_distance=max_lag_distance,
+        )
+        if marker_slot is None:
+            return False
+        self._selected_echo_indices.pop(marker_slot)
+        self._base_echo_indices = [int(idx) for idx in self._selected_echo_indices]
+        if not self._selected_echo_indices:
+            self._manual_lags["echo"] = None
+        self._render_plot()
+        return True
 
 
 def _build_crosscorr_ctx(
