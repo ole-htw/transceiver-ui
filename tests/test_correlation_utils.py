@@ -211,6 +211,28 @@ def test_find_los_echo_uses_classified_peak_group() -> None:
     assert echo_idx == (expected_echoes[0] if expected_echoes else None)
 
 
+def test_find_los_echo_from_mag_uses_stricter_los_threshold() -> None:
+    mag = np.zeros(180, dtype=float)
+    mag[90] = 1.0
+    mag[110] = 0.25  # Below LOS-specific 0.3 threshold.
+
+    los_idx, echo_idx = find_los_echo_from_mag(mag)
+
+    assert los_idx == 90
+    assert echo_idx is None
+
+
+def test_find_los_echo_from_mag_keeps_echo_above_los_threshold() -> None:
+    mag = np.zeros(180, dtype=float)
+    mag[90] = 1.0
+    mag[110] = 0.35  # Above LOS-specific 0.3 threshold.
+
+    los_idx, echo_idx = find_los_echo_from_mag(mag)
+
+    assert los_idx == 90
+    assert echo_idx == 110
+
+
 def test_from_mag_variants_match_cc_wrappers() -> None:
     n = 320
     mag = _sinc_lobe(n, 120, 1.0) + _sinc_lobe(n, 150, 0.72) + _sinc_lobe(n, 180, 0.66)
