@@ -283,13 +283,6 @@ class _ManualPromptNavigator:
                 f"⚠️ Manuelle Navigation für Punktindex {current_index} wurde abgebrochen."
             )
             return "canceled"
-        if on_navigation_event is not None:
-            on_navigation_event(
-                {
-                    "type": "position_update",
-                    "position": {"x": point.x, "y": point.y, "z": point.z},
-                }
-            )
         self._on_status("navigation", "succeeded")
         return "succeeded"
 

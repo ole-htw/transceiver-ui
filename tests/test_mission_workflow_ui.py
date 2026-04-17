@@ -441,7 +441,7 @@ def test_manual_prompt_navigator_prompts_and_returns_succeeded(monkeypatch) -> N
     assert status_updates == [("navigation", "running"), ("navigation", "succeeded")]
     assert operator_messages == []
     assert prompts == ["Roboter zur Position 2 bringen: 1.234,5.678"]
-    assert nav_events == [{"type": "position_update", "position": {"x": 1.234, "y": 5.678, "z": 0.0}}]
+    assert nav_events == []
 
 
 def test_manual_prompt_navigator_returns_canceled_on_abort(monkeypatch) -> None:
