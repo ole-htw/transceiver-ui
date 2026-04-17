@@ -323,11 +323,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.test_run_enabled_var = tk.BooleanVar(value=False)
         self.manual_navigation_enabled_var = tk.BooleanVar(value=False)
         self.live_pose_stream_enabled_var = tk.BooleanVar(value=False)
+        self.live_preview_enabled_var = tk.BooleanVar(value=False)
         self._live_pose_stream_active = False
 
         self._build_ui()
         self._restore_workflow_state()
         self._sync_live_pose_stream_state()
+        self._sync_live_preview_state()
         self.after_idle(self._stabilize_initial_geometry)
         self.after_idle(self._open_maximized)
 
@@ -589,6 +591,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             variable=self.live_pose_stream_enabled_var,
             command=self._on_live_pose_stream_switch_changed,
         ).grid(row=4, column=0, columnspan=2, padx=(8, 3), pady=(0, 4), sticky="w")
+        ctk.CTkSwitch(
+            controls,
+            text="Live-Preview aktivieren",
+            variable=self.live_preview_enabled_var,
+            command=self._on_live_preview_switch_changed,
+        ).grid(row=4, column=2, columnspan=2, padx=(8, 3), pady=(0, 4), sticky="w")
 
         self.live_var = tk.StringVar(value="Punkt: - | Navigation: idle | Messung: idle | Verbleibend: - | Live-Status: Karte nicht geladen")
         ctk.CTkLabel(controls, textvariable=self.live_var, anchor="w", justify="left").grid(
@@ -1015,6 +1023,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._draw_rx_antenna_marker()
         self._draw_selected_echo_overlay()
         self._draw_selected_lidar_reference_overlay()
+        self._draw_live_echo_preview_overlay()
         self._draw_live_marker()
 
     def _draw_rx_antenna_marker(self) -> None:
@@ -1278,6 +1287,34 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if not isinstance(result, dict):
             return
         echo_distances = self._extract_echo_distances(result.get("echo_delays"), limit=len(ECHO_OVERLAY_COLORS))
+        if not echo_distances:
+            return
+        for echo_index, echo_distance in enumerate(echo_distances):
+            color = ECHO_OVERLAY_COLORS[echo_index % len(ECHO_OVERLAY_COLORS)]
+            self._draw_echo_ellipse_for_overlay(
+                rx_position=rx_position,
+                measurement_position=measurement_position,
+                echo_distance_m=echo_distance,
+                color=color,
+            )
+
+    def _draw_live_echo_preview_overlay(self) -> None:
+        if not bool(self.live_preview_enabled_var.get()):
+            return
+        rx_position = self._rx_antenna_global_position
+        if rx_position is None:
+            return
+        live_position = self._copy_valid_live_position()
+        if live_position is None:
+            return
+        x_value = live_position.get("x")
+        y_value = live_position.get("y")
+        if not isinstance(x_value, (int, float)) or not isinstance(y_value, (int, float)):
+            return
+        measurement_position = (float(x_value), float(y_value))
+        if not math.isfinite(measurement_position[0]) or not math.isfinite(measurement_position[1]):
+            return
+        echo_distances = self._get_live_preview_echo_distances(limit=len(ECHO_OVERLAY_COLORS))
         if not echo_distances:
             return
         for echo_index, echo_distance in enumerate(echo_distances):
@@ -1994,6 +2031,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "manual_navigation_enabled": bool(self.manual_navigation_enabled_var.get()),
             "reverse_point_order": bool(self.reverse_point_order_var.get()),
             "live_pose_stream_enabled": bool(self.live_pose_stream_enabled_var.get()),
+            "live_preview_enabled": bool(self.live_preview_enabled_var.get()),
         }
 
     def _serialize_rx_antenna_global_position(self) -> dict[str, float] | None:
@@ -2076,6 +2114,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self.manual_navigation_enabled_var.set(bool(payload.get("manual_navigation_enabled", False)))
             self.reverse_point_order_var.set(bool(payload.get("reverse_point_order", False)))
             self.live_pose_stream_enabled_var.set(bool(payload.get("live_pose_stream_enabled", False)))
+            self.live_preview_enabled_var.set(bool(payload.get("live_preview_enabled", False)))
             self._refresh_points_table()
             self._refresh_map_section()
             persisted_start_point = payload.get("start_point_index")
@@ -2306,6 +2345,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._live_label_ticker_job = None
         if not self._live_label_ticker_active:
             return
+        if bool(self.live_preview_enabled_var.get()):
+            self._draw_map_preview()
         self._update_live_label()
         self._schedule_live_label_ticker()
 
@@ -2528,6 +2569,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._persist_workflow_state()
         self._sync_live_pose_stream_state()
         self._update_live_label()
+        self._draw_map_preview()
+
+    def _on_live_preview_switch_changed(self) -> None:
+        self._persist_workflow_state()
+        self._sync_live_preview_state()
+        self._draw_map_preview()
 
     def _sync_live_pose_stream_state(self) -> None:
         should_run = bool(self.live_pose_stream_enabled_var.get())
@@ -2543,6 +2590,47 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if self._navigator is not None and self._live_pose_stream_active:
             self._navigator.stop_pose_stream()
         self._live_pose_stream_active = False
+
+    def _sync_live_preview_state(self) -> None:
+        if bool(self.live_preview_enabled_var.get()):
+            self._sync_live_pose_stream_state()
+            start_continuous = getattr(self.master, "start_continuous", None)
+            if not self._is_continuous_active() and callable(start_continuous):
+                try:
+                    start_continuous()
+                    self._append_validation("ℹ️ Live-Preview aktiv: Continuous-Modus wurde gestartet.")
+                except Exception as exc:
+                    self._append_validation(f"⚠️ Live-Preview: Continuous-Start fehlgeschlagen ({exc}).")
+            return
+        stop_continuous = getattr(self.master, "stop_continuous", None)
+        if self._is_continuous_active() and callable(stop_continuous):
+            try:
+                stop_continuous()
+                self._append_validation("ℹ️ Live-Preview deaktiviert: Continuous-Modus wurde gestoppt.")
+            except Exception as exc:
+                self._append_validation(f"⚠️ Live-Preview: Continuous-Stop fehlgeschlagen ({exc}).")
+
+    def _get_live_preview_echo_distances(self, *, limit: int) -> list[float]:
+        if limit <= 0:
+            return []
+        getter = getattr(self.master, "get_live_echo_distances_for_mission_preview", None)
+        if not callable(getter):
+            return []
+        try:
+            payload = getter(limit=limit)
+        except Exception:
+            return []
+        if not isinstance(payload, list):
+            return []
+        distances: list[float] = []
+        for value in payload[:limit]:
+            if not isinstance(value, (int, float)):
+                continue
+            numeric = float(value)
+            if not math.isfinite(numeric) or numeric <= 0.0:
+                continue
+            distances.append(numeric)
+        return distances
 
     def _is_continuous_active(self) -> bool:
         cont_thread = getattr(self.master, "_cont_thread", None)
@@ -2921,6 +3009,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
     def _on_run_finished(self, state: str) -> None:
         self._stop_live_label_ticker()
         self._sync_live_pose_stream_state()
+        self._sync_live_preview_state()
         self._set_run_buttons(running=False, paused=False)
         completion_substatus = None
         if self._run_log_dir is not None:
@@ -2944,6 +3033,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _on_window_close(self) -> None:
         self._stop_live_label_ticker()
+        self.live_preview_enabled_var.set(False)
+        self._sync_live_preview_state()
         if self._navigator is not None:
             self._navigator.stop_pose_stream()
             self._navigator = None
