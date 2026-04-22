@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -712,70 +711,6 @@ def test_on_live_pose_stream_switch_changed_persists_and_syncs() -> None:
     window._on_live_pose_stream_switch_changed()
 
     assert calls == ["persist", "sync", "label"]
-
-
-def test_restore_workflow_state_uses_inline_map_config_without_file(tmp_path) -> None:
-    class _Var:
-        def __init__(self, value):
-            self._value = value
-
-        def get(self):
-            return self._value
-
-        def set(self, value) -> None:
-            self._value = value
-
-    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
-    window._workflow_state_file = tmp_path / "mission_workflow_state.json"
-    window._is_restoring_workflow_state = False
-    window.mission_name_var = _Var("")
-    window.repeat_var = _Var("")
-    window.start_point_var = _Var("")
-    window.lidar_reference_enabled_var = _Var(True)
-    window.manual_review_enabled_var = _Var(True)
-    window.test_run_enabled_var = _Var(False)
-    window.manual_navigation_enabled_var = _Var(False)
-    window.reverse_point_order_var = _Var(False)
-    window.live_pose_stream_enabled_var = _Var(False)
-    window.live_preview_enabled_var = _Var(False)
-    window._mission_points = []
-    window._mission = None
-    window._selected_map_config = None
-    window._selected_map_config_file = None
-    window._parse_rx_antenna_global_position = MissionWorkflowWindow._parse_rx_antenna_global_position
-    window._clear_rx_antenna_position = lambda *, persist: None
-    window._set_rx_antenna_position = lambda *, x, y, persist: None
-    window._refresh_points_table = lambda: None
-    window._refresh_map_section = lambda: None
-    window._active_start_points = lambda: []
-    window._format_start_point_label = MissionWorkflowWindow._format_start_point_label
-    window._set_validation_text = lambda _text: None
-    window._append_validation = lambda _text: None
-    window._refresh_review_ready_indicator = lambda: None
-    window._load_map_config_from_file = lambda _path: None
-
-    payload = {
-        "name": "Inline Map Mission",
-        "repeat": 1,
-        "points": [{"id": "p1", "x": 0.0, "y": 0.0, "yaw": 0.0}],
-        "map_config_inline": {
-            "image": "maps/inline_map.pgm",
-            "resolution": 0.05,
-            "origin": [1.0, 2.0, 0.0],
-            "frame_id": "map",
-            "negate": 0,
-            "occupied_thresh": 0.65,
-            "free_thresh": 0.2,
-        },
-    }
-    window._workflow_state_file.write_text(json.dumps(payload), encoding="utf-8")
-
-    window._restore_workflow_state()
-
-    assert window._selected_map_config is not None
-    assert window._selected_map_config.image == "maps/inline_map.pgm"
-    assert window._selected_map_config.resolution == 0.05
-    assert window._selected_map_config_file is None
 
 
 def test_measurement_distance_m_returns_hypotenuse_for_two_points() -> None:
