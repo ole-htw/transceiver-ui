@@ -79,10 +79,10 @@ def filter_echo_indices_by_noise_prominence(
     repetition_period_samples: int | None = None,
     noise_sigma_factor: float = 2.0,
 ) -> list[int]:
-    """Keep echo peaks that stand out from local background noise.
+    """Keep echo peaks that stand out from global background noise.
 
     The filtering does not depend on LOS peak height. Instead it compares each
-    candidate echo against a robust local baseline (median) and local noise
+    candidate echo against a robust global baseline (median) and global noise
     spread (MAD-scaled sigma estimate).
     """
     if mag.size == 0 or not echo_indices:
@@ -99,24 +99,14 @@ def filter_echo_indices_by_noise_prominence(
     if not cleaned_indices:
         return []
 
-    if repetition_period_samples is not None and repetition_period_samples > 1:
-        half_window = max(8, int(round(float(repetition_period_samples) / 8.0)))
-    else:
-        half_window = max(8, mag.size // 40)
+    mag_global = np.asarray(mag, dtype=float)
+    global_baseline = float(np.median(mag_global))
+    global_mad = float(np.median(np.abs(mag_global - global_baseline)))
+    noise_sigma = 1.4826 * global_mad
 
-    min_points = 5
     filtered: list[int] = []
     for idx in cleaned_indices:
-        left = max(0, idx - half_window)
-        right = min(mag.size, idx + half_window + 1)
-        local = np.asarray(mag[left:right], dtype=float)
-        if local.size < min_points:
-            continue
-        local_baseline = float(np.median(local))
-        mad = float(np.median(np.abs(local - local_baseline)))
-        noise_sigma = 1.4826 * mad
-
-        prominence = float(mag[idx]) - local_baseline
+        prominence = float(mag[idx]) - global_baseline
         if prominence <= 0.0:
             continue
         if noise_sigma <= 1e-12:
