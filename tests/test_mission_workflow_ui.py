@@ -238,6 +238,24 @@ def test_build_manual_drive_command_reuses_remote_ssh_transport_builder() -> Non
     assert "{linear: {x: 0.150, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: -0.700}}" in remote_cmd
 
 
+def test_map_click_in_nav2point_mode_dispatches_navigation() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._nav2point_map_pick_mode_enabled = True
+    window._measurement_map_pick_mode_enabled = False
+    window._waypoint_map_pick_mode_enabled = False
+    window._rx_antenna_map_pick_mode_enabled = False
+    window._preview_pixel_to_world = lambda **_kwargs: (2.5, -1.75)
+    mode_switch_calls: list[bool] = []
+    navigation_targets: list[tuple[float, float]] = []
+    window._set_nav2point_map_pick_mode = lambda enabled: mode_switch_calls.append(enabled)
+    window._navigate_to_map_position = lambda *, x, y: navigation_targets.append((x, y))
+
+    window._on_map_canvas_click(SimpleNamespace(x=10, y=20))
+
+    assert mode_switch_calls == [False]
+    assert navigation_targets == [(2.5, -1.75)]
+
+
 def test_format_position_for_table_uses_one_decimal_for_x_and_y() -> None:
     window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
     window._mission_points = [
