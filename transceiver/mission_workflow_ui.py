@@ -2649,7 +2649,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
     def _build_manual_drive_command(self, *, linear_x: float, angular_z: float) -> list[str]:
         topic = self._resolve_cmd_vel_topic()
         payload = (
-            "{linear:{x:%s,y:0.0,z:0.0},angular:{x:0.0,y:0.0,z:%s}}"
+            "{linear: {x: %s, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: %s}}"
             % (format(float(linear_x), ".3f"), format(float(angular_z), ".3f"))
         )
         remote_command = " ".join(

@@ -235,7 +235,7 @@ def test_build_manual_drive_command_reuses_remote_ssh_transport_builder() -> Non
     remote_cmd = command[-1]
     assert "source /opt/ros/jazzy/setup.bash" in remote_cmd
     assert "ros2 topic pub --once /robot1/cmd_vel geometry_msgs/msg/Twist" in remote_cmd
-    assert "{linear:{x:0.150,y:0.0,z:0.0},angular:{x:0.0,y:0.0,z:-0.700}}" in remote_cmd
+    assert "{linear: {x: 0.150, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: -0.700}}" in remote_cmd
 
 
 def test_format_position_for_table_uses_one_decimal_for_x_and_y() -> None:
