@@ -467,6 +467,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._selected_result_index: int | None = None
         self._selected_result_indices: tuple[int, ...] = ()
         self._lidar_reference_scan_cache: dict[str, dict[str, Any] | None] = {}
+        self._ellipse_unit_circle_cache: dict[int, tuple[tuple[float, float], ...]] = {}
         self._last_live_diagnosis_key: str | None = None
         self._emit_live_diagnostics_to_validation = True
         self._rx_antenna_global_position: tuple[float, float] | None = None
@@ -1757,24 +1758,34 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         semi_focal_distance, semi_major_axis, semi_minor_axis = ellipse_axes
         if semi_minor_axis <= 0.0:
             return None
+        image_height = original.height()
+        scale_x, scale_y = self._map_preview_scale
+        offset_x, offset_y = self._map_preview_offset
+        preview_scale_factor = (abs(scale_x) + abs(scale_y)) / 2.0
+        if not math.isfinite(preview_scale_factor) or preview_scale_factor <= 0.0:
+            preview_scale_factor = 1.0
+        ellipse_size_px = (semi_major_axis / resolution) * preview_scale_factor
+        if ellipse_size_px < 40.0:
+            samples = 24
+        elif ellipse_size_px < 130.0:
+            samples = 32
+        else:
+            samples = 48
+        unit_circle_points = self._ellipse_unit_circle_points(samples=samples)
         center_x = (rx_x + point_x) / 2.0
         center_y = (rx_y + point_y) / 2.0
         angle = math.atan2(point_y - rx_y, point_x - rx_x)
         cos_angle = math.cos(angle)
         sin_angle = math.sin(angle)
-        samples = 64
         preview_points: list[float] = []
-        for idx in range(samples + 1):
-            t = (2.0 * math.pi * idx) / samples
-            local_x = semi_major_axis * math.cos(t)
-            local_y = semi_minor_axis * math.sin(t)
+        for unit_cos, unit_sin in unit_circle_points:
+            local_x = semi_major_axis * unit_cos
+            local_y = semi_minor_axis * unit_sin
             world_x = center_x + local_x * cos_angle - local_y * sin_angle
             world_y = center_y + local_x * sin_angle + local_y * cos_angle
-            map_pixel = self._world_to_map_pixel(x=world_x, y=world_y, image_height=original.height())
+            map_pixel = self._world_to_map_pixel(x=world_x, y=world_y, image_height=image_height)
             if map_pixel is None:
                 continue
-            scale_x, scale_y = self._map_preview_scale
-            offset_x, offset_y = self._map_preview_offset
             preview_points.extend(
                 (
                     map_pixel[0] * scale_x + offset_x,
@@ -1783,7 +1794,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         )
         if len(preview_points) < 6:
             return None
-        line_width = max(1, int(round((echo_distance_m / resolution) * self._map_preview_scale[0] * 0.03)))
+        line_width = max(1, int(round((echo_distance_m / resolution) * preview_scale_factor * 0.03)))
         return int(
             self.map_preview_canvas.create_line(
             *preview_points,
@@ -1793,6 +1804,22 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             dash=(4, 4),
         )
         )
+
+    def _ellipse_unit_circle_points(self, *, samples: int) -> tuple[tuple[float, float], ...]:
+        if samples < 3:
+            samples = 3
+        cached = self._ellipse_unit_circle_cache.get(samples)
+        if cached is not None:
+            return cached
+        points = tuple(
+            (
+                math.cos((2.0 * math.pi * idx) / samples),
+                math.sin((2.0 * math.pi * idx) / samples),
+            )
+            for idx in range(samples + 1)
+        )
+        self._ellipse_unit_circle_cache[samples] = points
+        return points
 
     def _draw_selected_lidar_reference_overlay(self) -> None:
         record = self._selected_record_payload()
