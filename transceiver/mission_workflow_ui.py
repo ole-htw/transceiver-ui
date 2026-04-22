@@ -2442,18 +2442,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             map_config_file = payload.get("map_config_file")
             map_config_inline = payload.get("map_config_inline")
             loaded_map_config: MapConfig | None = None
-            map_config_file_value: str | None = (
-                map_config_file.strip() if isinstance(map_config_file, str) and map_config_file.strip() else None
-            )
-            loaded_map_config_from_file = False
             if isinstance(map_config_file, str) and map_config_file.strip():
-                try:
-                    loaded_map_config = self._load_map_config_from_file(Path(map_config_file))
-                    loaded_map_config_from_file = loaded_map_config is not None
-                except Exception:
-                    self._append_validation(
-                        "⚠️ Persistierte Map-Config-Datei konnte nicht geladen werden; verwende Inline-Map-Config."
-                    )
+                loaded_map_config = self._load_map_config_from_file(Path(map_config_file))
             if loaded_map_config is None and map_config_inline is not None:
                 loaded_map_config = measurement_mission_from_dict(
                     {
@@ -2495,7 +2485,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._mission_points = list(mission.points)
             self._mission = mission
             self._selected_map_config = mission.map_config
-            self._selected_map_config_file = map_config_file_value if loaded_map_config_from_file else None
+            self._selected_map_config_file = map_config_file.strip() if isinstance(map_config_file, str) and map_config_file.strip() else None
             rx_position = self._parse_rx_antenna_global_position(payload.get("rx_antenna_global_position"))
             if rx_position is None:
                 self._clear_rx_antenna_position(persist=False)
