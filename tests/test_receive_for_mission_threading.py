@@ -5,6 +5,7 @@ import threading
 import time
 import types
 import queue
+import subprocess
 
 
 def _install_pyqtgraph_stub() -> None:
@@ -446,3 +447,70 @@ def test_review_measurement_for_mission_uses_persisted_tx_reference_without_sing
     np.testing.assert_allclose(captured_ctx_input["ref_data"], np.array([10.0 + 20.0j, 30.0 + 40.0j]))
     assert ui.tx_data.size == 2
     assert outcome["reason"] != "missing_tx_reference"
+
+
+def test_execute_rx_subprocess_suppresses_cyclonedds_type_hash_warning(monkeypatch) -> None:
+    ui = object.__new__(TransceiverUI)
+    ui._out_queue = queue.Queue()
+    ui._proc = None
+    ui._mission_rx_proc = None
+
+    class _FakePopen:
+        def __init__(self, *args, **kwargs) -> None:
+            self.stdout = iter(
+                [
+                    "[WARN] [1776451936.407520401] [rmw_cyclonedds_cpp]: Failed to parse type hash for topic 'rt/_internal/mouse_raw' with type 'brewst::msg::dds_::MouseRaw_' from USER_DATA '(null)'.\n",
+                    "RX normal line\n",
+                ]
+            )
+
+        def wait(self) -> int:
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+
+    return_code = TransceiverUI._execute_rx_subprocess(
+        ui,
+        arg_list=["--output-file", "signals/rx/test.bin"],
+        mission_mode=False,
+        point_context=None,
+        rx_mode="mission",
+    )
+
+    assert return_code == 0
+    assert ui._out_queue.get_nowait() == "RX normal line\n"
+    assert ui._out_queue.empty()
+
+
+def test_execute_rx_subprocess_keeps_other_warning_lines(monkeypatch) -> None:
+    ui = object.__new__(TransceiverUI)
+    ui._out_queue = queue.Queue()
+    ui._proc = None
+    ui._mission_rx_proc = None
+
+    class _FakePopen:
+        def __init__(self, *args, **kwargs) -> None:
+            self.stdout = iter(
+                [
+                    "[WARN] some other warning\n",
+                    "RX normal line\n",
+                ]
+            )
+
+        def wait(self) -> int:
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+
+    return_code = TransceiverUI._execute_rx_subprocess(
+        ui,
+        arg_list=["--output-file", "signals/rx/test.bin"],
+        mission_mode=False,
+        point_context=None,
+        rx_mode="mission",
+    )
+
+    assert return_code == 0
+    assert ui._out_queue.get_nowait() == "[WARN] some other warning\n"
+    assert ui._out_queue.get_nowait() == "RX normal line\n"
+    assert ui._out_queue.empty()
