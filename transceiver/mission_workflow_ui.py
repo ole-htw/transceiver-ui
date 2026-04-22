@@ -25,6 +25,7 @@ from .measurement_run_executor import (
     JsonRunLogStore,
     MeasurementRunExecutor,
     MeasurementRunExecutorConfig,
+    PointExecutionContext,
 )
 from .mission_measurement_service import (
     MissionRxMeasurementService,
@@ -313,6 +314,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._executor: MeasurementRunExecutor | None = None
         self._navigator: _UiNavigator | None = None
         self._run_thread: threading.Thread | None = None
+        self._manual_measurement_thread: threading.Thread | None = None
         self._records: list[dict[str, Any]] = []
         self._run_started_at: float | None = None
         self._run_log_dir: Path | None = None
@@ -563,7 +565,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         )
         self.start_btn = ctk.CTkButton(controls, text="Start", command=self._start_run)
         self.start_btn.grid(row=1, column=0, padx=(8, 3), pady=(0, 4), sticky="w")
-        ctk.CTkLabel(controls, text="Start ab Punkt").grid(row=1, column=1, padx=(10, 2), pady=(0, 4), sticky="e")
+        self.manual_measurement_btn = ctk.CTkButton(
+            controls,
+            text="Manuelle Messung",
+            command=self._start_manual_measurement,
+        )
+        self.manual_measurement_btn.grid(row=1, column=1, padx=(3, 3), pady=(0, 4), sticky="w")
+        ctk.CTkLabel(controls, text="Start ab Punkt").grid(row=1, column=2, padx=(10, 2), pady=(0, 4), sticky="e")
         self.start_point_var = tk.StringVar(value="1")
         self.start_point_combo = ctk.CTkComboBox(
             controls,
@@ -573,7 +581,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             state="readonly",
             command=lambda _value: self._persist_workflow_state(),
         )
-        self.start_point_combo.grid(row=1, column=2, columnspan=3, padx=(0, 8), pady=(0, 4), sticky="w")
+        self.start_point_combo.grid(row=1, column=3, columnspan=2, padx=(0, 8), pady=(0, 4), sticky="w")
         self.reverse_point_order_var = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(
             controls,
@@ -2475,6 +2483,113 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._run_thread = threading.Thread(target=self._run_executor_thread, daemon=True)
         self._run_thread.start()
 
+    def _start_manual_measurement(self) -> None:
+        if self._mission is None:
+            messagebox.showwarning(
+                "Mission",
+                "Bitte zuerst eine gültige Mission anlegen und validieren.",
+                parent=self,
+            )
+            return
+        if self._run_thread and self._run_thread.is_alive():
+            messagebox.showwarning(
+                "Manuelle Messung",
+                "Während eines laufenden Runs ist keine manuelle Messung möglich.",
+                parent=self,
+            )
+            return
+        if self._manual_measurement_thread and self._manual_measurement_thread.is_alive():
+            return
+        if not self._ensure_transmitter_before_run():
+            return
+        self._sync_live_pose_stream_state()
+        self._start_live_label_ticker()
+        self._set_run_buttons(running=True, paused=False)
+        self._manual_measurement_thread = threading.Thread(
+            target=self._run_manual_measurement_thread,
+            daemon=True,
+        )
+        self._manual_measurement_thread.start()
+
+    def _manual_measurement_point_context(self) -> PointExecutionContext | None:
+        if self._mission is None:
+            return None
+        points = [point for point in self._mission.points if point.enabled]
+        if not points:
+            return None
+        selected_index = self._selected_point_index
+        selected_point: MeasurementPoint | None = None
+        selected_point_index = 0
+        if isinstance(selected_index, int) and 0 <= selected_index < len(self._mission.points):
+            candidate = self._mission.points[selected_index]
+            if candidate.enabled:
+                selected_point = candidate
+                selected_point_index = selected_index
+        if selected_point is None:
+            active_points = self._active_start_points()
+            selected_active_index = self._selected_start_point_index()
+            if selected_active_index < 0 or selected_active_index >= len(active_points):
+                selected_active_index = 0
+            selected_point_index, selected_point = active_points[selected_active_index]
+        return PointExecutionContext(
+            mission_name=self._mission.name,
+            cycle=0,
+            point_index=selected_point_index,
+            global_index=len(self._records),
+            point=selected_point,
+        )
+
+    def _run_manual_measurement_thread(self) -> None:
+        point_context = self._manual_measurement_point_context()
+        if point_context is None:
+            self.after(
+                0,
+                lambda: messagebox.showwarning(
+                    "Manuelle Messung",
+                    "Die Mission enthält keine aktiven Punkte.",
+                    parent=self,
+                ),
+            )
+            self.after(0, self._on_manual_measurement_finished)
+            return
+        measurement_service = MissionRxMeasurementService(
+            app=self.master,
+            on_status=self._on_stage_update,
+            on_operator_message=self._append_validation,
+            review_measurement=self._review_measurement,
+            enable_lidar_reference=bool(self.lidar_reference_enabled_var.get()),
+            lidar_topic=self._runtime_config.lidar_topic,
+            lidar_timeout_s=self._runtime_config.lidar_reference_timeout_s,
+            robot_host=self._runtime_config.robot_host,
+            remote_ros_env_cmd=self._runtime_config.remote_ros_env_cmd,
+            remote_ros_setup=self._runtime_config.remote_ros_setup,
+            fastdds_profiles_file=self._runtime_config.fastdds_profiles_file,
+        )
+        payload: dict[str, Any] = {
+            "global_index": point_context.global_index,
+            "point_index": point_context.point_index,
+            "point": self._serialize_point(point_context.point),
+            "navigation": {"state": "manual"},
+            "measurement": {"status": "failed", "result": {}},
+            "error": None,
+        }
+        try:
+            measurement_result = measurement_service.trigger(point_context)
+            payload["measurement"] = {
+                "status": "succeeded",
+                "result": measurement_result,
+            }
+        except Exception as exc:
+            payload["measurement"] = {"status": "failed", "result": {}}
+            payload["error"] = str(exc)
+        self.after(0, self._on_record, payload)
+        self.after(0, self._on_manual_measurement_finished)
+
+    def _on_manual_measurement_finished(self) -> None:
+        self._set_run_buttons(running=False, paused=False)
+        self._manual_measurement_thread = None
+        self._update_live_label()
+
     def _ensure_transmitter_before_run(self) -> bool:
         is_active_fn = getattr(self.master, "is_transmitter_active_for_mission", None)
         transmitter_active = bool(is_active_fn()) if callable(is_active_fn) else bool(getattr(self.master, "_tx_running", False))
@@ -3014,6 +3129,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _set_run_buttons(self, *, running: bool, paused: bool) -> None:
         self.start_btn.configure(state="disabled" if running else "normal")
+        manual_measurement_btn = getattr(self, "manual_measurement_btn", None)
+        if manual_measurement_btn is not None:
+            manual_measurement_btn.configure(state="disabled" if running else "normal")
         self.pause_btn.configure(state="normal" if running and not paused else "disabled")
         self.resume_btn.configure(state="normal" if running and paused else "disabled")
         self.stop_btn.configure(state="normal" if running else "disabled")
