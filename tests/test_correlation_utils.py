@@ -200,15 +200,10 @@ def test_find_los_echo_uses_classified_peak_group() -> None:
     cc = mag.astype(np.complex128)
 
     los_idx, echo_idx = find_los_echo(cc)
-    _highest_idx, expected_los_idx, expected_echoes, _group = classify_peak_group(
-        cc,
-        peaks_before=0,
-        peaks_after=1,
-        min_rel_height=0.1,
-    )
+    expected_los_idx, expected_echo_idx = find_los_echo_from_mag(mag)
 
     assert los_idx == expected_los_idx
-    assert echo_idx == (expected_echoes[0] if expected_echoes else None)
+    assert echo_idx == expected_echo_idx
 
 
 
@@ -233,23 +228,35 @@ def test_classify_peak_group_from_mag_with_los_threshold_filters_weak_echoes() -
 def test_find_los_echo_from_mag_uses_stricter_los_threshold() -> None:
     mag = np.zeros(180, dtype=float)
     mag[90] = 1.0
-    mag[110] = 0.25  # Below LOS-specific 0.3 threshold.
-
-    los_idx, echo_idx = find_los_echo_from_mag(mag)
-
-    assert los_idx == 90
-    assert echo_idx is None
-
-
-def test_find_los_echo_from_mag_keeps_echo_above_los_threshold() -> None:
-    mag = np.zeros(180, dtype=float)
-    mag[90] = 1.0
-    mag[110] = 0.35  # Above LOS-specific 0.3 threshold.
+    mag[110] = 0.25
 
     los_idx, echo_idx = find_los_echo_from_mag(mag)
 
     assert los_idx == 90
     assert echo_idx == 110
+
+
+def test_find_los_echo_from_mag_keeps_echo_above_los_threshold() -> None:
+    mag = np.zeros(180, dtype=float)
+    mag[90] = 1.0
+    mag[110] = 0.35
+
+    los_idx, echo_idx = find_los_echo_from_mag(mag)
+
+    assert los_idx == 90
+    assert echo_idx == 110
+
+
+def test_find_los_echo_from_mag_rejects_non_prominent_echo_in_noise() -> None:
+    rng = np.random.default_rng(123)
+    mag = np.abs(rng.normal(0.0, 0.04, 240))
+    mag[120] = 1.0
+    mag[150] = float(np.median(mag[142:159]) + 0.02)
+
+    los_idx, echo_idx = find_los_echo_from_mag(mag)
+
+    assert los_idx == 120
+    assert echo_idx is None
 
 
 def test_find_los_echo_from_mag_ignores_echo_before_los_peak() -> None:

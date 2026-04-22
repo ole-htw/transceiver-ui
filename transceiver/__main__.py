@@ -41,6 +41,7 @@ from .helpers.correlation_utils import (
     apply_manual_lags as _apply_manual_lags,
     autocorr_fft as _autocorr_fft,
     classify_peak_group_from_mag as _classify_peak_group_from_mag,
+    filter_echo_indices_by_noise_prominence as _filter_echo_indices_by_noise_prominence,
     find_los_echo_from_mag as _find_los_echo_from_mag,
     filter_peak_indices_to_period_group as _filter_peak_indices_to_period_group,
     lag_overlap as _lag_overlap,
@@ -189,7 +190,12 @@ def _classify_visible_xcorr_peaks(
     )
     if los_idx is None:
         los_idx = visible_los_idx
-        los_echo_indices = visible_echo_indices
+    los_echo_indices = _filter_echo_indices_by_noise_prominence(
+        mag,
+        los_idx=los_idx,
+        echo_indices=(los_echo_indices if los_idx is not None else visible_echo_indices),
+        repetition_period_samples=repetition_period_samples,
+    )
     return highest_idx, los_idx, los_echo_indices
 
 
