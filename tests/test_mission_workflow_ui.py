@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from transceiver.measurement_mission import MeasurementPoint
+from transceiver.measurement_mission import MeasurementMission, MeasurementPoint
 from transceiver.navigation_adapter import NavigationPoint
 from transceiver.mission_workflow_ui import MissionWorkflowWindow, _compute_bistatic_echo_ellipse_axes
 
@@ -752,3 +752,42 @@ def test_set_measurement_map_pick_mode_clears_overlay_when_disabled() -> None:
     assert window._measurement_start_world_position is None
     assert window._measurement_end_world_position is None
     assert window.measurement_map_pick_mode_btn.text == "measurement"
+
+
+def test_manual_measurement_point_context_prefers_selected_enabled_point() -> None:
+    points = [
+        MeasurementPoint(id="p1", name="", x=0.0, y=0.0, yaw=0.0, enabled=True),
+        MeasurementPoint(id="p2", name="", x=1.0, y=1.0, yaw=0.0, enabled=True),
+    ]
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._mission = MeasurementMission(name="m", points=points, repeat=1)
+    window._mission_points = points
+    window._selected_point_index = 1
+    window._records = [{"global_index": 0}]
+    window._selected_start_point_index = lambda: 0
+
+    context = window._manual_measurement_point_context()
+
+    assert context is not None
+    assert context.point_index == 1
+    assert context.point.id == "p2"
+    assert context.global_index == 1
+
+
+def test_manual_measurement_point_context_falls_back_to_selected_active_start_point() -> None:
+    points = [
+        MeasurementPoint(id="p1", name="", x=0.0, y=0.0, yaw=0.0, enabled=False),
+        MeasurementPoint(id="p2", name="", x=1.0, y=1.0, yaw=0.0, enabled=True),
+    ]
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._mission = MeasurementMission(name="m", points=points, repeat=1)
+    window._mission_points = points
+    window._selected_point_index = 0
+    window._records = []
+    window.start_point_var = SimpleNamespace(get=lambda: "1")
+
+    context = window._manual_measurement_point_context()
+
+    assert context is not None
+    assert context.point_index == 1
+    assert context.point.id == "p2"
