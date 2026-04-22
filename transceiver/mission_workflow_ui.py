@@ -475,6 +475,10 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._measurement_start_world_position: tuple[float, float] | None = None
         self._measurement_end_world_position: tuple[float, float] | None = None
         self._manual_drive_lock = threading.Lock()
+        self._pending_nav2point_world_position: tuple[float, float] | None = None
+        self._pending_nav2point_yaw_radians = 0.0
+        self._nav2point_drag_start_preview: tuple[float, float] | None = None
+        self._nav2point_drag_active = False
         self._pending_waypoint_world_position: tuple[float, float] | None = None
         self._pending_waypoint_yaw_radians = 0.0
         self._waypoint_drag_active = False
@@ -849,8 +853,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             world_position = self._preview_pixel_to_world(preview_x=float(event.x), preview_y=float(event.y))
             if world_position is None:
                 return
-            self._set_nav2point_map_pick_mode(False)
-            self._queue_nav2point(world_position=world_position)
+            self._pending_nav2point_world_position = world_position
+            self._pending_nav2point_yaw_radians = 0.0
+            self._nav2point_drag_start_preview = (float(event.x), float(event.y))
+            self._nav2point_drag_active = False
+            self._draw_map_preview()
             return
         if getattr(self, "_measurement_map_pick_mode_enabled", False):
             world_position = self._preview_pixel_to_world(preview_x=float(event.x), preview_y=float(event.y))
@@ -885,6 +892,18 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         )
 
     def _on_map_canvas_drag(self, event: tk.Event) -> None:
+        if getattr(self, "_nav2point_map_pick_mode_enabled", False):
+            if self._pending_nav2point_world_position is None or self._nav2point_drag_start_preview is None:
+                return
+            start_x, start_y = self._nav2point_drag_start_preview
+            delta_x = float(event.x) - start_x
+            delta_y = float(event.y) - start_y
+            if abs(delta_x) < 2.0 and abs(delta_y) < 2.0:
+                return
+            self._nav2point_drag_active = True
+            self._pending_nav2point_yaw_radians = math.atan2(-delta_y, delta_x)
+            self._draw_map_preview()
+            return
         if not self._waypoint_map_pick_mode_enabled:
             return
         if self._pending_waypoint_world_position is None or self._waypoint_drag_start_preview is None:
@@ -899,6 +918,14 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._draw_map_preview()
 
     def _on_map_canvas_release(self, _event: tk.Event) -> None:
+        if getattr(self, "_nav2point_map_pick_mode_enabled", False):
+            world_position = self._pending_nav2point_world_position
+            if world_position is None:
+                return
+            yaw_radians = self._pending_nav2point_yaw_radians if self._nav2point_drag_active else 0.0
+            self._set_nav2point_map_pick_mode(False)
+            self._queue_nav2point(world_position=world_position, yaw_radians=yaw_radians)
+            return
         if not self._waypoint_map_pick_mode_enabled:
             return
         world_position = self._pending_waypoint_world_position
@@ -914,6 +941,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._pending_waypoint_world_position = None
         self._pending_waypoint_yaw_radians = 0.0
         self._waypoint_drag_active = False
+
+    def _clear_pending_nav2point_marker(self) -> None:
+        self._pending_nav2point_world_position = None
+        self._pending_nav2point_yaw_radians = 0.0
+        self._nav2point_drag_start_preview = None
+        self._nav2point_drag_active = False
 
     def _draw_pending_waypoint_marker(self) -> None:
         world_position = self._pending_waypoint_world_position
@@ -941,6 +974,36 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             marker_points,
             fill="#7ee6a8",
             outline="#0d1016",
+            width=1,
+            dash=(3, 2),
+        )
+
+    def _draw_pending_nav2point_marker(self) -> None:
+        world_position = self._pending_nav2point_world_position
+        original = self._map_image_original
+        if world_position is None or original is None:
+            return
+        map_pixel = self._world_to_map_pixel(x=world_position[0], y=world_position[1], image_height=original.height())
+        if map_pixel is None:
+            return
+        if not self._is_pixel_inside_map(map_pixel[0], map_pixel[1], width=original.width(), height=original.height()):
+            return
+        scale_x, scale_y = self._map_preview_scale
+        offset_x, offset_y = self._map_preview_offset
+        px = map_pixel[0] * scale_x + offset_x
+        py = map_pixel[1] * scale_y + offset_y
+        marker_points = self._build_waypoint_arrow_polygon(
+            center_x=px,
+            center_y=py,
+            yaw_radians=float(self._pending_nav2point_yaw_radians),
+            arrow_length=10.0,
+            tail_length=4.0,
+            tail_width=8.0,
+        )
+        self.map_preview_canvas.create_polygon(
+            marker_points,
+            fill="#ffd166",
+            outline="#3a2c00",
             width=1,
             dash=(3, 2),
         )
@@ -1006,6 +1069,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._set_waypoint_map_pick_mode(False)
             self._set_rx_antenna_map_pick_mode(False)
             self._set_measurement_map_pick_mode(False)
+        else:
+            self._clear_pending_nav2point_marker()
         nav2point_button = getattr(self, "nav2point_map_pick_mode_btn", None)
         if nav2point_button is not None:
             nav2point_button.configure(text="✕" if enabled else "nav2point")
@@ -1016,14 +1081,22 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._set_nav2point_map_pick_mode(not self._nav2point_map_pick_mode_enabled)
 
     @staticmethod
-    def _navigation_point_from_world_position(world_position: tuple[float, float]) -> NavigationPoint:
-        return NavigationPoint(x=float(world_position[0]), y=float(world_position[1]))
+    def _navigation_point_from_world_position(
+        world_position: tuple[float, float], *, yaw_radians: float = 0.0
+    ) -> NavigationPoint:
+        half_yaw = float(yaw_radians) / 2.0
+        return NavigationPoint(
+            x=float(world_position[0]),
+            y=float(world_position[1]),
+            qz=math.sin(half_yaw),
+            qw=math.cos(half_yaw),
+        )
 
-    def _queue_nav2point(self, *, world_position: tuple[float, float]) -> None:
+    def _queue_nav2point(self, *, world_position: tuple[float, float], yaw_radians: float = 0.0) -> None:
         if self._run_thread and self._run_thread.is_alive():
             self._append_validation("⚠️ nav2point ist während eines aktiven Runs deaktiviert.")
             return
-        target = self._navigation_point_from_world_position(world_position)
+        target = self._navigation_point_from_world_position(world_position, yaw_radians=yaw_radians)
 
         def _worker() -> None:
             navigator = self._ensure_navigator()
@@ -1215,6 +1288,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.map_preview_canvas.delete("all")
         self._map_canvas_image_id = self.map_preview_canvas.create_image(offset_x, offset_y, anchor="nw", image=preview)
         self._draw_mission_markers()
+        self._draw_pending_nav2point_marker()
         self._draw_pending_waypoint_marker()
         self._draw_rx_antenna_marker()
         self._draw_measurement_overlay()
