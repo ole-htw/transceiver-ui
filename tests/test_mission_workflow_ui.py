@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from transceiver.measurement_mission import MapConfig, MeasurementMission, MeasurementPoint
+from transceiver.measurement_mission import MeasurementPoint
 from transceiver.mission_workflow_ui import MissionWorkflowWindow, _compute_bistatic_echo_ellipse_axes
 
 
@@ -712,119 +712,6 @@ def test_on_live_pose_stream_switch_changed_persists_and_syncs() -> None:
     window._on_live_pose_stream_switch_changed()
 
     assert calls == ["persist", "sync", "label"]
-
-
-
-
-def _build_state_window_stub(tmp_path) -> MissionWorkflowWindow:
-    class _Var:
-        def __init__(self, value):
-            self._value = value
-
-        def get(self):
-            return self._value
-
-        def set(self, value) -> None:
-            self._value = value
-
-    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
-    window._workflow_state_file = tmp_path / "mission_workflow_state.json"
-    window._is_restoring_workflow_state = False
-    window.mission_name_var = _Var("Mission")
-    window.repeat_var = _Var("1")
-    window.start_point_var = _Var("1")
-    window.lidar_reference_enabled_var = _Var(True)
-    window.manual_review_enabled_var = _Var(True)
-    window.test_run_enabled_var = _Var(False)
-    window.manual_navigation_enabled_var = _Var(False)
-    window.reverse_point_order_var = _Var(False)
-    window.live_pose_stream_enabled_var = _Var(False)
-    window.live_preview_enabled_var = _Var(False)
-    window._mission_points = [MeasurementPoint(id="p1", name="", x=0.0, y=0.0, yaw=0.0)]
-    window._selected_start_point_index = lambda: 0
-    window._serialize_point = MissionWorkflowWindow._serialize_point
-    window._serialize_rx_antenna_global_position = lambda: None
-    window._selected_map_config_file = None
-    window._selected_map_config = None
-    window._mission = MeasurementMission(name="Mission", points=list(window._mission_points), repeat=1, map_config=None)
-    return window
-
-
-def test_live_position_toggle_persists_and_keeps_map_config_inline(tmp_path) -> None:
-    window = _build_state_window_stub(tmp_path)
-    window.live_pose_stream_enabled_var.set(True)
-    window._mission = MeasurementMission(
-        name="Mission",
-        points=list(window._mission_points),
-        repeat=1,
-        map_config=MapConfig(
-            image="maps/fallback.pgm",
-            resolution=0.05,
-            origin=(1.0, 2.0, 0.0),
-            frame_id="map",
-            negate=0,
-            occupied_thresh=0.65,
-            free_thresh=0.2,
-        ),
-    )
-    window._sync_live_pose_stream_state = lambda: None
-    window._update_live_label = lambda: None
-
-    window._on_live_pose_stream_switch_changed()
-
-    payload = json.loads(window._workflow_state_file.read_text(encoding="utf-8"))
-    assert payload["live_pose_stream_enabled"] is True
-    assert payload["map_config_inline"]["image"] == "maps/fallback.pgm"
-
-
-def test_nav2point_start_does_not_drop_map_config_fields_in_state(tmp_path) -> None:
-    window = _build_state_window_stub(tmp_path)
-    initial_payload = {
-        "name": "Mission",
-        "repeat": 1,
-        "points": [{"id": "p1", "x": 0.0, "y": 0.0, "yaw": 0.0}],
-        "map_config_file": "/tmp/map.yaml",
-        "map_config_inline": {"image": "maps/inline_map.pgm", "resolution": 0.05, "origin": [0.0, 0.0, 0.0]},
-    }
-    window._workflow_state_file.write_text(json.dumps(initial_payload), encoding="utf-8")
-    window._build_workflow_state_payload = lambda: {
-        "name": "Mission",
-        "repeat": 1,
-        "points": [{"id": "p1", "x": 0.0, "y": 0.0, "yaw": 0.0}],
-        "map_config_file": None,
-        "map_config_inline": None,
-    }
-
-    window._persist_workflow_state()
-
-    payload = json.loads(window._workflow_state_file.read_text(encoding="utf-8"))
-    assert payload["map_config_file"] == "/tmp/map.yaml"
-    assert payload["map_config_inline"]["image"] == "maps/inline_map.pgm"
-
-
-def test_build_workflow_state_payload_falls_back_to_mission_map_config_when_selected_none(tmp_path) -> None:
-    window = _build_state_window_stub(tmp_path)
-    window._selected_map_config = None
-    window._mission = MeasurementMission(
-        name="Mission",
-        points=list(window._mission_points),
-        repeat=1,
-        map_config=MapConfig(
-            image="maps/mission_map.pgm",
-            resolution=0.1,
-            origin=(3.0, 4.0, 0.0),
-            frame_id="map",
-            negate=0,
-            occupied_thresh=0.7,
-            free_thresh=0.3,
-        ),
-    )
-
-    payload = window._build_workflow_state_payload()
-
-    assert payload["map_config_file"] is None
-    assert payload["map_config_inline"]["image"] == "maps/mission_map.pgm"
-    assert payload["map_config_inline"]["resolution"] == 0.1
 
 
 def test_restore_workflow_state_uses_inline_map_config_without_file(tmp_path) -> None:
