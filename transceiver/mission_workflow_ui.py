@@ -56,9 +56,6 @@ LIDAR_OVERLAY_CELL_SIZE_PX = 3.0
 LIDAR_OVERLAY_MAX_BEAMS_PER_CELL = 1
 MEASUREMENT_START_LIVE_POSITION_WAIT_TIMEOUT_S = 1.6
 MEASUREMENT_START_LIVE_POSITION_WAIT_INTERVAL_S = 0.1
-MAP_LAYER_BASE_TAG = "map_base"
-MAP_LAYER_STATIC_OVERLAY_TAG = "static_overlay"
-MAP_LAYER_LIVE_OVERLAY_TAG = "live_overlay"
 
 
 def _load_json_dict(path: Path) -> dict[str, Any]:
@@ -446,8 +443,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._map_preview_scale: tuple[float, float] = (1.0, 1.0)
         self._map_preview_offset: tuple[float, float] = (0.0, 0.0)
         self._map_canvas_image_id: int | None = None
-        self._map_base_cache_key: tuple[int, int, str] | None = None
-        self._map_id: str | None = None
         self._map_marker_ids: list[int] = []
         self._map_image_size: tuple[int, int] | None = None
         self._live_position: dict[str, Any] | None = None
@@ -817,8 +812,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._map_preview_scale = (1.0, 1.0)
         self._map_preview_offset = (0.0, 0.0)
         self._map_canvas_image_id = None
-        self._map_base_cache_key = None
-        self._map_id = None
         self._map_marker_ids = []
         self._map_image_size = None
         self._live_position = None
@@ -852,7 +845,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._map_image_original = photo
         self._map_image_preview = photo
         self._map_image_size = (photo.width(), photo.height())
-        self._map_id = str(image_path)
         self.map_status_var.set(
             f"Karte geladen: {image_path.name} ({photo.width()}x{photo.height()} px)"
         )
@@ -956,7 +948,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             outline="#0d1016",
             width=1,
             dash=(3, 2),
-            tags=(MAP_LAYER_STATIC_OVERLAY_TAG,),
         )
 
     def _set_rx_antenna_map_pick_mode(self, enabled: bool) -> None:
@@ -1049,19 +1040,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             fill="#ffcc66",
             width=2,
             dash=(4, 2),
-            tags=(MAP_LAYER_STATIC_OVERLAY_TAG,),
         )
         for px, py in (start_preview, end_preview):
-            self.map_preview_canvas.create_oval(
-                px - 4,
-                py - 4,
-                px + 4,
-                py + 4,
-                fill="#ffcc66",
-                outline="#231f16",
-                width=1,
-                tags=(MAP_LAYER_STATIC_OVERLAY_TAG,),
-            )
+            self.map_preview_canvas.create_oval(px - 4, py - 4, px + 4, py + 4, fill="#ffcc66", outline="#231f16", width=1)
 
         distance_m = self._measurement_distance_m(start, end)
         if distance_m is None:
@@ -1074,7 +1055,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             text=f"{distance_m:.2f} m",
             fill="#ffde9a",
             font=("TkDefaultFont", 10, "bold"),
-            tags=(MAP_LAYER_STATIC_OVERLAY_TAG,),
         )
 
     def _update_map_canvas_cursor(self) -> None:
@@ -1154,8 +1134,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _render_map_placeholder(self, text: str) -> None:
         self.map_preview_canvas.delete("all")
-        self._map_canvas_image_id = None
-        self._map_base_cache_key = None
         self.map_preview_canvas.create_text(
             20,
             20,
@@ -1183,35 +1161,15 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._map_image_preview = preview
         self._map_preview_scale = (preview.width() / original.width(), preview.height() / original.height())
         self._map_preview_offset = (offset_x, offset_y)
-        map_id = self._map_id or "unknown"
-        cache_key = (canvas_width, canvas_height, map_id)
-        redraw_base = cache_key != self._map_base_cache_key or self._map_canvas_image_id is None
 
-        if redraw_base:
-            self.map_preview_canvas.delete(MAP_LAYER_BASE_TAG)
-            self._map_canvas_image_id = self.map_preview_canvas.create_image(
-                offset_x,
-                offset_y,
-                anchor="nw",
-                image=preview,
-                tags=(MAP_LAYER_BASE_TAG,),
-            )
-            self._map_base_cache_key = cache_key
-
-        self._draw_static_overlay()
-        self._draw_live_overlay()
-
-    def _draw_static_overlay(self) -> None:
-        self.map_preview_canvas.delete(MAP_LAYER_STATIC_OVERLAY_TAG)
+        self.map_preview_canvas.delete("all")
+        self._map_canvas_image_id = self.map_preview_canvas.create_image(offset_x, offset_y, anchor="nw", image=preview)
         self._draw_mission_markers()
         self._draw_pending_waypoint_marker()
         self._draw_rx_antenna_marker()
         self._draw_measurement_overlay()
         self._draw_selected_echo_overlay()
         self._draw_selected_lidar_reference_overlay()
-
-    def _draw_live_overlay(self) -> None:
-        self.map_preview_canvas.delete(MAP_LAYER_LIVE_OVERLAY_TAG)
         self._draw_live_echo_preview_overlay()
         self._draw_live_marker()
         self._last_live_redraw_ts = time.time()
@@ -1231,24 +1189,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         px = map_pixel[0] * scale_x + offset_x
         py = map_pixel[1] * scale_y + offset_y
         cross_size = 7
-        self.map_preview_canvas.create_line(
-            px - cross_size,
-            py,
-            px + cross_size,
-            py,
-            fill="#42a5f5",
-            width=2,
-            tags=(MAP_LAYER_STATIC_OVERLAY_TAG,),
-        )
-        self.map_preview_canvas.create_line(
-            px,
-            py - cross_size,
-            px,
-            py + cross_size,
-            fill="#42a5f5",
-            width=2,
-            tags=(MAP_LAYER_STATIC_OVERLAY_TAG,),
-        )
+        self.map_preview_canvas.create_line(px - cross_size, py, px + cross_size, py, fill="#42a5f5", width=2)
+        self.map_preview_canvas.create_line(px, py - cross_size, px, py + cross_size, fill="#42a5f5", width=2)
         self.map_preview_canvas.create_oval(
             px - 3,
             py - 3,
@@ -1257,7 +1199,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             fill="#90caf9",
             outline="#1565c0",
             width=1,
-            tags=(MAP_LAYER_STATIC_OVERLAY_TAG,),
         )
 
     def _draw_mission_markers(self) -> None:
@@ -1297,7 +1238,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 fill="#00d26a",
                 outline="#0d1016",
                 width=1,
-                tags=(MAP_LAYER_STATIC_OVERLAY_TAG,),
             )
             self._map_marker_ids.append(marker_id)
             if index == self._selected_point_index:
@@ -1504,7 +1444,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 measurement_position=measurement_position,
                 echo_distance_m=echo_distance,
                 color=color,
-                layer_tag=MAP_LAYER_STATIC_OVERLAY_TAG,
             )
 
     def _draw_live_echo_preview_overlay(self) -> None:
@@ -1533,7 +1472,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 measurement_position=measurement_position,
                 echo_distance_m=echo_distance,
                 color=color,
-                layer_tag=MAP_LAYER_LIVE_OVERLAY_TAG,
             )
 
     def _selected_record_point(self, record: dict[str, Any] | None) -> MeasurementPoint | None:
@@ -1603,7 +1541,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         measurement_position: tuple[float, float],
         echo_distance_m: float,
         color: str,
-        layer_tag: str,
     ) -> None:
         mission = self._mission
         original = self._map_image_original
@@ -1666,7 +1603,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             width=line_width,
             smooth=True,
             dash=(4, 4),
-            tags=(layer_tag,),
         )
 
     def _draw_selected_lidar_reference_overlay(self) -> None:
@@ -1694,11 +1630,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         overlay_point = self._selected_record_overlay_point(record, measurement_position=measurement_position)
         if overlay_point is None:
             return
-        self._draw_lidar_scan_overlay_for_point(
-            point=overlay_point,
-            scan=scan,
-            layer_tag=MAP_LAYER_STATIC_OVERLAY_TAG,
-        )
+        self._draw_lidar_scan_overlay_for_point(point=overlay_point, scan=scan)
 
     def _selected_record_payload(self) -> dict[str, Any] | None:
         selected_idx = self._selected_result_index
@@ -1764,13 +1696,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             parsed.append(value)
         return parsed
 
-    def _draw_lidar_scan_overlay_for_point(
-        self,
-        *,
-        point: MeasurementPoint,
-        scan: dict[str, Any],
-        layer_tag: str,
-    ) -> None:
+    def _draw_lidar_scan_overlay_for_point(self, *, point: MeasurementPoint, scan: dict[str, Any]) -> None:
         original = self._map_image_original
         if original is None:
             return
@@ -1791,7 +1717,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             fill="#90caf9",
             outline="#1565c0",
             width=1,
-            tags=(layer_tag,),
         )
         angle_min = float(scan["angle_min"])
         angle_increment = float(scan["angle_increment"])
@@ -1832,7 +1757,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 fill="#4fc3f7",
                 width=1,
                 stipple="gray25",
-                tags=(layer_tag,),
             )
 
     def _draw_live_marker(self) -> None:
@@ -1888,7 +1812,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             fill="#ff4d6d",
             outline="#ffffff",
             width=1,
-            tags=(MAP_LAYER_LIVE_OVERLAY_TAG,),
         )
         yaw_value = position.get("yaw")
         if isinstance(yaw_value, (int, float)):
@@ -1903,7 +1826,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 fill="#ffccd5",
                 width=2,
                 arrow=tk.LAST,
-                tags=(MAP_LAYER_LIVE_OVERLAY_TAG,),
             )
 
     def _highlight_marker(self, marker_id: int) -> None:
@@ -2616,9 +2538,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._live_redraw_pending = False
         if not bool(self.live_preview_enabled_var.get()):
             return
-        if self._map_image_original is None:
-            return
-        self._draw_live_overlay()
+        self._draw_map_preview()
+        self._last_live_redraw_ts = time.time()
 
     def _cancel_live_redraw(self) -> None:
         self._live_redraw_pending = False
