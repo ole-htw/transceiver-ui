@@ -2378,24 +2378,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             repeat = int(repeat_raw)
         except ValueError:
             repeat = repeat_raw
-        inline_map_config = None
-        if self._selected_map_config is not None:
-            inline_map_config = {
-                "image": self._selected_map_config.image,
-                "resolution": self._selected_map_config.resolution,
-                "origin": list(self._selected_map_config.origin),
-                "frame_id": self._selected_map_config.frame_id,
-                "negate": self._selected_map_config.negate,
-                "occupied_thresh": self._selected_map_config.occupied_thresh,
-                "free_thresh": self._selected_map_config.free_thresh,
-            }
         return {
             "name": self.mission_name_var.get().strip(),
             "repeat": repeat,
             "points": [self._serialize_point(point) for point in self._mission_points],
             "start_point_index": self._selected_start_point_index(),
             "map_config_file": self._selected_map_config_file,
-            "map_config_inline": inline_map_config,
             "rx_antenna_global_position": self._serialize_rx_antenna_global_position(),
             "lidar_reference_enabled": bool(self.lidar_reference_enabled_var.get()),
             "manual_review_enabled": bool(self.manual_review_enabled_var.get()),
@@ -2440,20 +2428,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._is_restoring_workflow_state = True
         try:
             map_config_file = payload.get("map_config_file")
-            map_config_inline = payload.get("map_config_inline")
             loaded_map_config: MapConfig | None = None
             if isinstance(map_config_file, str) and map_config_file.strip():
                 loaded_map_config = self._load_map_config_from_file(Path(map_config_file))
-            if loaded_map_config is None and map_config_inline is not None:
-                loaded_map_config = measurement_mission_from_dict(
-                    {
-                        "name": "mission-map-config-inline",
-                        "repeat": 1,
-                        "wait_after_arrival_s": 0.0,
-                        "points": [{"id": "inline-map-config", "x": 0.0, "y": 0.0, "yaw": 0.0}],
-                        "map_config": map_config_inline,
-                    }
-                ).map_config
             mission = measurement_mission_from_dict(
                 {
                     "name": str(payload.get("name") or "mission-ui"),
@@ -2485,7 +2462,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._mission_points = list(mission.points)
             self._mission = mission
             self._selected_map_config = mission.map_config
-            self._selected_map_config_file = map_config_file.strip() if isinstance(map_config_file, str) and map_config_file.strip() else None
+            self._selected_map_config_file = payload.get("map_config_file")
             rx_position = self._parse_rx_antenna_global_position(payload.get("rx_antenna_global_position"))
             if rx_position is None:
                 self._clear_rx_antenna_position(persist=False)
