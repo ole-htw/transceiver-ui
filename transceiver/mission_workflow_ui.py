@@ -66,11 +66,6 @@ ECHO_OVERLAY_MAX_LIVE_ECHOS = 3
 ECHO_OVERLAY_PROFILE_DEBUG = os.getenv("TRANSCEIVER_ECHO_OVERLAY_PROFILE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _diag_log(message: str) -> None:
-    timestamp = datetime.now().isoformat(timespec="seconds")
-    print(f"[mission_workflow_ui][diag][{timestamp}] {message}")
-
-
 def _load_json_dict(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -847,11 +842,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
         map_config = self._selected_map_config
         if map_config is None:
-            _diag_log(
-                "map_config ist None in _refresh_map_section: "
-                f"base_path={Path.cwd()}, "
-                f"selected_map_config_file={self._selected_map_config_file!r}"
-            )
             self.map_status_var.set("Karte nicht konfiguriert (map_config fehlt).")
             self._render_map_placeholder("Kein Kartenbild konfiguriert.")
             self._update_live_label()
@@ -2440,12 +2430,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if self._is_restoring_workflow_state:
             return
         payload = self._build_workflow_state_payload()
-        _diag_log(
-            "persistiere Workflow-State: "
-            f"selected_map_config_file={self._selected_map_config_file!r}, "
-            f"payload.map_config_file={payload.get('map_config_file')!r}, "
-            f"payload.map_config_inline={'present' if payload.get('map_config_inline') is not None else 'none'}"
-        )
         _save_json_dict(self._workflow_state_file, payload)
 
     def _restore_workflow_state(self) -> None:
@@ -2455,11 +2439,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
         self._is_restoring_workflow_state = True
         try:
-            _diag_log(
-                "restore Workflow-State gestartet: "
-                f"selected_map_config_file={self._selected_map_config_file!r}, "
-                f"payload.map_config_file={payload.get('map_config_file')!r}"
-            )
             map_config_file = payload.get("map_config_file")
             map_config_inline = payload.get("map_config_inline")
             loaded_map_config: MapConfig | None = None
@@ -2485,14 +2464,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                         "map_config": map_config_inline,
                     }
                 ).map_config
-            if loaded_map_config is None:
-                _diag_log(
-                    "loaded_map_config ist None in _restore_workflow_state: "
-                    f"base_path={Path.cwd()}, "
-                    f"selected_map_config_file={self._selected_map_config_file!r}, "
-                    f"payload.map_config_file={payload.get('map_config_file')!r}, "
-                    f"payload.map_config_inline={'present' if map_config_inline is not None else 'none'}"
-                )
             mission = measurement_mission_from_dict(
                 {
                     "name": str(payload.get("name") or "mission-ui"),
@@ -2523,13 +2494,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self.repeat_var.set(str(mission.repeat or 1))
             self._mission_points = list(mission.points)
             self._mission = mission
-            if mission.map_config is not None:
-                self._selected_map_config = mission.map_config
-                self._selected_map_config_file = map_config_file_value if loaded_map_config_from_file else None
-            else:
-                _diag_log(
-                    "mission.map_config ist None beim Restore; bestehende Map-Selection bleibt unverändert."
-                )
+            self._selected_map_config = mission.map_config
+            self._selected_map_config_file = map_config_file_value if loaded_map_config_from_file else None
             rx_position = self._parse_rx_antenna_global_position(payload.get("rx_antenna_global_position"))
             if rx_position is None:
                 self._clear_rx_antenna_position(persist=False)
