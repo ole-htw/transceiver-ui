@@ -627,37 +627,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             command=self._on_live_preview_switch_changed,
         ).grid(row=4, column=2, columnspan=2, padx=(8, 3), pady=(0, 4), sticky="w")
 
-        manual_drive_frame = ctk.CTkFrame(controls, fg_color="transparent")
-        manual_drive_frame.grid(row=5, column=0, columnspan=5, padx=8, pady=(0, 4), sticky="w")
-        ctk.CTkLabel(manual_drive_frame, text="Manuelles Verfahren").grid(row=0, column=0, columnspan=3, sticky="w")
-        ctk.CTkButton(
-            manual_drive_frame,
-            text="↑",
-            width=44,
-            command=lambda: self._queue_manual_drive(linear_x=0.15, angular_z=0.0, label="vorwärts"),
-        ).grid(row=1, column=1, padx=3, pady=3)
-        ctk.CTkButton(
-            manual_drive_frame,
-            text="←",
-            width=44,
-            command=lambda: self._queue_manual_drive(linear_x=0.0, angular_z=0.7, label="links"),
-        ).grid(row=2, column=0, padx=3, pady=3)
-        ctk.CTkButton(
-            manual_drive_frame,
-            text="→",
-            width=44,
-            command=lambda: self._queue_manual_drive(linear_x=0.0, angular_z=-0.7, label="rechts"),
-        ).grid(row=2, column=2, padx=3, pady=3)
-        ctk.CTkButton(
-            manual_drive_frame,
-            text="↓",
-            width=44,
-            command=lambda: self._queue_manual_drive(linear_x=-0.15, angular_z=0.0, label="rückwärts"),
-        ).grid(row=3, column=1, padx=3, pady=3)
-
         self.live_var = tk.StringVar(value="Punkt: - | Navigation: idle | Messung: idle | Verbleibend: - | Live-Status: Karte nicht geladen")
         ctk.CTkLabel(controls, textvariable=self.live_var, anchor="w", justify="left").grid(
-            row=6, column=0, columnspan=5, sticky="nsew", padx=8, pady=(4, 8)
+            row=5, column=0, columnspan=5, sticky="nsew", padx=8, pady=(4, 8)
         )
 
         table_frame = ctk.CTkFrame(self)
