@@ -2389,15 +2389,18 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         except ValueError:
             repeat = repeat_raw
         inline_map_config = None
-        if self._selected_map_config is not None:
+        selected_map_config = self._selected_map_config
+        mission_map_config = self._mission.map_config if self._mission is not None else None
+        effective_map_config = selected_map_config or mission_map_config
+        if effective_map_config is not None:
             inline_map_config = {
-                "image": self._selected_map_config.image,
-                "resolution": self._selected_map_config.resolution,
-                "origin": list(self._selected_map_config.origin),
-                "frame_id": self._selected_map_config.frame_id,
-                "negate": self._selected_map_config.negate,
-                "occupied_thresh": self._selected_map_config.occupied_thresh,
-                "free_thresh": self._selected_map_config.free_thresh,
+                "image": effective_map_config.image,
+                "resolution": effective_map_config.resolution,
+                "origin": list(effective_map_config.origin),
+                "frame_id": effective_map_config.frame_id,
+                "negate": effective_map_config.negate,
+                "occupied_thresh": effective_map_config.occupied_thresh,
+                "free_thresh": effective_map_config.free_thresh,
             }
         return {
             "name": self.mission_name_var.get().strip(),
@@ -2440,6 +2443,22 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if self._is_restoring_workflow_state:
             return
         payload = self._build_workflow_state_payload()
+        map_config_file = payload.get("map_config_file")
+        map_config_file_value = map_config_file.strip() if isinstance(map_config_file, str) and map_config_file.strip() else None
+        map_config_inline = payload.get("map_config_inline")
+        if map_config_file_value is None and map_config_inline is None:
+            previous_payload = _load_json_dict(self._workflow_state_file)
+            previous_map_config_file = previous_payload.get("map_config_file")
+            previous_map_config_inline = previous_payload.get("map_config_inline")
+            previous_map_config_file_value = (
+                previous_map_config_file.strip()
+                if isinstance(previous_map_config_file, str) and previous_map_config_file.strip()
+                else None
+            )
+            if previous_map_config_file_value is not None or previous_map_config_inline is not None:
+                payload["map_config_file"] = previous_map_config_file
+                payload["map_config_inline"] = previous_map_config_inline
+
         _diag_log(
             "persistiere Workflow-State: "
             f"selected_map_config_file={self._selected_map_config_file!r}, "
@@ -2526,10 +2545,18 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             if mission.map_config is not None:
                 self._selected_map_config = mission.map_config
                 self._selected_map_config_file = map_config_file_value if loaded_map_config_from_file else None
+            elif self._selected_map_config is not None:
+                self._mission = replace(self._mission, map_config=self._selected_map_config)
             else:
                 _diag_log(
                     "mission.map_config ist None beim Restore; bestehende Map-Selection bleibt unverändert."
                 )
+
+            if self._mission is not None and self._mission.map_config != self._selected_map_config:
+                if self._selected_map_config is not None:
+                    self._mission = replace(self._mission, map_config=self._selected_map_config)
+                elif self._mission.map_config is not None:
+                    self._selected_map_config = self._mission.map_config
             rx_position = self._parse_rx_antenna_global_position(payload.get("rx_antenna_global_position"))
             if rx_position is None:
                 self._clear_rx_antenna_position(persist=False)
