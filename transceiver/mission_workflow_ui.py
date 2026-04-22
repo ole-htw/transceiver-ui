@@ -57,6 +57,11 @@ LIDAR_OVERLAY_CELL_SIZE_PX = 3.0
 LIDAR_OVERLAY_MAX_BEAMS_PER_CELL = 1
 MEASUREMENT_START_LIVE_POSITION_WAIT_TIMEOUT_S = 1.6
 MEASUREMENT_START_LIVE_POSITION_WAIT_INTERVAL_S = 0.1
+LIVE_ECHO_CACHE_POSITION_DELTA_M = 0.015
+LIVE_ECHO_CACHE_DISTANCE_DELTA_M = 0.02
+LIVE_ECHO_SAMPLING_NORMAL = (24, 32, 48)
+LIVE_ECHO_SAMPLING_REDUCED = (16, 24, 32)
+
 
 
 def _load_json_dict(path: Path) -> dict[str, Any]:
@@ -472,6 +477,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._selected_result_indices: tuple[int, ...] = ()
         self._lidar_reference_scan_cache: dict[str, dict[str, Any] | None] = {}
         self._ellipse_unit_circle_cache: dict[int, tuple[tuple[float, float], ...]] = {}
+        self._live_echo_geometry_cache: dict[str, dict[str, Any]] = {}
         self._last_live_diagnosis_key: str | None = None
         self._emit_live_diagnostics_to_validation = True
         self._rx_antenna_global_position: tuple[float, float] | None = None
@@ -825,6 +831,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "heading": None,
         }
         self._static_map_layer_signature = None
+        self._invalidate_live_echo_geometry_cache()
         self._map_image_size = None
         self._live_position = None
         self._live_position_received_at = None
@@ -1283,6 +1290,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "heading": None,
         }
         self._static_map_layer_signature = None
+        self._invalidate_live_echo_geometry_cache()
         self.map_preview_canvas.create_text(
             20,
             20,
@@ -1346,6 +1354,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "marker": None,
             "heading": None,
         }
+        self._invalidate_live_echo_geometry_cache()
         self._map_canvas_image_id = self.map_preview_canvas.create_image(offset_x, offset_y, anchor="nw", image=preview)
         self._draw_mission_markers()
         self._draw_pending_nav2point_marker()
@@ -1374,6 +1383,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                         pass
                     echo_slots.pop(slot_name, None)
             self._live_overlay_item_ids["echo_slots"] = {}
+            self._invalidate_live_echo_geometry_cache()
         for key in ("marker", "heading"):
             if key not in components:
                 continue
@@ -1639,6 +1649,114 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._selected_result_index = selected_indices[0] if selected_indices else None
         self._draw_map_preview()
 
+    def _invalidate_live_echo_geometry_cache(self) -> None:
+        self._live_echo_geometry_cache = {}
+
+    @staticmethod
+    def _live_echo_sampling_levels(*, reduced: bool) -> tuple[int, int, int]:
+        return LIVE_ECHO_SAMPLING_REDUCED if reduced else LIVE_ECHO_SAMPLING_NORMAL
+
+    def _should_reduce_live_echo_sampling(self) -> bool:
+        last_redraw_ts = self._last_live_redraw_ts
+        if last_redraw_ts is None:
+            return False
+        target_period_s = 1.0 / max(1, LIVE_PREVIEW_TARGET_FPS)
+        redraw_gap_s = time.time() - last_redraw_ts
+        return redraw_gap_s < (target_period_s * 0.8)
+
+    def _build_live_echo_cache_key(
+        self,
+        *,
+        rx_position: tuple[float, float],
+        measurement_position: tuple[float, float],
+        echo_distance_m: float,
+        resolution: float,
+        image_height: int,
+    ) -> tuple[float, ...]:
+        scale_x, scale_y = self._map_preview_scale
+        offset_x, offset_y = self._map_preview_offset
+        return (
+            float(rx_position[0]),
+            float(rx_position[1]),
+            float(measurement_position[0]),
+            float(measurement_position[1]),
+            float(echo_distance_m),
+            float(scale_x),
+            float(scale_y),
+            float(offset_x),
+            float(offset_y),
+            float(resolution),
+            float(image_height),
+        )
+
+    def _can_reuse_live_echo_cache(self, previous_key: tuple[float, ...], new_key: tuple[float, ...]) -> bool:
+        if len(previous_key) != len(new_key) or len(new_key) != 11:
+            return False
+        if previous_key[5:] != new_key[5:]:
+            return False
+        position_deltas = (
+            abs(previous_key[0] - new_key[0]),
+            abs(previous_key[1] - new_key[1]),
+            abs(previous_key[2] - new_key[2]),
+            abs(previous_key[3] - new_key[3]),
+        )
+        if any(delta > LIVE_ECHO_CACHE_POSITION_DELTA_M for delta in position_deltas):
+            return False
+        if abs(previous_key[4] - new_key[4]) > LIVE_ECHO_CACHE_DISTANCE_DELTA_M:
+            return False
+        return True
+
+    def _build_live_echo_overlay_preview_points_cached(
+        self,
+        *,
+        slot_name: str,
+        rx_position: tuple[float, float],
+        measurement_position: tuple[float, float],
+        echo_distance_m: float,
+        reduced_sampling: bool,
+    ) -> tuple[list[float] | None, int]:
+        mission = self._mission
+        original = self._map_image_original
+        if mission is None or mission.map_config is None or original is None:
+            return (None, 1)
+        resolution = mission.map_config.resolution
+        if not math.isfinite(resolution) or resolution <= 0.0:
+            return (None, 1)
+        cache_key = self._build_live_echo_cache_key(
+            rx_position=rx_position,
+            measurement_position=measurement_position,
+            echo_distance_m=echo_distance_m,
+            resolution=float(resolution),
+            image_height=original.height(),
+        )
+        cached = self._live_echo_geometry_cache.get(slot_name)
+        if isinstance(cached, dict):
+            previous_key = cached.get("key")
+            previous_points = cached.get("points")
+            previous_line_width = cached.get("line_width")
+            if (
+                isinstance(previous_key, tuple)
+                and isinstance(previous_points, list)
+                and isinstance(previous_line_width, int)
+                and self._can_reuse_live_echo_cache(previous_key, cache_key)
+            ):
+                return (list(previous_points), previous_line_width)
+        preview_points, line_width = self._build_echo_overlay_preview_points(
+            rx_position=rx_position,
+            measurement_position=measurement_position,
+            echo_distance_m=echo_distance_m,
+            sample_levels=self._live_echo_sampling_levels(reduced=reduced_sampling),
+        )
+        if preview_points is None:
+            self._live_echo_geometry_cache.pop(slot_name, None)
+            return (None, line_width)
+        self._live_echo_geometry_cache[slot_name] = {
+            "key": cache_key,
+            "points": list(preview_points),
+            "line_width": int(line_width),
+        }
+        return (preview_points, line_width)
+
     def _draw_selected_echo_overlay(self) -> None:
         rx_position = self._rx_antenna_global_position
         if rx_position is None:
@@ -1690,15 +1808,18 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if not isinstance(echo_slots, dict):
             echo_slots = {}
             self._live_overlay_item_ids["echo_slots"] = echo_slots
+        reduced_sampling = self._should_reduce_live_echo_sampling()
         active_slot_names: set[str] = set()
         for echo_index, echo_distance in enumerate(echo_distances):
             slot_name = f"echo_{echo_index}"
             active_slot_names.add(slot_name)
             color = ECHO_OVERLAY_COLORS[echo_index % len(ECHO_OVERLAY_COLORS)]
-            preview_points, line_width = self._build_echo_overlay_preview_points(
+            preview_points, line_width = self._build_live_echo_overlay_preview_points_cached(
+                slot_name=slot_name,
                 rx_position=rx_position,
                 measurement_position=measurement_position,
                 echo_distance_m=echo_distance,
+                reduced_sampling=reduced_sampling,
             )
             if preview_points is None:
                 existing_item_id = echo_slots.get(slot_name)
@@ -1750,6 +1871,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         obsolete_slot_names = [slot_name for slot_name in echo_slots if slot_name not in active_slot_names]
         for slot_name in obsolete_slot_names:
             item_id = echo_slots.pop(slot_name, None)
+            self._live_echo_geometry_cache.pop(slot_name, None)
             if not isinstance(item_id, int):
                 continue
             try:
@@ -1823,6 +1945,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         rx_position: tuple[float, float],
         measurement_position: tuple[float, float],
         echo_distance_m: float,
+        sample_levels: tuple[int, int, int] = LIVE_ECHO_SAMPLING_NORMAL,
     ) -> tuple[list[float] | None, int]:
         mission = self._mission
         original = self._map_image_original
@@ -1859,12 +1982,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if not math.isfinite(preview_scale_factor) or preview_scale_factor <= 0.0:
             preview_scale_factor = 1.0
         ellipse_size_px = (semi_major_axis / resolution) * preview_scale_factor
+        small_samples, medium_samples, large_samples = sample_levels
         if ellipse_size_px < 40.0:
-            samples = 24
+            samples = small_samples
         elif ellipse_size_px < 130.0:
-            samples = 32
+            samples = medium_samples
         else:
-            samples = 48
+            samples = large_samples
         unit_circle_points = self._ellipse_unit_circle_points(samples=samples)
         center_x = (rx_x + point_x) / 2.0
         center_y = (rx_y + point_y) / 2.0
