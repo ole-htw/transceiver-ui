@@ -58,11 +58,74 @@ def find_los_echo_from_mag(
         mag,
         peaks_before=0,
         peaks_after=1,
-        min_rel_height=0.3,
+        min_rel_height=0.1,
+        repetition_period_samples=repetition_period_samples,
+    )
+    echo_indices = filter_echo_indices_by_noise_prominence(
+        mag,
+        los_idx=los_idx,
+        echo_indices=echo_indices,
         repetition_period_samples=repetition_period_samples,
     )
     echo_idx = echo_indices[0] if echo_indices else None
     return los_idx, echo_idx
+
+
+def filter_echo_indices_by_noise_prominence(
+    mag: np.ndarray,
+    *,
+    los_idx: int | None,
+    echo_indices: list[int],
+    repetition_period_samples: int | None = None,
+    noise_sigma_factor: float = 4.0,
+) -> list[int]:
+    """Keep echo peaks that stand out from local background noise.
+
+    The filtering does not depend on LOS peak height. Instead it compares each
+    candidate echo against a robust local baseline (median) and local noise
+    spread (MAD-scaled sigma estimate).
+    """
+    if mag.size == 0 or not echo_indices:
+        return []
+
+    los_idx_int = int(los_idx) if los_idx is not None else None
+    cleaned_indices = sorted(
+        {
+            int(idx)
+            for idx in echo_indices
+            if 0 <= int(idx) < mag.size and (los_idx_int is None or int(idx) > los_idx_int)
+        }
+    )
+    if not cleaned_indices:
+        return []
+
+    if repetition_period_samples is not None and repetition_period_samples > 1:
+        half_window = max(8, int(round(float(repetition_period_samples) / 8.0)))
+    else:
+        half_window = max(8, mag.size // 40)
+
+    min_points = 5
+    filtered: list[int] = []
+    for idx in cleaned_indices:
+        left = max(0, idx - half_window)
+        right = min(mag.size, idx + half_window + 1)
+        local = np.asarray(mag[left:right], dtype=float)
+        if local.size < min_points:
+            continue
+        local_baseline = float(np.median(local))
+        mad = float(np.median(np.abs(local - local_baseline)))
+        noise_sigma = 1.4826 * mad
+
+        prominence = float(mag[idx]) - local_baseline
+        if prominence <= 0.0:
+            continue
+        if noise_sigma <= 1e-12:
+            if prominence > 0.0:
+                filtered.append(int(idx))
+            continue
+        if prominence >= max(0.0, float(noise_sigma_factor)) * noise_sigma:
+            filtered.append(int(idx))
+    return filtered
 
 
 def classify_peak_group(
