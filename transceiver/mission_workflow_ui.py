@@ -463,6 +463,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._measurement_start_live_position_event = threading.Event()
         self._selected_point_index: int | None = None
         self._selected_result_index: int | None = None
+        self._selected_result_indices: tuple[int, ...] = ()
         self._lidar_reference_scan_cache: dict[str, dict[str, Any] | None] = {}
         self._last_live_diagnosis_key: str | None = None
         self._emit_live_diagnostics_to_validation = True
@@ -657,7 +658,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "echo_5_m",
             "status",
         )
-        self.results_table = ttk.Treeview(table_frame, columns=columns, show="headings", height=14)
+        self.results_table = ttk.Treeview(
+            table_frame,
+            columns=columns,
+            show="headings",
+            height=14,
+            selectmode="extended",
+        )
         self.results_table.grid(row=0, column=0, sticky="nsew")
         headings = {
             "measurement_idx": "Messung",
@@ -1462,39 +1469,45 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         selected = self.results_table.selection()
         if not selected:
             self._selected_result_index = None
+            self._selected_result_indices = ()
             self._draw_map_preview()
             return
-        selected_index = self.results_table.index(selected[0])
-        self._selected_result_index = selected_index if selected_index >= 0 else None
+        selected_indices = tuple(
+            sorted(
+                idx
+                for idx in (self.results_table.index(item_id) for item_id in selected)
+                if idx >= 0
+            )
+        )
+        self._selected_result_indices = selected_indices
+        self._selected_result_index = selected_indices[0] if selected_indices else None
         self._draw_map_preview()
 
     def _draw_selected_echo_overlay(self) -> None:
-        record = self._selected_record_payload()
-        if record is None:
-            return
         rx_position = self._rx_antenna_global_position
         if rx_position is None:
             return
-        measurement_position = self._selected_record_measurement_position(record)
-        if measurement_position is None:
-            return
-        measurement = record.get("measurement")
-        if not isinstance(measurement, dict):
-            return
-        result = measurement.get("result")
-        if not isinstance(result, dict):
-            return
-        echo_distances = self._extract_echo_distances(result.get("echo_delays"), limit=len(ECHO_OVERLAY_COLORS))
-        if not echo_distances:
-            return
-        for echo_index, echo_distance in enumerate(echo_distances):
-            color = ECHO_OVERLAY_COLORS[echo_index % len(ECHO_OVERLAY_COLORS)]
-            self._draw_echo_ellipse_for_overlay(
-                rx_position=rx_position,
-                measurement_position=measurement_position,
-                echo_distance_m=echo_distance,
-                color=color,
-            )
+        for record in self._selected_record_payloads():
+            measurement_position = self._selected_record_measurement_position(record)
+            if measurement_position is None:
+                continue
+            measurement = record.get("measurement")
+            if not isinstance(measurement, dict):
+                continue
+            result = measurement.get("result")
+            if not isinstance(result, dict):
+                continue
+            echo_distances = self._extract_echo_distances(result.get("echo_delays"), limit=len(ECHO_OVERLAY_COLORS))
+            if not echo_distances:
+                continue
+            for echo_index, echo_distance in enumerate(echo_distances):
+                color = ECHO_OVERLAY_COLORS[echo_index % len(ECHO_OVERLAY_COLORS)]
+                self._draw_echo_ellipse_for_overlay(
+                    rx_position=rx_position,
+                    measurement_position=measurement_position,
+                    echo_distance_m=echo_distance,
+                    color=color,
+                )
 
     def _draw_live_echo_preview_overlay(self) -> None:
         if not bool(self.live_preview_enabled_var.get()):
@@ -1690,6 +1703,21 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             return None
         payload = self._records[selected_idx]
         return payload if isinstance(payload, dict) else None
+
+    def _selected_record_payloads(self) -> list[dict[str, Any]]:
+        selected_indices = getattr(self, "_selected_result_indices", ())
+        if not selected_indices:
+            selected_payload = self._selected_record_payload()
+            return [selected_payload] if selected_payload is not None else []
+
+        payloads: list[dict[str, Any]] = []
+        for selected_idx in selected_indices:
+            if selected_idx < 0 or selected_idx >= len(self._records):
+                continue
+            payload = self._records[selected_idx]
+            if isinstance(payload, dict):
+                payloads.append(payload)
+        return payloads
 
     def _load_lidar_scan_for_overlay(self, lidar_file: str) -> dict[str, Any] | None:
         if lidar_file in self._lidar_reference_scan_cache:
@@ -2423,6 +2451,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.results_table.delete(*self.results_table.get_children())
         self._records = []
         self._selected_result_index = None
+        self._selected_result_indices = ()
         self._run_started_at = time.time()
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         self._run_log_dir = Path("signals") / "mission-runs" / ts

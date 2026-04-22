@@ -172,6 +172,36 @@ def test_draw_selected_echo_overlay_uses_live_measurement_position() -> None:
     assert calls[0]["measurement_position"] == (7.0, -2.0)
 
 
+def test_draw_selected_echo_overlay_renders_all_selected_results() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._selected_result_index = 0
+    window._selected_result_indices = (0, 1)
+    window._records = [
+        {
+            "point_index": 0,
+            "live_position_at_measurement": {"x": 7.0, "y": -2.0},
+            "measurement": {"result": {"echo_delays": [{"distance_m": 3.0}]}},
+        },
+        {
+            "point_index": 1,
+            "live_position_at_measurement": {"x": 8.0, "y": -1.0},
+            "measurement": {"result": {"echo_delays": [{"distance_m": 4.0}]}},
+        },
+    ]
+    window._rx_antenna_global_position = (1.0, 1.0)
+    window._mission_points = [
+        MeasurementPoint(id="p0", name="P0", x=50.0, y=50.0, yaw=0.0),
+        MeasurementPoint(id="p1", name="P1", x=60.0, y=60.0, yaw=0.0),
+    ]
+    calls: list[dict[str, object]] = []
+    window._draw_echo_ellipse_for_overlay = lambda **kwargs: calls.append(kwargs)
+
+    window._draw_selected_echo_overlay()
+
+    assert len(calls) == 2
+    assert {call["measurement_position"] for call in calls} == {(7.0, -2.0), (8.0, -1.0)}
+
+
 def test_selected_record_overlay_point_prefers_live_yaw() -> None:
     window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
     window._mission_points = [MeasurementPoint(id="p0", name="P0", x=50.0, y=50.0, yaw=0.5)]
