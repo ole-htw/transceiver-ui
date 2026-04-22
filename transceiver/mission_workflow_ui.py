@@ -52,6 +52,11 @@ LIVE_PREVIEW_FALLBACK_REDRAW_AFTER_S = 1.0
 AUTO_STOP_CONTINUOUS_BEFORE_RUN = True
 ECHO_OVERLAY_COLORS = ("#ef5350", "#42a5f5", "#66bb6a", "#ffca28", "#ab47bc")
 ECHO_HEADING_MARKERS = ("🟥", "🟦", "🟩", "🟨", "🟪")
+ECHO_OVERLAY_SAMPLES_MIN = 24
+ECHO_OVERLAY_SAMPLES_MAX = 48
+ECHO_OVERLAY_BASE_REFERENCE_PX = 800.0
+ECHO_OVERLAY_DEBUG_PROFILE = False
+ECHO_OVERLAY_LIVE_TOP_N_DEFAULT = 3
 LIDAR_OVERLAY_MAX_DRAWN_BEAMS = 450
 LIDAR_OVERLAY_CELL_SIZE_PX = 3.0
 LIDAR_OVERLAY_MAX_BEAMS_PER_CELL = 1
@@ -332,6 +337,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.live_pose_stream_enabled_var = tk.BooleanVar(value=False)
         self.live_preview_enabled_var = tk.BooleanVar(value=False)
         self._live_pose_stream_active = False
+        self._echo_unit_circle_cache: dict[int, tuple[tuple[float, float], ...]] = {}
+        self._echo_overlay_profile_enabled = ECHO_OVERLAY_DEBUG_PROFILE
+        self._live_echo_overlay_top_n = ECHO_OVERLAY_LIVE_TOP_N_DEFAULT
 
         self._build_ui()
         self._restore_workflow_state()
@@ -1319,6 +1327,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._map_image_preview = preview
         self._map_preview_scale = (preview.width() / original.width(), preview.height() / original.height())
         self._map_preview_offset = (offset_x, offset_y)
+        overlay_profile_start = time.perf_counter() if self._echo_overlay_profile_enabled else None
 
         self.map_preview_canvas.delete("all")
         self._live_overlay_item_ids = []
@@ -1335,6 +1344,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._clear_live_overlay_layer()
         self._draw_live_echo_preview_overlay()
         self._draw_live_marker()
+        if overlay_profile_start is not None:
+            overlay_elapsed_ms = (time.perf_counter() - overlay_profile_start) * 1000.0
+            print(f"[mission-workflow] map preview frame render: {overlay_elapsed_ms:.2f} ms")
 
     def _clear_live_overlay_layer(self) -> None:
         if not self._live_overlay_item_ids:
@@ -1634,7 +1646,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         measurement_position = (float(x_value), float(y_value))
         if not math.isfinite(measurement_position[0]) or not math.isfinite(measurement_position[1]):
             return
-        echo_distances = self._get_live_preview_echo_distances(limit=len(ECHO_OVERLAY_COLORS))
+        limit = min(len(ECHO_OVERLAY_COLORS), max(1, int(self._live_echo_overlay_top_n)))
+        echo_distances = self._get_live_preview_echo_distances(limit=limit)
         if not echo_distances:
             return
         for echo_index, echo_distance in enumerate(echo_distances):
@@ -1695,8 +1708,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
     def _extract_echo_distances(value: Any, *, limit: int) -> list[float]:
         if not isinstance(value, list) or limit <= 0:
             return []
+        ranked: list[tuple[float, float]] = []
         distances: list[float] = []
-        for item in value[:limit]:
+        for item in value:
             if not isinstance(item, dict):
                 continue
             distance_m = item.get("distance_m")
@@ -1705,8 +1719,44 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             numeric = float(distance_m)
             if not math.isfinite(numeric) or numeric <= 0.0:
                 continue
-            distances.append(numeric)
-        return distances
+            signal_strength = item.get("signal_strength")
+            if not isinstance(signal_strength, (int, float)):
+                signal_strength = item.get("strength")
+            if not isinstance(signal_strength, (int, float)):
+                signal_strength = item.get("snr")
+            if not isinstance(signal_strength, (int, float)):
+                signal_strength = item.get("power")
+            strength_value = float(signal_strength) if isinstance(signal_strength, (int, float)) else float("-inf")
+            ranked.append((strength_value, numeric))
+        if ranked and any(math.isfinite(strength) for strength, _ in ranked):
+            ranked.sort(key=lambda entry: entry[0], reverse=True)
+            distances.extend(distance for _, distance in ranked[:limit])
+            return distances
+        return [distance for _, distance in ranked[:limit]]
+
+    def _echo_overlay_samples_for_current_view(self) -> int:
+        preview = self._map_image_preview
+        if preview is None:
+            return ECHO_OVERLAY_SAMPLES_MAX
+        dominant_size = max(float(preview.width()), float(preview.height()), 1.0)
+        normalized = min(1.0, dominant_size / ECHO_OVERLAY_BASE_REFERENCE_PX)
+        sample_span = ECHO_OVERLAY_SAMPLES_MAX - ECHO_OVERLAY_SAMPLES_MIN
+        adaptive_samples = ECHO_OVERLAY_SAMPLES_MIN + int(round(sample_span * normalized))
+        return max(ECHO_OVERLAY_SAMPLES_MIN, min(ECHO_OVERLAY_SAMPLES_MAX, adaptive_samples))
+
+    def _cached_unit_ellipse_points(self, samples: int) -> tuple[tuple[float, float], ...]:
+        cached = self._echo_unit_circle_cache.get(samples)
+        if cached is not None:
+            return cached
+        points = tuple(
+            (
+                math.cos((2.0 * math.pi * idx) / samples),
+                math.sin((2.0 * math.pi * idx) / samples),
+            )
+            for idx in range(samples + 1)
+        )
+        self._echo_unit_circle_cache[samples] = points
+        return points
 
     def _draw_echo_ellipse_for_overlay(
         self,
@@ -1749,19 +1799,20 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         angle = math.atan2(point_y - rx_y, point_x - rx_x)
         cos_angle = math.cos(angle)
         sin_angle = math.sin(angle)
-        samples = 64
+        samples = self._echo_overlay_samples_for_current_view()
+        unit_points = self._cached_unit_ellipse_points(samples)
+        scale_x, scale_y = self._map_preview_scale
+        offset_x, offset_y = self._map_preview_offset
+        image_height = original.height()
         preview_points: list[float] = []
-        for idx in range(samples + 1):
-            t = (2.0 * math.pi * idx) / samples
-            local_x = semi_major_axis * math.cos(t)
-            local_y = semi_minor_axis * math.sin(t)
+        for unit_cos, unit_sin in unit_points:
+            local_x = semi_major_axis * unit_cos
+            local_y = semi_minor_axis * unit_sin
             world_x = center_x + local_x * cos_angle - local_y * sin_angle
             world_y = center_y + local_x * sin_angle + local_y * cos_angle
-            map_pixel = self._world_to_map_pixel(x=world_x, y=world_y, image_height=original.height())
+            map_pixel = self._world_to_map_pixel(x=world_x, y=world_y, image_height=image_height)
             if map_pixel is None:
                 continue
-            scale_x, scale_y = self._map_preview_scale
-            offset_x, offset_y = self._map_preview_offset
             preview_points.extend(
                 (
                     map_pixel[0] * scale_x + offset_x,
@@ -3171,15 +3222,37 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             return []
         if not isinstance(payload, list):
             return []
+        ranked: list[tuple[float, float]] = []
         distances: list[float] = []
-        for value in payload[:limit]:
+        for value in payload:
+            if isinstance(value, dict):
+                distance_m = value.get("distance_m")
+                if not isinstance(distance_m, (int, float)):
+                    continue
+                numeric = float(distance_m)
+                if not math.isfinite(numeric) or numeric <= 0.0:
+                    continue
+                signal_strength = value.get("signal_strength")
+                if not isinstance(signal_strength, (int, float)):
+                    signal_strength = value.get("strength")
+                if not isinstance(signal_strength, (int, float)):
+                    signal_strength = value.get("snr")
+                if not isinstance(signal_strength, (int, float)):
+                    signal_strength = value.get("power")
+                strength_value = float(signal_strength) if isinstance(signal_strength, (int, float)) else float("-inf")
+                ranked.append((strength_value, numeric))
+                continue
             if not isinstance(value, (int, float)):
                 continue
             numeric = float(value)
             if not math.isfinite(numeric) or numeric <= 0.0:
                 continue
-            distances.append(numeric)
-        return distances
+            ranked.append((float("-inf"), numeric))
+        if ranked and any(math.isfinite(strength) for strength, _ in ranked):
+            ranked.sort(key=lambda entry: entry[0], reverse=True)
+            distances.extend(distance for _, distance in ranked[:limit])
+            return distances
+        return [distance for _, distance in ranked[:limit]]
 
     def _is_continuous_active(self) -> bool:
         cont_thread = getattr(self.master, "_cont_thread", None)
