@@ -12,7 +12,6 @@ import re
 from fractions import Fraction
 from pathlib import Path
 import json
-import os
 from tkinter import filedialog, messagebox, ttk
 import tkinter as tk
 from typing import Any, Callable
@@ -60,10 +59,6 @@ MEASUREMENT_START_LIVE_POSITION_WAIT_INTERVAL_S = 0.1
 MAP_LAYER_BASE_TAG = "map_base"
 MAP_LAYER_STATIC_OVERLAY_TAG = "static_overlay"
 MAP_LAYER_LIVE_OVERLAY_TAG = "live_overlay"
-ECHO_OVERLAY_MIN_SAMPLES = 24
-ECHO_OVERLAY_MAX_SAMPLES = 48
-ECHO_OVERLAY_MAX_LIVE_ECHOS = 3
-ECHO_OVERLAY_PROFILE_DEBUG = os.getenv("TRANSCEIVER_ECHO_OVERLAY_PROFILE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _load_json_dict(path: Path) -> dict[str, Any]:
@@ -475,8 +470,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._last_live_diagnosis_key: str | None = None
         self._emit_live_diagnostics_to_validation = True
         self._rx_antenna_global_position: tuple[float, float] | None = None
-        self._echo_unit_ellipse_cache: dict[int, tuple[tuple[float, float], ...]] = {}
-        self._echo_overlay_profile_debug = ECHO_OVERLAY_PROFILE_DEBUG
         self._rx_antenna_map_pick_mode_enabled = False
         self._waypoint_map_pick_mode_enabled = False
         self._waypoint_drag_start_preview: tuple[float, float] | None = None
@@ -1297,12 +1290,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _draw_live_overlay(self) -> None:
         self.map_preview_canvas.delete(MAP_LAYER_LIVE_OVERLAY_TAG)
-        start_ts = time.perf_counter() if self._echo_overlay_profile_debug else 0.0
         self._draw_live_echo_preview_overlay()
         self._draw_live_marker()
-        if self._echo_overlay_profile_debug:
-            elapsed_ms = (time.perf_counter() - start_ts) * 1000.0
-            print(f"[echo-overlay] live overlay frame: {elapsed_ms:.2f} ms")
         self._last_live_redraw_ts = time.time()
 
     def _draw_rx_antenna_marker(self) -> None:
@@ -1612,20 +1601,10 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         measurement_position = (float(x_value), float(y_value))
         if not math.isfinite(measurement_position[0]) or not math.isfinite(measurement_position[1]):
             return
-        echo_candidates = self._get_live_preview_echo_candidates(limit=len(ECHO_OVERLAY_COLORS))
-        if not echo_candidates:
+        echo_distances = self._get_live_preview_echo_distances(limit=len(ECHO_OVERLAY_COLORS))
+        if not echo_distances:
             return
-        max_live = ECHO_OVERLAY_MAX_LIVE_ECHOS
-        if max_live > 0 and len(echo_candidates) > max_live:
-            if any(strength is not None for _, strength in echo_candidates):
-                echo_candidates = sorted(
-                    echo_candidates,
-                    key=lambda item: item[1] if item[1] is not None else float("-inf"),
-                    reverse=True,
-                )[:max_live]
-            else:
-                echo_candidates = echo_candidates[:max_live]
-        for echo_index, (echo_distance, _strength) in enumerate(echo_candidates):
+        for echo_index, echo_distance in enumerate(echo_distances):
             color = ECHO_OVERLAY_COLORS[echo_index % len(ECHO_OVERLAY_COLORS)]
             self._draw_echo_ellipse_for_overlay(
                 rx_position=rx_position,
@@ -1679,60 +1658,21 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         return MeasurementPoint(id=None, name=None, x=x, y=y, yaw=yaw)
 
     @staticmethod
-    def _extract_echo_candidates(value: Any, *, limit: int) -> list[tuple[float, float | None]]:
+    def _extract_echo_distances(value: Any, *, limit: int) -> list[float]:
         if not isinstance(value, list) or limit <= 0:
             return []
-        candidates: list[tuple[float, float | None]] = []
-        strength_keys = ("signal_strength", "strength", "amplitude", "power_db", "snr_db")
+        distances: list[float] = []
         for item in value[:limit]:
-            strength: float | None = None
-            if isinstance(item, dict):
-                distance_value = item.get("distance_m")
-                for key in strength_keys:
-                    raw_strength = item.get(key)
-                    if isinstance(raw_strength, (int, float)) and math.isfinite(float(raw_strength)):
-                        strength = float(raw_strength)
-                        break
-            elif isinstance(item, (int, float)):
-                distance_value = item
-            else:
+            if not isinstance(item, dict):
                 continue
-            if not isinstance(distance_value, (int, float)):
+            distance_m = item.get("distance_m")
+            if not isinstance(distance_m, (int, float)):
                 continue
-            numeric_distance = float(distance_value)
-            if not math.isfinite(numeric_distance) or numeric_distance <= 0.0:
+            numeric = float(distance_m)
+            if not math.isfinite(numeric) or numeric <= 0.0:
                 continue
-            candidates.append((numeric_distance, strength))
-        return candidates
-
-    @staticmethod
-    def _extract_echo_distances(value: Any, *, limit: int) -> list[float]:
-        return [distance for distance, _ in MissionWorkflowWindow._extract_echo_candidates(value, limit=limit)]
-
-    def _get_unit_ellipse_points(self, samples: int) -> tuple[tuple[float, float], ...]:
-        cached = self._echo_unit_ellipse_cache.get(samples)
-        if cached is not None:
-            return cached
-        points: list[tuple[float, float]] = []
-        for idx in range(samples + 1):
-            t = (2.0 * math.pi * idx) / samples
-            points.append((math.cos(t), math.sin(t)))
-        cached = tuple(points)
-        self._echo_unit_ellipse_cache[samples] = cached
-        return cached
-
-    def _adaptive_echo_samples(self) -> int:
-        min_samples = ECHO_OVERLAY_MIN_SAMPLES
-        max_samples = ECHO_OVERLAY_MAX_SAMPLES
-        if max_samples <= min_samples:
-            return min_samples
-        canvas_width = max(1, self.map_preview_canvas.winfo_width())
-        canvas_height = max(1, self.map_preview_canvas.winfo_height())
-        max_scale = max(self._map_preview_scale)
-        canvas_factor = min(1.0, max(canvas_width, canvas_height) / 1000.0)
-        zoom_factor = min(1.0, max(0.0, (max_scale - 0.3) / 0.8))
-        quality = 0.55 * zoom_factor + 0.45 * canvas_factor
-        return int(round(min_samples + (max_samples - min_samples) * quality))
+            distances.append(numeric)
+        return distances
 
     def _draw_echo_ellipse_for_overlay(
         self,
@@ -1776,21 +1716,25 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         angle = math.atan2(point_y - rx_y, point_x - rx_x)
         cos_angle = math.cos(angle)
         sin_angle = math.sin(angle)
-        samples = self._adaptive_echo_samples()
-        unit_points = self._get_unit_ellipse_points(samples)
-        scale_x, scale_y = self._map_preview_scale
-        offset_x, offset_y = self._map_preview_offset
-        image_height = original.height()
+        samples = 64
         preview_points: list[float] = []
-        for unit_x, unit_y in unit_points:
-            local_x = semi_major_axis * unit_x
-            local_y = semi_minor_axis * unit_y
+        for idx in range(samples + 1):
+            t = (2.0 * math.pi * idx) / samples
+            local_x = semi_major_axis * math.cos(t)
+            local_y = semi_minor_axis * math.sin(t)
             world_x = center_x + local_x * cos_angle - local_y * sin_angle
             world_y = center_y + local_x * sin_angle + local_y * cos_angle
-            map_pixel = self._world_to_map_pixel(x=world_x, y=world_y, image_height=image_height)
+            map_pixel = self._world_to_map_pixel(x=world_x, y=world_y, image_height=original.height())
             if map_pixel is None:
                 continue
-            preview_points.extend((map_pixel[0] * scale_x + offset_x, map_pixel[1] * scale_y + offset_y))
+            scale_x, scale_y = self._map_preview_scale
+            offset_x, offset_y = self._map_preview_offset
+            preview_points.extend(
+                (
+                    map_pixel[0] * scale_x + offset_x,
+                    map_pixel[1] * scale_y + offset_y,
+                )
+        )
         if len(preview_points) < 6:
             return
         line_width = max(1, int(round((echo_distance_m / resolution) * self._map_preview_scale[0] * 0.03)))
@@ -3087,7 +3031,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _get_live_preview_echo_candidates(self, *, limit: int) -> list[tuple[float, float | None]]:
+    def _get_live_preview_echo_distances(self, *, limit: int) -> list[float]:
         if limit <= 0:
             return []
         getter = getattr(self.master, "get_live_echo_distances_for_mission_preview", None)
@@ -3097,10 +3041,17 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             payload = getter(limit=limit)
         except Exception:
             return []
-        return self._extract_echo_candidates(payload, limit=limit)
-
-    def _get_live_preview_echo_distances(self, *, limit: int) -> list[float]:
-        return [distance for distance, _ in self._get_live_preview_echo_candidates(limit=limit)]
+        if not isinstance(payload, list):
+            return []
+        distances: list[float] = []
+        for value in payload[:limit]:
+            if not isinstance(value, (int, float)):
+                continue
+            numeric = float(value)
+            if not math.isfinite(numeric) or numeric <= 0.0:
+                continue
+            distances.append(numeric)
+        return distances
 
     def _is_continuous_active(self) -> bool:
         cont_thread = getattr(self.master, "_cont_thread", None)
