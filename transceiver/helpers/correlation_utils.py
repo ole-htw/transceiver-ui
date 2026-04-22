@@ -58,7 +58,7 @@ def find_los_echo_from_mag(
         mag,
         peaks_before=0,
         peaks_after=1,
-        min_rel_height=0.1,
+        min_rel_height=0.0,
         repetition_period_samples=repetition_period_samples,
     )
     echo_indices = filter_echo_indices_by_noise_prominence(
@@ -261,6 +261,7 @@ def find_local_maxima_around_peak_from_mag(
         if (
             mag[i] >= mag[i - 1]
             and mag[i] >= mag[i + 1]
+            and (mag[i] > mag[i - 1] or mag[i] > mag[i + 1])
             and mag[i] >= min_height
         )
     ]

@@ -141,7 +141,7 @@ USE_SHARED_MEMORY = False
 SHM_SIZE_THRESHOLD_BYTES = 25 * 1024 * 1024  # 25 MB
 XCORR_EXTRA_PEAKS_BEFORE = 4
 XCORR_EXTRA_PEAKS_AFTER = 4
-XCORR_EXTRA_PEAK_MIN_REL_HEIGHT = 0.1
+XCORR_ECHO_PEAK_MIN_REL_HEIGHT = 0.0
 XCORR_LOS_PEAK_MIN_REL_HEIGHT = 0.3
 XCORR_EXTRA_PEAK_COLORS = (
     "#FFB300",
@@ -170,7 +170,7 @@ def _classify_visible_xcorr_peaks(
     repetition_period_samples: int,
     peaks_before: int = XCORR_EXTRA_PEAKS_BEFORE,
     peaks_after: int = XCORR_EXTRA_PEAKS_AFTER,
-    min_rel_height: float = XCORR_EXTRA_PEAK_MIN_REL_HEIGHT,
+    min_rel_height: float = XCORR_ECHO_PEAK_MIN_REL_HEIGHT,
     los_min_rel_height: float = XCORR_LOS_PEAK_MIN_REL_HEIGHT,
 ) -> tuple[int | None, int | None, list[int]]:
     """Return (highest_idx, los_idx, echo_indices) from visible local maxima."""
