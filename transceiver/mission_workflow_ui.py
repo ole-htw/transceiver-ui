@@ -453,7 +453,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._map_preview_offset: tuple[float, float] = (0.0, 0.0)
         self._map_canvas_image_id: int | None = None
         self._map_marker_ids: list[int] = []
-        self._live_overlay_item_ids: list[int] = []
+        self._live_overlay_item_ids: dict[str, Any] = {
+            "echo_slots": {},
+            "marker": None,
+            "heading": None,
+        }
         self._static_map_layer_signature: tuple[Any, ...] | None = None
         self._map_image_size: tuple[int, int] | None = None
         self._live_position: dict[str, Any] | None = None
@@ -815,7 +819,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._map_preview_offset = (0.0, 0.0)
         self._map_canvas_image_id = None
         self._map_marker_ids = []
-        self._live_overlay_item_ids = []
+        self._live_overlay_item_ids = {
+            "echo_slots": {},
+            "marker": None,
+            "heading": None,
+        }
         self._static_map_layer_signature = None
         self._map_image_size = None
         self._live_position = None
@@ -1269,7 +1277,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _render_map_placeholder(self, text: str) -> None:
         self.map_preview_canvas.delete("all")
-        self._live_overlay_item_ids = []
+        self._live_overlay_item_ids = {
+            "echo_slots": {},
+            "marker": None,
+            "heading": None,
+        }
         self._static_map_layer_signature = None
         self.map_preview_canvas.create_text(
             20,
@@ -1329,7 +1341,11 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._map_preview_offset = (offset_x, offset_y)
 
         self.map_preview_canvas.delete("all")
-        self._live_overlay_item_ids = []
+        self._live_overlay_item_ids = {
+            "echo_slots": {},
+            "marker": None,
+            "heading": None,
+        }
         self._map_canvas_image_id = self.map_preview_canvas.create_image(offset_x, offset_y, anchor="nw", image=preview)
         self._draw_mission_markers()
         self._draw_pending_nav2point_marker()
@@ -1340,19 +1356,36 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._draw_selected_lidar_reference_overlay()
 
     def _draw_live_overlay_layer(self) -> None:
-        self._clear_live_overlay_layer()
         self._draw_live_echo_preview_overlay()
         self._draw_live_marker()
 
-    def _clear_live_overlay_layer(self) -> None:
+    def _clear_live_overlay_layer(self, *, components: tuple[str, ...] = ("echo_slots", "marker", "heading")) -> None:
         if not self._live_overlay_item_ids:
             return
-        for item_id in self._live_overlay_item_ids:
+        if "echo_slots" in components:
+            echo_slots = self._live_overlay_item_ids.get("echo_slots")
+            if isinstance(echo_slots, dict):
+                for slot_name, item_id in list(echo_slots.items()):
+                    if not isinstance(item_id, int):
+                        continue
+                    try:
+                        self.map_preview_canvas.delete(item_id)
+                    except tk.TclError:
+                        pass
+                    echo_slots.pop(slot_name, None)
+            self._live_overlay_item_ids["echo_slots"] = {}
+        for key in ("marker", "heading"):
+            if key not in components:
+                continue
+            item_id = self._live_overlay_item_ids.get(key)
+            if not isinstance(item_id, int):
+                self._live_overlay_item_ids[key] = None
+                continue
             try:
                 self.map_preview_canvas.delete(item_id)
             except tk.TclError:
                 pass
-        self._live_overlay_item_ids = []
+            self._live_overlay_item_ids[key] = None
 
     def _draw_rx_antenna_marker(self) -> None:
         position = self._rx_antenna_global_position
@@ -1634,6 +1667,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _draw_live_echo_preview_overlay(self) -> None:
         if not bool(self.live_preview_enabled_var.get()):
+            self._clear_live_overlay_layer(components=("echo_slots",))
             return
         rx_position = self._rx_antenna_global_position
         if rx_position is None:
@@ -1650,17 +1684,78 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             return
         echo_distances = self._get_live_preview_echo_distances(limit=len(ECHO_OVERLAY_COLORS))
         if not echo_distances:
+            self._clear_live_overlay_layer(components=("echo_slots",))
             return
+        echo_slots = self._live_overlay_item_ids.get("echo_slots")
+        if not isinstance(echo_slots, dict):
+            echo_slots = {}
+            self._live_overlay_item_ids["echo_slots"] = echo_slots
+        active_slot_names: set[str] = set()
         for echo_index, echo_distance in enumerate(echo_distances):
+            slot_name = f"echo_{echo_index}"
+            active_slot_names.add(slot_name)
             color = ECHO_OVERLAY_COLORS[echo_index % len(ECHO_OVERLAY_COLORS)]
-            overlay_item_id = self._draw_echo_ellipse_for_overlay(
+            preview_points, line_width = self._build_echo_overlay_preview_points(
                 rx_position=rx_position,
                 measurement_position=measurement_position,
                 echo_distance_m=echo_distance,
-                color=color,
             )
-            if overlay_item_id is not None:
-                self._live_overlay_item_ids.append(overlay_item_id)
+            if preview_points is None:
+                existing_item_id = echo_slots.get(slot_name)
+                if isinstance(existing_item_id, int):
+                    try:
+                        self.map_preview_canvas.itemconfigure(existing_item_id, state="hidden")
+                    except tk.TclError:
+                        try:
+                            self.map_preview_canvas.delete(existing_item_id)
+                        except tk.TclError:
+                            pass
+                        echo_slots.pop(slot_name, None)
+                continue
+            existing_item_id = echo_slots.get(slot_name)
+            if not isinstance(existing_item_id, int):
+                try:
+                    created_item_id = self.map_preview_canvas.create_line(
+                        *preview_points,
+                        fill=color,
+                        width=line_width,
+                        smooth=True,
+                        dash=(4, 4),
+                    )
+                except tk.TclError:
+                    continue
+                echo_slots[slot_name] = int(created_item_id)
+                continue
+            try:
+                self.map_preview_canvas.coords(existing_item_id, *preview_points)
+                self.map_preview_canvas.itemconfigure(
+                    existing_item_id,
+                    fill=color,
+                    width=line_width,
+                    dash=(4, 4),
+                    state="normal",
+                )
+            except tk.TclError:
+                try:
+                    created_item_id = self.map_preview_canvas.create_line(
+                        *preview_points,
+                        fill=color,
+                        width=line_width,
+                        smooth=True,
+                        dash=(4, 4),
+                    )
+                except tk.TclError:
+                    continue
+                echo_slots[slot_name] = int(created_item_id)
+        obsolete_slot_names = [slot_name for slot_name in echo_slots if slot_name not in active_slot_names]
+        for slot_name in obsolete_slot_names:
+            item_id = echo_slots.pop(slot_name, None)
+            if not isinstance(item_id, int):
+                continue
+            try:
+                self.map_preview_canvas.delete(item_id)
+            except tk.TclError:
+                pass
 
     def _selected_record_point(self, record: dict[str, Any] | None) -> MeasurementPoint | None:
         if record is None:
@@ -1722,21 +1817,20 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             distances.append(numeric)
         return distances
 
-    def _draw_echo_ellipse_for_overlay(
+    def _build_echo_overlay_preview_points(
         self,
         *,
         rx_position: tuple[float, float],
         measurement_position: tuple[float, float],
         echo_distance_m: float,
-        color: str,
-    ) -> int | None:
+    ) -> tuple[list[float] | None, int]:
         mission = self._mission
         original = self._map_image_original
         if mission is None or mission.map_config is None or original is None:
-            return None
+            return (None, 1)
         resolution = mission.map_config.resolution
         if not math.isfinite(resolution) or resolution <= 0.0:
-            return None
+            return (None, 1)
         rx_x, rx_y = rx_position
         point_x, point_y = measurement_position
         if (
@@ -1747,17 +1841,17 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             or not math.isfinite(echo_distance_m)
             or echo_distance_m < 0.0
         ):
-            return None
+            return (None, 1)
         distance_rx_to_point = math.hypot(point_x - rx_x, point_y - rx_y)
         ellipse_axes = _compute_bistatic_echo_ellipse_axes(
             distance_rx_to_point=distance_rx_to_point,
             echo_distance_m=echo_distance_m,
         )
         if ellipse_axes is None:
-            return None
+            return (None, 1)
         semi_focal_distance, semi_major_axis, semi_minor_axis = ellipse_axes
         if semi_minor_axis <= 0.0:
-            return None
+            return (None, 1)
         image_height = original.height()
         scale_x, scale_y = self._map_preview_scale
         offset_x, offset_y = self._map_preview_offset
@@ -1793,16 +1887,33 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 )
         )
         if len(preview_points) < 6:
-            return None
+            return (None, 1)
         line_width = max(1, int(round((echo_distance_m / resolution) * preview_scale_factor * 0.03)))
+        return (preview_points, line_width)
+
+    def _draw_echo_ellipse_for_overlay(
+        self,
+        *,
+        rx_position: tuple[float, float],
+        measurement_position: tuple[float, float],
+        echo_distance_m: float,
+        color: str,
+    ) -> int | None:
+        preview_points, line_width = self._build_echo_overlay_preview_points(
+            rx_position=rx_position,
+            measurement_position=measurement_position,
+            echo_distance_m=echo_distance_m,
+        )
+        if preview_points is None:
+            return None
         return int(
             self.map_preview_canvas.create_line(
-            *preview_points,
-            fill=color,
-            width=line_width,
-            smooth=True,
-            dash=(4, 4),
-        )
+                *preview_points,
+                fill=color,
+                width=line_width,
+                smooth=True,
+                dash=(4, 4),
+            )
         )
 
     def _ellipse_unit_circle_points(self, *, samples: int) -> tuple[tuple[float, float], ...]:
@@ -2002,6 +2113,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             or original is None
             or position is None
         ):
+            self._clear_live_overlay_layer(components=("marker", "heading"))
             return
         expected_frame_id = self._expected_live_frame_id()
         received_frame_id = position.get("frame_id")
@@ -2010,10 +2122,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             and received_frame_id.strip()
             and received_frame_id != expected_frame_id
         ):
+            self._clear_live_overlay_layer(components=("marker", "heading"))
             return
         x_value = position.get("x")
         y_value = position.get("y")
         if not isinstance(x_value, (int, float)) or not isinstance(y_value, (int, float)):
+            self._clear_live_overlay_layer(components=("marker", "heading"))
             return
 
         scale_x, scale_y = self._map_preview_scale
@@ -2024,6 +2138,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             image_height=original.height(),
         )
         if map_pixel is None:
+            self._clear_live_overlay_layer(components=("marker", "heading"))
             return
         if not self._is_pixel_inside_map(
             map_pixel[0],
@@ -2031,35 +2146,104 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             width=original.width(),
             height=original.height(),
         ):
+            self._clear_live_overlay_layer(components=("marker", "heading"))
             return
         pixel_coordinates = (map_pixel[0] * scale_x + offset_x, map_pixel[1] * scale_y + offset_y)
         px, py = pixel_coordinates
         radius = 6
-        live_marker_id = self.map_preview_canvas.create_oval(
-            px - radius,
-            py - radius,
-            px + radius,
-            py + radius,
-            fill="#ff4d6d",
-            outline="#ffffff",
-            width=1,
-        )
-        self._live_overlay_item_ids.append(int(live_marker_id))
+        marker_item_id = self._live_overlay_item_ids.get("marker")
+        if not isinstance(marker_item_id, int):
+            try:
+                marker_item_id = int(
+                    self.map_preview_canvas.create_oval(
+                        px - radius,
+                        py - radius,
+                        px + radius,
+                        py + radius,
+                        fill="#ff4d6d",
+                        outline="#ffffff",
+                        width=1,
+                    )
+                )
+            except tk.TclError:
+                marker_item_id = None
+            self._live_overlay_item_ids["marker"] = marker_item_id
+        if isinstance(marker_item_id, int):
+            try:
+                self.map_preview_canvas.coords(marker_item_id, px - radius, py - radius, px + radius, py + radius)
+                self.map_preview_canvas.itemconfigure(
+                    marker_item_id,
+                    fill="#ff4d6d",
+                    outline="#ffffff",
+                    width=1,
+                    state="normal",
+                )
+            except tk.TclError:
+                try:
+                    marker_item_id = int(
+                        self.map_preview_canvas.create_oval(
+                            px - radius,
+                            py - radius,
+                            px + radius,
+                            py + radius,
+                            fill="#ff4d6d",
+                            outline="#ffffff",
+                            width=1,
+                        )
+                    )
+                except tk.TclError:
+                    marker_item_id = None
+                self._live_overlay_item_ids["marker"] = marker_item_id
         yaw_value = position.get("yaw")
         if isinstance(yaw_value, (int, float)):
             heading_length = 14
             end_x = px + math.cos(float(yaw_value)) * heading_length
             end_y = py - math.sin(float(yaw_value)) * heading_length
-            heading_id = self.map_preview_canvas.create_line(
-                px,
-                py,
-                end_x,
-                end_y,
-                fill="#ffccd5",
-                width=2,
-                arrow=tk.LAST,
-            )
-            self._live_overlay_item_ids.append(int(heading_id))
+            heading_item_id = self._live_overlay_item_ids.get("heading")
+            if not isinstance(heading_item_id, int):
+                try:
+                    heading_item_id = int(
+                        self.map_preview_canvas.create_line(
+                            px,
+                            py,
+                            end_x,
+                            end_y,
+                            fill="#ffccd5",
+                            width=2,
+                            arrow=tk.LAST,
+                        )
+                    )
+                except tk.TclError:
+                    heading_item_id = None
+                self._live_overlay_item_ids["heading"] = heading_item_id
+            if isinstance(heading_item_id, int):
+                try:
+                    self.map_preview_canvas.coords(heading_item_id, px, py, end_x, end_y)
+                    self.map_preview_canvas.itemconfigure(
+                        heading_item_id,
+                        fill="#ffccd5",
+                        width=2,
+                        arrow=tk.LAST,
+                        state="normal",
+                    )
+                except tk.TclError:
+                    try:
+                        heading_item_id = int(
+                            self.map_preview_canvas.create_line(
+                                px,
+                                py,
+                                end_x,
+                                end_y,
+                                fill="#ffccd5",
+                                width=2,
+                                arrow=tk.LAST,
+                            )
+                        )
+                    except tk.TclError:
+                        heading_item_id = None
+                    self._live_overlay_item_ids["heading"] = heading_item_id
+            return
+        self._clear_live_overlay_layer(components=("heading",))
 
     def _highlight_marker(self, marker_id: int) -> None:
         self.map_preview_canvas.itemconfigure(
