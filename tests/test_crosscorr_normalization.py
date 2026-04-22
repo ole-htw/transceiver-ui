@@ -53,6 +53,7 @@ sys.modules.setdefault("uhd", types.ModuleType("uhd"))
 from transceiver.__main__ import (
     TransceiverUI,
     _build_crosscorr_ctx,
+    _classify_visible_xcorr_peaks,
     _find_echo_marker_slot_near_lag,
     _format_echo_delay_display,
     _format_rx_stats_rows,
@@ -79,6 +80,25 @@ def test_crosscorr_normalization_sets_peak_to_one_for_nonempty_signal() -> None:
     assert mag.size > 0
     assert np.isfinite(mag).all()
     assert np.isclose(np.max(mag), 1.0)
+
+
+def test_classify_visible_xcorr_peaks_keeps_echoes_with_stricter_los_threshold() -> None:
+    mag = np.zeros(180, dtype=float)
+    mag[90] = 1.0
+    mag[110] = 0.25
+
+    highest_idx, los_idx, echo_indices = _classify_visible_xcorr_peaks(
+        mag,
+        repetition_period_samples=200,
+        peaks_before=0,
+        peaks_after=1,
+        min_rel_height=0.0,
+        los_min_rel_height=0.3,
+    )
+
+    assert highest_idx == 90
+    assert los_idx == 90
+    assert echo_indices == [110]
 
 
 def test_crosscorr_normalization_applies_to_comparison_trace_mag2() -> None:

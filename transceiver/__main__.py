@@ -181,7 +181,7 @@ def _classify_visible_xcorr_peaks(
         min_rel_height=min_rel_height,
         repetition_period_samples=repetition_period_samples,
     )
-    _los_highest_idx, los_idx, los_echo_indices, _los_group_indices = _classify_peak_group_from_mag(
+    _los_highest_idx, los_idx, _los_echo_indices, _los_group_indices = _classify_peak_group_from_mag(
         mag,
         peaks_before=peaks_before,
         peaks_after=peaks_after,
@@ -193,7 +193,7 @@ def _classify_visible_xcorr_peaks(
     los_echo_indices = _filter_echo_indices_by_noise_prominence(
         mag,
         los_idx=los_idx,
-        echo_indices=(los_echo_indices if los_idx is not None else visible_echo_indices),
+        echo_indices=visible_echo_indices,
         repetition_period_samples=repetition_period_samples,
     )
     return highest_idx, los_idx, los_echo_indices
