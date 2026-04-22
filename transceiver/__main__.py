@@ -2158,14 +2158,28 @@ def _build_crosscorr_ctx(
         scale = max(max_mag, eps)
         return mag / scale
 
+    def _background_noise_level(mag_values: np.ndarray, noise_sigma_factor: float = 2.0) -> float:
+        if mag_values.size == 0:
+            return 0.0
+        mag_float = np.asarray(mag_values, dtype=float)
+        baseline = float(np.median(mag_float))
+        mad = float(np.median(np.abs(mag_float - baseline)))
+        noise_sigma = 1.4826 * mad
+        level = baseline + max(0.0, float(noise_sigma_factor)) * noise_sigma
+        if not np.isfinite(level):
+            return 0.0
+        return float(level)
+
     cc = _xcorr_fft(data, ref_data)
     lags = np.arange(-(len(ref_data) - 1), len(data)) * step
     mag = _normalize_magnitude(_to_magnitude(cc, data, ref_data))
+    background_noise_level = _background_noise_level(mag)
     crosscorr_ctx: dict[str, object] = {
         "cc": cc,
         "lags": lags,
         "mag": mag,
         "magnitude_normalized": bool(normalize),
+        "background_noise_level": background_noise_level,
     }
 
     period_samples = _repetition_period_samples_from_tx(len(ref_data), step)
@@ -2180,7 +2194,15 @@ def _build_crosscorr_ctx(
         cc2 = _xcorr_fft(crosscorr_compare, ref_data)
         lags2 = np.arange(-(len(ref_data) - 1), len(crosscorr_compare)) * step
         mag2 = _normalize_magnitude(_to_magnitude(cc2, crosscorr_compare, ref_data))
-        crosscorr_ctx.update({"cc2": cc2, "lags2": lags2, "mag2": mag2})
+        background_noise_level = _background_noise_level(mag2)
+        crosscorr_ctx.update(
+            {
+                "cc2": cc2,
+                "lags2": lags2,
+                "mag2": mag2,
+                "background_noise_level": background_noise_level,
+            }
+        )
         highest_idx, base_los_idx, base_echo_indices = _classify_visible_xcorr_peaks(
             mag2,
             repetition_period_samples=period_samples,
@@ -3043,6 +3065,7 @@ def _plot_on_pg(
     reduction_step: int = 1,
     interpolation_enabled: bool = False,
     interpolation_factor: float = 1.0,
+    fullscreen: bool = False,
 ) -> None:
     """Helper to draw the selected visualization on a PyQtGraph PlotItem."""
     colors = PLOT_COLORS
@@ -3207,10 +3230,8 @@ def _plot_on_pg(
                 else []
             )
             los_lag_value = _lag_value(los_lags, adj_los_idx)
-            if los_lag_value is None or len(adj_group_indices) <= 1:
-                echo_text.setText("LOS-Echos: --")
-            else:
-                rows = []
+            rows = []
+            if los_lag_value is not None and len(adj_group_indices) > 1:
                 for i, peak_idx in enumerate(adj_group_indices[1:], start=1):
                     echo_lag_value = _lag_value(los_lags, peak_idx)
                     if echo_lag_value is None:
@@ -3224,10 +3245,15 @@ def _plot_on_pg(
                     meters = delay * 1.5
                     suffix = " (interp. Raster)" if interpolation_enabled else ""
                     rows.append(f"Echo {i}: {delay_text} samp ({meters:.1f} m){suffix}")
-                if rows:
-                    echo_text.setText("LOS-Echos:\n" + "\n".join(rows))
-                else:
-                    echo_text.setText("LOS-Echos: --")
+            if rows:
+                text = "LOS-Echos:\n" + "\n".join(rows)
+            else:
+                text = "LOS-Echos: --"
+            if fullscreen:
+                noise_level = float(crosscorr_ctx.get("background_noise_level", 0.0) or 0.0)
+                if np.isfinite(noise_level):
+                    text += f"\nHintergrundrauschen: {noise_level:.3g}"
+            echo_text.setText(text)
             _position_echo_text()
 
         def _wrap_drag(kind: str, callback):
@@ -6263,6 +6289,7 @@ class TransceiverUI(ctk.CTk):
                 xcorr_normalized=self.rx_xcorr_normalized_enable.get(),
                 interpolation_enabled=bool(getattr(self, "_latest_rx_data_interpolated", False)),
                 interpolation_factor=self._rx_effective_interpolation_factor(),
+                fullscreen=False,
             )
             if mode == "Signal":
                 signal_ranges = _signal_dynamic_view_ranges(plot_data)

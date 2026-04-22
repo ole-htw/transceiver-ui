@@ -199,6 +199,7 @@ def worker_loop(conn, initial_payload: dict[str, object] | None = None) -> None:
             xcorr_normalized=xcorr_normalized,
             interpolation_enabled=interpolation_enabled,
             interpolation_factor=interpolation_factor,
+            fullscreen=fullscreen,
         )
         if signature != last_signature:
             plot_item.enableAutoRange(axis="xy", enable=True)

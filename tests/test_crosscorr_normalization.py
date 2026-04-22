@@ -126,6 +126,17 @@ def test_crosscorr_normalization_keeps_los_and_echo_indices_stable() -> None:
     assert ctx_raw["peak_source_highest_idx"] == ctx_normalized["peak_source_highest_idx"]
 
 
+def test_crosscorr_context_exposes_background_noise_level() -> None:
+    ref, rx = _make_reference_and_rx()
+
+    ctx = _build_crosscorr_ctx(rx, ref, normalize=False)
+
+    noise_level = ctx.get("background_noise_level")
+    assert isinstance(noise_level, float)
+    assert np.isfinite(noise_level)
+    assert noise_level >= 0.0
+
+
 def test_format_echo_delay_display_with_and_without_interpolation_factor() -> None:
     plain = _format_echo_delay_display(12, interpolation_enabled=False, interpolation_factor=2.0)
     assert plain == "12 samp (18.0 m)"
