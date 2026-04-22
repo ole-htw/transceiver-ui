@@ -423,6 +423,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             width=110,
         )
         self.measurement_map_pick_mode_btn.grid(row=0, column=1, padx=(6, 0), sticky="w")
+        self.nav2point_map_pick_mode_btn = ctk.CTkButton(
+            map_top_controls,
+            text="nav2point",
+            command=self._toggle_nav2point_map_pick_mode,
+            width=110,
+        )
+        self.nav2point_map_pick_mode_btn.grid(row=0, column=2, padx=(6, 0), sticky="w")
         self.map_status_var = tk.StringVar(value="Karte nicht konfiguriert.")
         ctk.CTkLabel(map_frame, textvariable=self.map_status_var, anchor="w").grid(
             row=1, column=0, sticky="ew", padx=8, pady=(0, 6)
@@ -462,6 +469,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._waypoint_map_pick_mode_enabled = False
         self._waypoint_drag_start_preview: tuple[float, float] | None = None
         self._measurement_map_pick_mode_enabled = False
+        self._nav2point_map_pick_mode_enabled = False
         self._measurement_start_world_position: tuple[float, float] | None = None
         self._measurement_end_world_position: tuple[float, float] | None = None
         self._manual_drive_lock = threading.Lock()
@@ -857,6 +865,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._draw_map_preview()
 
     def _on_map_canvas_click(self, event: tk.Event) -> None:
+        if getattr(self, "_nav2point_map_pick_mode_enabled", False):
+            world_position = self._preview_pixel_to_world(preview_x=float(event.x), preview_y=float(event.y))
+            if world_position is None:
+                return
+            self._set_nav2point_map_pick_mode(False)
+            self._queue_nav2point(world_position=world_position)
+            return
         if getattr(self, "_measurement_map_pick_mode_enabled", False):
             world_position = self._preview_pixel_to_world(preview_x=float(event.x), preview_y=float(event.y))
             if world_position is None:
@@ -955,6 +970,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if enabled:
             self._set_waypoint_map_pick_mode(False)
             self._set_measurement_map_pick_mode(False)
+            self._set_nav2point_map_pick_mode(False)
         button_text = "✕" if enabled else "🖱️"
         self.rx_antenna_map_pick_mode_btn.configure(text=button_text)
         self._update_map_canvas_cursor()
@@ -973,6 +989,10 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             measurement_button = getattr(self, "measurement_map_pick_mode_btn", None)
             if measurement_button is not None:
                 measurement_button.configure(text="measurement")
+            self._nav2point_map_pick_mode_enabled = False
+            nav2point_button = getattr(self, "nav2point_map_pick_mode_btn", None)
+            if nav2point_button is not None:
+                nav2point_button.configure(text="nav2point")
         else:
             self._clear_pending_waypoint_marker()
         self.waypoint_map_pick_mode_btn.configure(text="✕" if enabled else "🖱️")
@@ -987,6 +1007,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if enabled:
             self._set_waypoint_map_pick_mode(False)
             self._set_rx_antenna_map_pick_mode(False)
+            self._set_nav2point_map_pick_mode(False)
         else:
             self._measurement_start_world_position = None
             self._measurement_end_world_position = None
@@ -998,6 +1019,54 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _toggle_measurement_map_pick_mode(self) -> None:
         self._set_measurement_map_pick_mode(not self._measurement_map_pick_mode_enabled)
+
+    def _set_nav2point_map_pick_mode(self, enabled: bool) -> None:
+        self._nav2point_map_pick_mode_enabled = enabled
+        if enabled:
+            self._set_waypoint_map_pick_mode(False)
+            self._set_rx_antenna_map_pick_mode(False)
+            self._set_measurement_map_pick_mode(False)
+        nav2point_button = getattr(self, "nav2point_map_pick_mode_btn", None)
+        if nav2point_button is not None:
+            nav2point_button.configure(text="✕" if enabled else "nav2point")
+        self._update_map_canvas_cursor()
+        self._draw_map_preview()
+
+    def _toggle_nav2point_map_pick_mode(self) -> None:
+        self._set_nav2point_map_pick_mode(not self._nav2point_map_pick_mode_enabled)
+
+    @staticmethod
+    def _navigation_point_from_world_position(world_position: tuple[float, float]) -> NavigationPoint:
+        return NavigationPoint(x=float(world_position[0]), y=float(world_position[1]))
+
+    def _queue_nav2point(self, *, world_position: tuple[float, float]) -> None:
+        if self._run_thread and self._run_thread.is_alive():
+            self._append_validation("⚠️ nav2point ist während eines aktiven Runs deaktiviert.")
+            return
+        target = self._navigation_point_from_world_position(world_position)
+
+        def _worker() -> None:
+            navigator = self._ensure_navigator()
+            state = navigator.navigate_to_point(
+                target,
+                timeout_s=float(self._runtime_config.goal_reached_timeout_s),
+            )
+            if state == "succeeded":
+                self.after(
+                    0,
+                    lambda: self._append_validation(
+                        f"✅ nav2point erreicht: x={target.x:.3f}, y={target.y:.3f}"
+                    ),
+                )
+                return
+            self.after(
+                0,
+                lambda: self._append_validation(
+                    f"⚠️ nav2point fehlgeschlagen ({state}): x={target.x:.3f}, y={target.y:.3f}"
+                ),
+            )
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     @staticmethod
     def _measurement_distance_m(
@@ -1062,6 +1131,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._rx_antenna_map_pick_mode_enabled
             or self._waypoint_map_pick_mode_enabled
             or getattr(self, "_measurement_map_pick_mode_enabled", False)
+            or getattr(self, "_nav2point_map_pick_mode_enabled", False)
         )
         self.map_preview_canvas.configure(cursor="crosshair" if pick_mode_active else "")
 
