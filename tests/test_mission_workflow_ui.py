@@ -245,19 +245,27 @@ def test_navigation_point_from_world_position_uses_identity_orientation() -> Non
     assert point == NavigationPoint(x=1.25, y=-3.5)
 
 
-def test_on_map_canvas_click_queues_nav2point_when_mode_enabled() -> None:
+def test_navigation_point_from_world_position_converts_yaw_to_quaternion() -> None:
+    point = MissionWorkflowWindow._navigation_point_from_world_position((0.5, 2.0), yaw_radians=math.pi / 2.0)
+
+    assert point.x == pytest.approx(0.5)
+    assert point.y == pytest.approx(2.0)
+    assert point.qz == pytest.approx(math.sqrt(0.5))
+    assert point.qw == pytest.approx(math.sqrt(0.5))
+
+
+def test_on_map_canvas_click_starts_nav2point_pick_preview_when_mode_enabled() -> None:
     window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
-    queued_positions: list[tuple[float, float]] = []
-    mode_updates: list[bool] = []
     window._nav2point_map_pick_mode_enabled = True
     window._preview_pixel_to_world = lambda preview_x, preview_y: (preview_x + 0.5, preview_y - 0.25)
-    window._queue_nav2point = lambda *, world_position: queued_positions.append(world_position)
-    window._set_nav2point_map_pick_mode = lambda enabled: mode_updates.append(enabled)
+    window._draw_map_preview = lambda: None
 
     window._on_map_canvas_click(SimpleNamespace(x=10, y=20))
 
-    assert mode_updates == [False]
-    assert queued_positions == [(10.5, 19.75)]
+    assert window._pending_nav2point_world_position == (10.5, 19.75)
+    assert window._pending_nav2point_yaw_radians == 0.0
+    assert window._nav2point_drag_start_preview == (10.0, 20.0)
+    assert window._nav2point_drag_active is False
 
 
 def test_format_position_for_table_uses_one_decimal_for_x_and_y() -> None:
@@ -617,6 +625,19 @@ def test_on_map_canvas_drag_updates_pending_waypoint_yaw() -> None:
     assert window._pending_waypoint_yaw_radians == 0.0
 
 
+def test_on_map_canvas_drag_updates_pending_nav2point_yaw() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._nav2point_map_pick_mode_enabled = True
+    window._pending_nav2point_world_position = (1.0, 1.0)
+    window._nav2point_drag_start_preview = (10.0, 10.0)
+    window._draw_map_preview = lambda: None
+
+    window._on_map_canvas_drag(SimpleNamespace(x=20, y=10))
+
+    assert window._nav2point_drag_active is True
+    assert window._pending_nav2point_yaw_radians == 0.0
+
+
 def test_on_map_canvas_release_creates_waypoint_and_disables_pick_mode() -> None:
     window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
     window._waypoint_map_pick_mode_enabled = True
@@ -633,6 +654,23 @@ def test_on_map_canvas_release_creates_waypoint_and_disables_pick_mode() -> None
 
     assert add_calls == [(4.0, -3.0, 1.2)]
     assert mode_calls == [False]
+
+
+def test_on_map_canvas_release_queues_nav2point_with_dragged_yaw() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._nav2point_map_pick_mode_enabled = True
+    window._pending_nav2point_world_position = (4.0, -3.0)
+    window._nav2point_drag_active = True
+    window._pending_nav2point_yaw_radians = 1.2
+    mode_calls: list[bool] = []
+    queued: list[tuple[tuple[float, float], float]] = []
+    window._set_nav2point_map_pick_mode = lambda enabled: mode_calls.append(enabled)
+    window._queue_nav2point = lambda *, world_position, yaw_radians=0.0: queued.append((world_position, yaw_radians))
+
+    window._on_map_canvas_release(SimpleNamespace(x=4, y=2))
+
+    assert mode_calls == [False]
+    assert queued == [((4.0, -3.0), 1.2)]
 
 
 def test_review_measurement_auto_approves_when_manual_review_disabled() -> None:
