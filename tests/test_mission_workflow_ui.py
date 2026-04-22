@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from transceiver.measurement_mission import MeasurementPoint
+from transceiver.navigation_adapter import NavigationPoint
 from transceiver.mission_workflow_ui import MissionWorkflowWindow, _compute_bistatic_echo_ellipse_axes
 
 
@@ -236,6 +237,27 @@ def test_build_manual_drive_command_reuses_remote_ssh_transport_builder() -> Non
     assert "source /opt/ros/jazzy/setup.bash" in remote_cmd
     assert "ros2 topic pub --once /robot1/cmd_vel geometry_msgs/msg/Twist" in remote_cmd
     assert "{linear: {x: 0.150, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: -0.700}}" in remote_cmd
+
+
+def test_navigation_point_from_world_position_uses_identity_orientation() -> None:
+    point = MissionWorkflowWindow._navigation_point_from_world_position((1.25, -3.5))
+
+    assert point == NavigationPoint(x=1.25, y=-3.5)
+
+
+def test_on_map_canvas_click_queues_nav2point_when_mode_enabled() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    queued_positions: list[tuple[float, float]] = []
+    mode_updates: list[bool] = []
+    window._nav2point_map_pick_mode_enabled = True
+    window._preview_pixel_to_world = lambda preview_x, preview_y: (preview_x + 0.5, preview_y - 0.25)
+    window._queue_nav2point = lambda *, world_position: queued_positions.append(world_position)
+    window._set_nav2point_map_pick_mode = lambda enabled: mode_updates.append(enabled)
+
+    window._on_map_canvas_click(SimpleNamespace(x=10, y=20))
+
+    assert mode_updates == [False]
+    assert queued_positions == [(10.5, 19.75)]
 
 
 def test_format_position_for_table_uses_one_decimal_for_x_and_y() -> None:
