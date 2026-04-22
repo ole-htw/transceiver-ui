@@ -2158,11 +2158,16 @@ def _build_crosscorr_ctx(
         scale = max(max_mag, eps)
         return mag / scale
 
-    def _background_noise_level(mag_values: np.ndarray, noise_sigma_factor: float = 2.0) -> float:
+    def _background_noise_level(
+        mag_values: np.ndarray,
+        noise_sigma_factor: float = 2.0,
+        baseline_quantile: float = 0.30,
+    ) -> float:
         if mag_values.size == 0:
             return 0.0
         mag_float = np.asarray(mag_values, dtype=float)
-        baseline = float(np.median(mag_float))
+        q = float(np.clip(baseline_quantile, 0.0, 1.0))
+        baseline = float(np.quantile(mag_float, q))
         mad = float(np.median(np.abs(mag_float - baseline)))
         noise_sigma = 1.4826 * mad
         level = baseline + max(0.0, float(noise_sigma_factor)) * noise_sigma
