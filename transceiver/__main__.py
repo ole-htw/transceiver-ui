@@ -3838,6 +3838,9 @@ class TransceiverUI(ctk.CTk):
         self._cont_input_slots: list[shared_memory.SharedMemory] = []
         self._cont_input_slot_size = 0
         self._cont_input_free_slots: deque[int] = deque()
+        self._mission_preview_echo_distances_cache: list[float] = []
+        self._mission_preview_echo_distances_cache_ts: float = 0.0
+        self._mission_preview_echo_distances_refresh_interval_s = 0.1
         self.repeat_enable = tk.BooleanVar(value=True)
         self.zeros_enable = tk.BooleanVar(value=False)
         self._repeat_last_value = "1"
@@ -7062,17 +7065,37 @@ class TransceiverUI(ctk.CTk):
     def get_live_echo_distances_for_mission_preview(self, *, limit: int = 5) -> list[float]:
         if limit <= 0:
             return []
-        payload = getattr(self, "_last_continuous_payload", None)
-        if not isinstance(payload, dict):
-            return []
         cont_thread = getattr(self, "_cont_thread", None)
         if cont_thread is None or not cont_thread.is_alive():
             return []
+        cached = getattr(self, "_mission_preview_echo_distances_cache", [])
+        if not isinstance(cached, list):
+            return []
+        return [float(value) for value in cached[:limit] if isinstance(value, (int, float))]
+
+    def _refresh_mission_preview_echo_distances_cache(
+        self,
+        payload: dict[str, object],
+        *,
+        force: bool = False,
+    ) -> None:
+        if not isinstance(payload, dict):
+            return
+        now = time.monotonic()
+        refresh_interval = float(
+            getattr(self, "_mission_preview_echo_distances_refresh_interval_s", 0.1)
+        )
+        if not force and refresh_interval > 0.0:
+            last_ts = float(getattr(self, "_mission_preview_echo_distances_cache_ts", 0.0))
+            if now - last_ts < refresh_interval:
+                return
 
         raw_data = payload.get("plot_data")
         data = np.asarray(raw_data) if raw_data is not None else np.array([], dtype=np.complex64)
         if data.size == 0:
-            return []
+            self._mission_preview_echo_distances_cache = []
+            self._mission_preview_echo_distances_cache_ts = now
+            return
 
         ref_data = np.asarray(payload.get("plot_ref_data", np.array([], dtype=np.complex64)))
         if ref_data.size == 0:
@@ -7088,10 +7111,14 @@ class TransceiverUI(ctk.CTk):
                 else:
                     ref_candidate = reference_payload
             if ref_candidate is None:
-                return []
+                self._mission_preview_echo_distances_cache = []
+                self._mission_preview_echo_distances_cache_ts = now
+                return
             ref_data = np.asarray(ref_candidate)
         if ref_data.size == 0:
-            return []
+            self._mission_preview_echo_distances_cache = []
+            self._mission_preview_echo_distances_cache_ts = now
+            return
 
         try:
             reduced_data, reduced_ref, lag_step = _reduce_pair(np.asarray(data), np.asarray(ref_data))
@@ -7104,22 +7131,31 @@ class TransceiverUI(ctk.CTk):
                 lag_step=lag_step,
             )
         except Exception:
-            return []
+            self._mission_preview_echo_distances_cache = []
+            self._mission_preview_echo_distances_cache_ts = now
+            return
 
         lags = ctx.get("lags2")
         if not isinstance(lags, np.ndarray):
             lags = ctx.get("lags")
-        if not isinstance(lags, np.ndarray) or lags.size == 0:
-            return []
         los_idx = ctx.get("los_idx")
         echo_indices = ctx.get("echo_indices")
-        if los_idx is None or not isinstance(echo_indices, list):
-            return []
+        if (
+            not isinstance(lags, np.ndarray)
+            or lags.size == 0
+            or los_idx is None
+            or not isinstance(echo_indices, list)
+        ):
+            self._mission_preview_echo_distances_cache = []
+            self._mission_preview_echo_distances_cache_ts = now
+            return
 
         try:
             los_lag = float(lags[int(los_idx)])
         except Exception:
-            return []
+            self._mission_preview_echo_distances_cache = []
+            self._mission_preview_echo_distances_cache_ts = now
+            return
 
         interpolation_factor = 1.0
         if bool(getattr(self, "_latest_rx_data_interpolated", False)):
@@ -7132,8 +7168,6 @@ class TransceiverUI(ctk.CTk):
 
         distances_m: list[float] = []
         for idx in echo_indices:
-            if len(distances_m) >= limit:
-                break
             try:
                 echo_lag = float(lags[int(idx)])
             except Exception:
@@ -7142,7 +7176,8 @@ class TransceiverUI(ctk.CTk):
             if not np.isfinite(delay_samples) or delay_samples <= 0.0:
                 continue
             distances_m.append(float(delay_samples * 1.5))
-        return distances_m
+        self._mission_preview_echo_distances_cache = distances_m
+        self._mission_preview_echo_distances_cache_ts = now
 
     def _build_receive_arg_list(self, *, output_file: str | None = None) -> tuple[list[str], int, float]:
         out_file = output_file if output_file is not None else ""
@@ -8492,6 +8527,8 @@ class TransceiverUI(ctk.CTk):
             "fc32",
         ]
         self._cont_stop_event = threading.Event()
+        self._mission_preview_echo_distances_cache = []
+        self._mission_preview_echo_distances_cache_ts = 0.0
         if self._cont_runtime_config:
             self._cont_runtime_config['active_plot_tab'] = self._get_rx_cont_active_plot_tab()
         self._cmd_running = True
@@ -8742,6 +8779,7 @@ class TransceiverUI(ctk.CTk):
             interpolation_applied=bool(self._latest_rx_data_interpolated)
         )
 
+        self._refresh_mission_preview_echo_distances_cache(payload)
         self._last_continuous_payload = dict(payload)
         self._display_rx_plots(
             plot_data,
@@ -8808,6 +8846,8 @@ class TransceiverUI(ctk.CTk):
                     return
         self._cont_thread = None
         self._cont_runtime_config = {}
+        self._mission_preview_echo_distances_cache = []
+        self._mission_preview_echo_distances_cache_ts = 0.0
         self._stop_continuous_pipeline()
         if hasattr(self, "rx_cont_stop"):
             self.rx_cont_stop.configure(state="disabled")
