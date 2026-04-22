@@ -446,3 +446,70 @@ def test_review_measurement_for_mission_uses_persisted_tx_reference_without_sing
     np.testing.assert_allclose(captured_ctx_input["ref_data"], np.array([10.0 + 20.0j, 30.0 + 40.0j]))
     assert ui.tx_data.size == 2
     assert outcome["reason"] != "missing_tx_reference"
+
+
+def test_get_live_echo_distances_for_mission_preview_reads_cached_field_and_limits() -> None:
+    ui = object.__new__(TransceiverUI)
+    ui._cont_thread = types.SimpleNamespace(is_alive=lambda: True)
+    ui._last_continuous_payload = {
+        "mission_preview_echo_distances_m": [1.5, "3.0", float("nan"), -2.0, "bad", 4.5],
+    }
+    ui._get_crosscorr_reference = lambda: (_ for _ in ()).throw(RuntimeError("must not be called"))
+
+    result = TransceiverUI.get_live_echo_distances_for_mission_preview(ui, limit=2)
+
+    assert result == [1.5, 3.0]
+
+
+def test_get_live_echo_distances_for_mission_preview_handles_invalid_payloads_robustly() -> None:
+    ui = object.__new__(TransceiverUI)
+    ui._cont_thread = types.SimpleNamespace(is_alive=lambda: True)
+
+    ui._last_continuous_payload = None
+    assert TransceiverUI.get_live_echo_distances_for_mission_preview(ui) == []
+
+    ui._last_continuous_payload = {"mission_preview_echo_distances_m": "invalid"}
+    assert TransceiverUI.get_live_echo_distances_for_mission_preview(ui) == []
+
+    ui._last_continuous_payload = {"mission_preview_echo_distances_m": [1.5]}
+    ui._cont_thread = types.SimpleNamespace(is_alive=lambda: False)
+    assert TransceiverUI.get_live_echo_distances_for_mission_preview(ui) == []
+
+
+def test_render_continuous_payload_caches_mission_preview_distances_without_recompute() -> None:
+    ui = object.__new__(TransceiverUI)
+    ui.latest_fs = 1.0
+    ui._cont_rendered_frames = 0
+    ui._cont_runtime_config = {}
+    ui._rx_cont_pg_state = {}
+    ui.rx_xcorr_normalized_enable = types.SimpleNamespace(set=lambda _value: None)
+    ui.rx_interpolation_enable = types.SimpleNamespace(set=lambda _value: None)
+    ui.rx_interpolation_method = types.SimpleNamespace(set=lambda _value: None)
+    ui._set_rx_interpolation_factor_text = lambda _value: None
+    ui._rx_interpolation_factor_text = lambda: "2"
+    ui._on_rx_interpolation_toggle = lambda recompute=False: None
+    ui._update_rx_interpolation_status = lambda interpolation_applied=False: None
+    ui._display_rx_plots = lambda *_args, **_kwargs: None
+
+    calls = {"count": 0}
+
+    def _fake_compute(_payload):
+        calls["count"] += 1
+        return [2.25, 4.5]
+
+    ui._compute_mission_preview_echo_distances_from_payload = _fake_compute
+
+    payload = {
+        "plot_data": [1.0, 2.0, 3.0],
+        "plot_ref_data": [1.0, 0.0],
+        "fs": 2.0,
+        "frame_ts": 0.0,
+        "processing_ms": 0.0,
+        "interpolation_applied": False,
+    }
+
+    TransceiverUI._render_continuous_payload(ui, payload)
+    TransceiverUI._render_continuous_payload(ui, payload)
+
+    assert calls["count"] == 1
+    assert ui._last_continuous_payload["mission_preview_echo_distances_m"] == [2.25, 4.5]

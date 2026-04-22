@@ -7059,16 +7059,10 @@ class TransceiverUI(ctk.CTk):
         except Exception:
             return True
 
-    def get_live_echo_distances_for_mission_preview(self, *, limit: int = 5) -> list[float]:
-        if limit <= 0:
-            return []
-        payload = getattr(self, "_last_continuous_payload", None)
-        if not isinstance(payload, dict):
-            return []
-        cont_thread = getattr(self, "_cont_thread", None)
-        if cont_thread is None or not cont_thread.is_alive():
-            return []
-
+    def _compute_mission_preview_echo_distances_from_payload(
+        self,
+        payload: dict[str, object],
+    ) -> list[float]:
         raw_data = payload.get("plot_data")
         data = np.asarray(raw_data) if raw_data is not None else np.array([], dtype=np.complex64)
         if data.size == 0:
@@ -7076,31 +7070,23 @@ class TransceiverUI(ctk.CTk):
 
         ref_data = np.asarray(payload.get("plot_ref_data", np.array([], dtype=np.complex64)))
         if ref_data.size == 0:
-            ref_candidate = None
-            get_reference = getattr(self, "_get_crosscorr_reference", None)
-            if callable(get_reference):
-                try:
-                    reference_payload = get_reference()
-                except Exception:
-                    reference_payload = None
-                if isinstance(reference_payload, tuple) and reference_payload:
-                    ref_candidate = reference_payload[0]
-                else:
-                    ref_candidate = reference_payload
-            if ref_candidate is None:
-                return []
-            ref_data = np.asarray(ref_candidate)
-        if ref_data.size == 0:
             return []
 
+        normalize_enabled = payload.get("normalize_enabled")
+        if normalize_enabled is None:
+            normalize_enabled = payload.get("xcorr_normalized_enabled")
+        if normalize_enabled is None:
+            normalize_enabled = (
+                bool(getattr(self, "rx_xcorr_normalized_enable", None).get())
+                if hasattr(getattr(self, "rx_xcorr_normalized_enable", None), "get")
+                else False
+            )
         try:
             reduced_data, reduced_ref, lag_step = _reduce_pair(np.asarray(data), np.asarray(ref_data))
             ctx = _build_crosscorr_ctx(
                 reduced_data,
                 reduced_ref,
-                normalize=bool(getattr(self, "rx_xcorr_normalized_enable", None).get())
-                if hasattr(getattr(self, "rx_xcorr_normalized_enable", None), "get")
-                else False,
+                normalize=bool(normalize_enabled),
                 lag_step=lag_step,
             )
         except Exception:
@@ -7122,7 +7108,7 @@ class TransceiverUI(ctk.CTk):
             return []
 
         interpolation_factor = 1.0
-        if bool(getattr(self, "_latest_rx_data_interpolated", False)):
+        if bool(payload.get("interpolation_applied", getattr(self, "_latest_rx_data_interpolated", False))):
             try:
                 interpolation_factor = float(self._rx_effective_interpolation_factor())
             except Exception:
@@ -7132,8 +7118,6 @@ class TransceiverUI(ctk.CTk):
 
         distances_m: list[float] = []
         for idx in echo_indices:
-            if len(distances_m) >= limit:
-                break
             try:
                 echo_lag = float(lags[int(idx)])
             except Exception:
@@ -7142,6 +7126,54 @@ class TransceiverUI(ctk.CTk):
             if not np.isfinite(delay_samples) or delay_samples <= 0.0:
                 continue
             distances_m.append(float(delay_samples * 1.5))
+        return distances_m
+
+    def _mission_preview_echo_payload_key(self, payload: dict[str, object]) -> tuple[object, ...]:
+        return (
+            id(payload.get("plot_data")),
+            id(payload.get("plot_ref_data")),
+            payload.get("fs"),
+            payload.get("normalize_enabled", payload.get("xcorr_normalized_enabled")),
+            payload.get("interpolation_applied"),
+        )
+
+    def _get_or_compute_mission_preview_echo_distances(
+        self,
+        payload: dict[str, object],
+    ) -> list[float]:
+        payload_key = self._mission_preview_echo_payload_key(payload)
+        if payload_key == getattr(self, "_mission_preview_echo_cache_key", None):
+            cached = getattr(self, "_mission_preview_echo_cache_values", None)
+            if isinstance(cached, list):
+                return list(cached)
+        distances_m = self._compute_mission_preview_echo_distances_from_payload(payload)
+        self._mission_preview_echo_cache_key = payload_key
+        self._mission_preview_echo_cache_values = list(distances_m)
+        return distances_m
+
+    def get_live_echo_distances_for_mission_preview(self, *, limit: int = 5) -> list[float]:
+        if limit <= 0:
+            return []
+        payload = getattr(self, "_last_continuous_payload", None)
+        if not isinstance(payload, dict):
+            return []
+        cont_thread = getattr(self, "_cont_thread", None)
+        if cont_thread is None or not cont_thread.is_alive():
+            return []
+        values = payload.get("mission_preview_echo_distances_m")
+        if not isinstance(values, list):
+            return []
+        distances_m: list[float] = []
+        for value in values:
+            if len(distances_m) >= limit:
+                break
+            try:
+                as_float = float(value)
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite(as_float) or as_float <= 0.0:
+                continue
+            distances_m.append(as_float)
         return distances_m
 
     def _build_receive_arg_list(self, *, output_file: str | None = None) -> tuple[list[str], int, float]:
@@ -8742,14 +8774,18 @@ class TransceiverUI(ctk.CTk):
             interpolation_applied=bool(self._latest_rx_data_interpolated)
         )
 
-        self._last_continuous_payload = dict(payload)
+        payload_with_preview = dict(payload)
+        payload_with_preview["mission_preview_echo_distances_m"] = (
+            self._get_or_compute_mission_preview_echo_distances(payload_with_preview)
+        )
+        self._last_continuous_payload = payload_with_preview
         self._display_rx_plots(
             plot_data,
             fs,
             reset_manual=False,
             target_tab='Continuous',
             source='continuous_preprocessed',
-            preprocessed_payload=payload,
+            preprocessed_payload=payload_with_preview,
         )
 
         if hasattr(self, 'rx_aoa_label'):
