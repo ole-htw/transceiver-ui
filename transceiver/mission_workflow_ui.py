@@ -3,6 +3,8 @@ from __future__ import annotations
 import threading
 import time
 import zipfile
+import subprocess
+import shlex
 from dataclasses import replace
 from datetime import datetime
 import math
@@ -36,6 +38,7 @@ from .navigation_adapter import (
     NavigationAdapterConfig,
     NavigationEvent,
     NavigationPoint,
+    Ros2CliNavigationTransport,
     RosbridgePoseStreamTransport,
     TerminalNavigationState,
 )
@@ -444,6 +447,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._rx_antenna_map_pick_mode_enabled = False
         self._waypoint_map_pick_mode_enabled = False
         self._waypoint_drag_start_preview: tuple[float, float] | None = None
+        self._manual_drive_lock = threading.Lock()
         self._pending_waypoint_world_position: tuple[float, float] | None = None
         self._pending_waypoint_yaw_radians = 0.0
         self._waypoint_drag_active = False
@@ -598,9 +602,37 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             command=self._on_live_preview_switch_changed,
         ).grid(row=4, column=2, columnspan=2, padx=(8, 3), pady=(0, 4), sticky="w")
 
+        manual_drive_frame = ctk.CTkFrame(controls, fg_color="transparent")
+        manual_drive_frame.grid(row=5, column=0, columnspan=5, padx=8, pady=(0, 4), sticky="w")
+        ctk.CTkLabel(manual_drive_frame, text="Manuelles Verfahren").grid(row=0, column=0, columnspan=3, sticky="w")
+        ctk.CTkButton(
+            manual_drive_frame,
+            text="↑",
+            width=44,
+            command=lambda: self._queue_manual_drive(linear_x=0.15, angular_z=0.0, label="vorwärts"),
+        ).grid(row=1, column=1, padx=3, pady=3)
+        ctk.CTkButton(
+            manual_drive_frame,
+            text="←",
+            width=44,
+            command=lambda: self._queue_manual_drive(linear_x=0.0, angular_z=0.7, label="links"),
+        ).grid(row=2, column=0, padx=3, pady=3)
+        ctk.CTkButton(
+            manual_drive_frame,
+            text="→",
+            width=44,
+            command=lambda: self._queue_manual_drive(linear_x=0.0, angular_z=-0.7, label="rechts"),
+        ).grid(row=2, column=2, padx=3, pady=3)
+        ctk.CTkButton(
+            manual_drive_frame,
+            text="↓",
+            width=44,
+            command=lambda: self._queue_manual_drive(linear_x=-0.15, angular_z=0.0, label="rückwärts"),
+        ).grid(row=3, column=1, padx=3, pady=3)
+
         self.live_var = tk.StringVar(value="Punkt: - | Navigation: idle | Messung: idle | Verbleibend: - | Live-Status: Karte nicht geladen")
         ctk.CTkLabel(controls, textvariable=self.live_var, anchor="w", justify="left").grid(
-            row=5, column=0, columnspan=5, sticky="nsew", padx=8, pady=(4, 8)
+            row=6, column=0, columnspan=5, sticky="nsew", padx=8, pady=(4, 8)
         )
 
         table_frame = ctk.CTkFrame(self)
@@ -2609,6 +2641,76 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 self._append_validation("ℹ️ Live-Preview deaktiviert: Continuous-Modus wurde gestoppt.")
             except Exception as exc:
                 self._append_validation(f"⚠️ Live-Preview: Continuous-Stop fehlgeschlagen ({exc}).")
+
+    def _resolve_cmd_vel_topic(self) -> str:
+        namespace = self._runtime_config.ros2_namespace.strip("/")
+        return f"/{namespace}/cmd_vel" if namespace else "/cmd_vel"
+
+    def _build_manual_drive_command(self, *, linear_x: float, angular_z: float) -> list[str]:
+        topic = self._resolve_cmd_vel_topic()
+        payload = (
+            "{linear:{x:%s,y:0.0,z:0.0},angular:{x:0.0,y:0.0,z:%s}}"
+            % (format(float(linear_x), ".3f"), format(float(angular_z), ".3f"))
+        )
+        remote_command = " ".join(
+            [
+                "command -v ros2 >/dev/null 2>&1 || { echo 'TRANSCEIVER_ENV_CHECK_FAILED: ros2 CLI not found in PATH' >&2; exit 70; }",
+                "&&",
+                "ros2",
+                "topic",
+                "pub",
+                "--once",
+                shlex.quote(topic),
+                "geometry_msgs/msg/Twist",
+                shlex.quote(payload),
+            ]
+        )
+        return Ros2CliNavigationTransport._build_remote_ssh_command(
+            robot_host=self._runtime_config.robot_host,
+            connect_timeout_s=self._runtime_config.goal_acceptance_timeout_s,
+            remote_ros_env_cmd=self._runtime_config.remote_ros_env_cmd.strip(),
+            remote_ros_setup=self._runtime_config.remote_ros_setup.strip(),
+            fastdds_profiles_file=self._runtime_config.fastdds_profiles_file.strip(),
+            remote_command=remote_command,
+            diagnostics_label=f"manual_cmd_vel topic={topic}",
+        )
+
+    def _queue_manual_drive(self, *, linear_x: float, angular_z: float, label: str) -> None:
+        if self._run_thread and self._run_thread.is_alive():
+            self._append_validation("⚠️ Manuelles Verfahren ist während eines aktiven Runs deaktiviert.")
+            return
+
+        def _worker() -> None:
+            if not self._manual_drive_lock.acquire(blocking=False):
+                self.after(0, lambda: self._append_validation("ℹ️ Manuelles Verfahren läuft bereits."))
+                return
+            try:
+                command = self._build_manual_drive_command(linear_x=linear_x, angular_z=angular_z)
+                result = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=max(3.0, float(self._runtime_config.goal_acceptance_timeout_s) + 1.0),
+                )
+                stderr = (result.stderr or "").strip().splitlines()
+                stdout = (result.stdout or "").strip().splitlines()
+                if result.returncode == 0:
+                    self.after(0, lambda: self._append_validation(f"ℹ️ Roboter manuell {label} verfahren."))
+                    return
+                tail = "; ".join((stderr or stdout)[-2:]) if (stderr or stdout) else "ohne Fehlermeldung"
+                self.after(
+                    0,
+                    lambda: self._append_validation(
+                        f"⚠️ Manuelles Verfahren ({label}) fehlgeschlagen (rc={result.returncode}): {tail}"
+                    ),
+                )
+            except Exception as exc:
+                self.after(0, lambda: self._append_validation(f"⚠️ Manuelles Verfahren ({label}) fehlgeschlagen ({exc})."))
+            finally:
+                self._manual_drive_lock.release()
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _get_live_preview_echo_distances(self, *, limit: int) -> list[float]:
         if limit <= 0:

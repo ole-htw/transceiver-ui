@@ -210,6 +210,34 @@ def test_draw_selected_lidar_reference_overlay_uses_live_measurement_position() 
     assert point.y == -2.0
 
 
+def test_resolve_cmd_vel_topic_uses_namespace_when_present() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._runtime_config = SimpleNamespace(ros2_namespace="robot1")
+
+    assert window._resolve_cmd_vel_topic() == "/robot1/cmd_vel"
+
+
+def test_build_manual_drive_command_reuses_remote_ssh_transport_builder() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._runtime_config = SimpleNamespace(
+        ros2_namespace="robot1",
+        robot_host="robot@10.0.0.2",
+        goal_acceptance_timeout_s=5.0,
+        remote_ros_env_cmd="",
+        remote_ros_setup="/opt/ros/jazzy/setup.bash",
+        fastdds_profiles_file="",
+    )
+
+    command = window._build_manual_drive_command(linear_x=0.15, angular_z=-0.7)
+
+    assert command[0:2] == ["ssh", "-o"]
+    assert "robot@10.0.0.2" in command
+    remote_cmd = command[-1]
+    assert "source /opt/ros/jazzy/setup.bash" in remote_cmd
+    assert "ros2 topic pub --once /robot1/cmd_vel geometry_msgs/msg/Twist" in remote_cmd
+    assert "{linear:{x:0.150,y:0.0,z:0.0},angular:{x:0.0,y:0.0,z:-0.700}}" in remote_cmd
+
+
 def test_format_position_for_table_uses_one_decimal_for_x_and_y() -> None:
     window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
     window._mission_points = [
