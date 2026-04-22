@@ -46,6 +46,8 @@ from .window_utils import configure_child_window
 
 MISSION_WORKFLOW_STATE_FILE = Path(__file__).with_name("mission_workflow_state.json")
 LIVE_LABEL_TICKER_INTERVAL_MS = 250
+LIVE_PREVIEW_TARGET_FPS = 25
+LIVE_PREVIEW_FALLBACK_REDRAW_AFTER_S = 1.0
 AUTO_STOP_CONTINUOUS_BEFORE_RUN = True
 ECHO_OVERLAY_COLORS = ("#ef5350", "#42a5f5", "#66bb6a", "#ffca28", "#ab47bc")
 ECHO_HEADING_MARKERS = ("🟥", "🟦", "🟩", "🟨", "🟪")
@@ -436,6 +438,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._map_image_size: tuple[int, int] | None = None
         self._live_position: dict[str, Any] | None = None
         self._live_position_received_at: float | None = None
+        self._live_redraw_pending = False
+        self._live_redraw_job: str | None = None
+        self._last_live_redraw_ts: float | None = None
         self._live_position_at_measurement_start: dict[str, Any] | None = None
         self._measurement_start_live_position_event = threading.Event()
         self._selected_point_index: int | None = None
@@ -1057,6 +1062,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._draw_selected_lidar_reference_overlay()
         self._draw_live_echo_preview_overlay()
         self._draw_live_marker()
+        self._last_live_redraw_ts = time.time()
 
     def _draw_rx_antenna_marker(self) -> None:
         position = self._rx_antenna_global_position
@@ -2378,7 +2384,19 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if not self._live_label_ticker_active:
             return
         if bool(self.live_preview_enabled_var.get()):
-            self._draw_map_preview()
+            now = time.time()
+            pose_age_s = None
+            if self._live_position_received_at is not None:
+                pose_age_s = now - self._live_position_received_at
+            last_redraw_age_s = None
+            if self._last_live_redraw_ts is not None:
+                last_redraw_age_s = now - self._last_live_redraw_ts
+            if (
+                pose_age_s is not None
+                and pose_age_s >= LIVE_PREVIEW_FALLBACK_REDRAW_AFTER_S
+                and (last_redraw_age_s is None or last_redraw_age_s >= LIVE_PREVIEW_FALLBACK_REDRAW_AFTER_S)
+            ):
+                self.request_live_redraw()
         self._update_live_label()
         self._schedule_live_label_ticker()
 
@@ -2391,6 +2409,37 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         except Exception:
             pass
         self._live_label_ticker_job = None
+
+    def request_live_redraw(self) -> None:
+        if self._live_redraw_pending or not bool(self.live_preview_enabled_var.get()):
+            return
+        delay_ms = 0
+        now = time.time()
+        if self._last_live_redraw_ts is not None:
+            min_frame_interval_s = 1.0 / float(LIVE_PREVIEW_TARGET_FPS)
+            elapsed_s = now - self._last_live_redraw_ts
+            if elapsed_s < min_frame_interval_s:
+                delay_ms = max(1, int((min_frame_interval_s - elapsed_s) * 1000.0))
+        self._live_redraw_pending = True
+        self._live_redraw_job = self.after(delay_ms, self._run_live_redraw)
+
+    def _run_live_redraw(self) -> None:
+        self._live_redraw_job = None
+        self._live_redraw_pending = False
+        if not bool(self.live_preview_enabled_var.get()):
+            return
+        self._draw_map_preview()
+        self._last_live_redraw_ts = time.time()
+
+    def _cancel_live_redraw(self) -> None:
+        self._live_redraw_pending = False
+        if self._live_redraw_job is None:
+            return
+        try:
+            self.after_cancel(self._live_redraw_job)
+        except Exception:
+            pass
+        self._live_redraw_job = None
 
     def _review_measurement(self, *, point_context, output_file: str) -> dict[str, object]:  # type: ignore[no-untyped-def]
         manual_review_enabled = bool(self.manual_review_enabled_var.get())
@@ -2634,6 +2683,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 except Exception as exc:
                     self._append_validation(f"⚠️ Live-Preview: Continuous-Start fehlgeschlagen ({exc}).")
             return
+        self._cancel_live_redraw()
         stop_continuous = getattr(self.master, "stop_continuous", None)
         if self._is_continuous_active() and callable(stop_continuous):
             try:
@@ -2835,7 +2885,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 if event.get("type") != "position_update":
                     return
                 self._apply_live_position_update(event.get("position"))
-                self._draw_map_preview()
+                self.request_live_redraw()
                 self._update_live_label()
                 return
             if payload_type != "pose_stream":
@@ -2846,7 +2896,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             event_type = str(event.get("type") or "")
             if event_type == "position_update":
                 self._apply_live_position_update(event.get("position"))
-                self._draw_map_preview()
+                self.request_live_redraw()
                 self._update_live_label()
                 return
             if event_type == "stream_connected":
@@ -3135,6 +3185,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _on_window_close(self) -> None:
         self._stop_live_label_ticker()
+        self._cancel_live_redraw()
         self.live_preview_enabled_var.set(False)
         self._sync_live_preview_state()
         if self._navigator is not None:
