@@ -77,7 +77,7 @@ def filter_echo_indices_by_noise_prominence(
     los_idx: int | None,
     echo_indices: list[int],
     repetition_period_samples: int | None = None,
-    noise_sigma_factor: float = 2.0,
+    noise_sigma_factor: float = 1.0,
 ) -> list[int]:
     """Keep echo peaks that stand out from global background noise.
 
