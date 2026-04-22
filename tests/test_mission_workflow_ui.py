@@ -693,3 +693,40 @@ def test_on_live_pose_stream_switch_changed_persists_and_syncs() -> None:
     window._on_live_pose_stream_switch_changed()
 
     assert calls == ["persist", "sync", "label"]
+
+
+def test_measurement_distance_m_returns_hypotenuse_for_two_points() -> None:
+    distance = MissionWorkflowWindow._measurement_distance_m((1.0, 2.0), (4.0, 6.0))
+
+    assert distance == 5.0
+
+
+def test_measurement_distance_m_returns_none_when_points_missing() -> None:
+    assert MissionWorkflowWindow._measurement_distance_m((1.0, 2.0), None) is None
+
+
+def test_set_measurement_map_pick_mode_clears_overlay_when_disabled() -> None:
+    class _DummyButton:
+        def __init__(self) -> None:
+            self.text = ""
+
+        def configure(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            if "text" in kwargs:
+                self.text = kwargs["text"]
+
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._measurement_map_pick_mode_enabled = True
+    window._measurement_start_world_position = (1.0, 2.0)
+    window._measurement_end_world_position = (2.0, 3.0)
+    window.measurement_map_pick_mode_btn = _DummyButton()
+    window._set_waypoint_map_pick_mode = lambda _enabled: None
+    window._set_rx_antenna_map_pick_mode = lambda _enabled: None
+    window._update_map_canvas_cursor = lambda: None
+    window._draw_map_preview = lambda: None
+
+    window._set_measurement_map_pick_mode(False)
+
+    assert window._measurement_map_pick_mode_enabled is False
+    assert window._measurement_start_world_position is None
+    assert window._measurement_end_world_position is None
+    assert window.measurement_map_pick_mode_btn.text == "measurement"

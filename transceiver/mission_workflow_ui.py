@@ -409,9 +409,18 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         map_frame.rowconfigure(2, weight=1)
 
         ctk.CTkLabel(map_frame, text="4) Karte").grid(row=0, column=0, sticky="w", padx=8, pady=(8, 2))
-        ctk.CTkButton(map_frame, text="Map-Config wählen", command=self._select_map_config_file).grid(
-            row=0, column=0, sticky="e", padx=8, pady=(8, 2)
+        map_top_controls = ctk.CTkFrame(map_frame, fg_color="transparent")
+        map_top_controls.grid(row=0, column=0, sticky="e", padx=8, pady=(8, 2))
+        ctk.CTkButton(map_top_controls, text="Map-Config wählen", command=self._select_map_config_file).grid(
+            row=0, column=0, sticky="w"
         )
+        self.measurement_map_pick_mode_btn = ctk.CTkButton(
+            map_top_controls,
+            text="measurement",
+            command=self._toggle_measurement_map_pick_mode,
+            width=110,
+        )
+        self.measurement_map_pick_mode_btn.grid(row=0, column=1, padx=(6, 0), sticky="w")
         self.map_status_var = tk.StringVar(value="Karte nicht konfiguriert.")
         ctk.CTkLabel(map_frame, textvariable=self.map_status_var, anchor="w").grid(
             row=1, column=0, sticky="ew", padx=8, pady=(0, 6)
@@ -447,6 +456,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._rx_antenna_map_pick_mode_enabled = False
         self._waypoint_map_pick_mode_enabled = False
         self._waypoint_drag_start_preview: tuple[float, float] | None = None
+        self._measurement_map_pick_mode_enabled = False
+        self._measurement_start_world_position: tuple[float, float] | None = None
+        self._measurement_end_world_position: tuple[float, float] | None = None
         self._manual_drive_lock = threading.Lock()
         self._pending_waypoint_world_position: tuple[float, float] | None = None
         self._pending_waypoint_yaw_radians = 0.0
@@ -840,6 +852,17 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._draw_map_preview()
 
     def _on_map_canvas_click(self, event: tk.Event) -> None:
+        if getattr(self, "_measurement_map_pick_mode_enabled", False):
+            world_position = self._preview_pixel_to_world(preview_x=float(event.x), preview_y=float(event.y))
+            if world_position is None:
+                return
+            if self._measurement_start_world_position is None or self._measurement_end_world_position is not None:
+                self._measurement_start_world_position = world_position
+                self._measurement_end_world_position = None
+            else:
+                self._measurement_end_world_position = world_position
+            self._draw_map_preview()
+            return
         if self._waypoint_map_pick_mode_enabled:
             world_position = self._preview_pixel_to_world(preview_x=float(event.x), preview_y=float(event.y))
             if world_position is None:
@@ -926,6 +949,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._rx_antenna_map_pick_mode_enabled = enabled
         if enabled:
             self._set_waypoint_map_pick_mode(False)
+            self._set_measurement_map_pick_mode(False)
         button_text = "✕" if enabled else "🖱️"
         self.rx_antenna_map_pick_mode_btn.configure(text=button_text)
         self._update_map_canvas_cursor()
@@ -938,6 +962,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if enabled:
             self._rx_antenna_map_pick_mode_enabled = False
             self.rx_antenna_map_pick_mode_btn.configure(text="🖱️")
+            self._measurement_map_pick_mode_enabled = False
+            self._measurement_start_world_position = None
+            self._measurement_end_world_position = None
+            measurement_button = getattr(self, "measurement_map_pick_mode_btn", None)
+            if measurement_button is not None:
+                measurement_button.configure(text="measurement")
         else:
             self._clear_pending_waypoint_marker()
         self.waypoint_map_pick_mode_btn.configure(text="✕" if enabled else "🖱️")
@@ -947,8 +977,87 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
     def _toggle_waypoint_map_pick_mode(self) -> None:
         self._set_waypoint_map_pick_mode(not self._waypoint_map_pick_mode_enabled)
 
+    def _set_measurement_map_pick_mode(self, enabled: bool) -> None:
+        self._measurement_map_pick_mode_enabled = enabled
+        if enabled:
+            self._set_waypoint_map_pick_mode(False)
+            self._set_rx_antenna_map_pick_mode(False)
+        else:
+            self._measurement_start_world_position = None
+            self._measurement_end_world_position = None
+        measurement_button = getattr(self, "measurement_map_pick_mode_btn", None)
+        if measurement_button is not None:
+            measurement_button.configure(text="✕" if enabled else "measurement")
+        self._update_map_canvas_cursor()
+        self._draw_map_preview()
+
+    def _toggle_measurement_map_pick_mode(self) -> None:
+        self._set_measurement_map_pick_mode(not self._measurement_map_pick_mode_enabled)
+
+    @staticmethod
+    def _measurement_distance_m(
+        start_world_position: tuple[float, float] | None,
+        end_world_position: tuple[float, float] | None,
+    ) -> float | None:
+        if start_world_position is None or end_world_position is None:
+            return None
+        return math.hypot(end_world_position[0] - start_world_position[0], end_world_position[1] - start_world_position[1])
+
+    def _draw_measurement_overlay(self) -> None:
+        original = self._map_image_original
+        if original is None:
+            return
+        start = self._measurement_start_world_position
+        end = self._measurement_end_world_position
+        if start is None or end is None:
+            return
+
+        start_pixel = self._world_to_map_pixel(x=start[0], y=start[1], image_height=original.height())
+        end_pixel = self._world_to_map_pixel(x=end[0], y=end[1], image_height=original.height())
+        if start_pixel is None or end_pixel is None:
+            return
+
+        if not self._is_pixel_inside_map(start_pixel[0], start_pixel[1], width=original.width(), height=original.height()):
+            return
+        if not self._is_pixel_inside_map(end_pixel[0], end_pixel[1], width=original.width(), height=original.height()):
+            return
+
+        scale_x, scale_y = self._map_preview_scale
+        offset_x, offset_y = self._map_preview_offset
+        start_preview = (start_pixel[0] * scale_x + offset_x, start_pixel[1] * scale_y + offset_y)
+        end_preview = (end_pixel[0] * scale_x + offset_x, end_pixel[1] * scale_y + offset_y)
+
+        self.map_preview_canvas.create_line(
+            start_preview[0],
+            start_preview[1],
+            end_preview[0],
+            end_preview[1],
+            fill="#ffcc66",
+            width=2,
+            dash=(4, 2),
+        )
+        for px, py in (start_preview, end_preview):
+            self.map_preview_canvas.create_oval(px - 4, py - 4, px + 4, py + 4, fill="#ffcc66", outline="#231f16", width=1)
+
+        distance_m = self._measurement_distance_m(start, end)
+        if distance_m is None:
+            return
+        label_x = (start_preview[0] + end_preview[0]) / 2.0
+        label_y = (start_preview[1] + end_preview[1]) / 2.0 - 10.0
+        self.map_preview_canvas.create_text(
+            label_x,
+            label_y,
+            text=f"{distance_m:.2f} m",
+            fill="#ffde9a",
+            font=("TkDefaultFont", 10, "bold"),
+        )
+
     def _update_map_canvas_cursor(self) -> None:
-        pick_mode_active = self._rx_antenna_map_pick_mode_enabled or self._waypoint_map_pick_mode_enabled
+        pick_mode_active = (
+            self._rx_antenna_map_pick_mode_enabled
+            or self._waypoint_map_pick_mode_enabled
+            or getattr(self, "_measurement_map_pick_mode_enabled", False)
+        )
         self.map_preview_canvas.configure(cursor="crosshair" if pick_mode_active else "")
 
     @staticmethod
@@ -1053,6 +1162,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._draw_mission_markers()
         self._draw_pending_waypoint_marker()
         self._draw_rx_antenna_marker()
+        self._draw_measurement_overlay()
         self._draw_selected_echo_overlay()
         self._draw_selected_lidar_reference_overlay()
         self._draw_live_echo_preview_overlay()
@@ -2601,12 +2711,14 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._persist_workflow_state()
         self._sync_live_pose_stream_state()
         self._update_live_label()
-        self._draw_map_preview()
+        if hasattr(self, "_map_image_original"):
+            self._draw_map_preview()
 
     def _on_live_preview_switch_changed(self) -> None:
         self._persist_workflow_state()
         self._sync_live_preview_state()
-        self._draw_map_preview()
+        if hasattr(self, "_map_image_original"):
+            self._draw_map_preview()
 
     def _sync_live_pose_stream_state(self) -> None:
         should_run = bool(self.live_pose_stream_enabled_var.get())
