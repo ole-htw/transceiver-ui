@@ -328,3 +328,140 @@ def test_cc_wrapper_computes_abs_once(monkeypatch) -> None:
     find_local_maxima_around_peak(cc, center_idx=100)
 
     assert abs_calls["count"] == 1
+
+
+def _mag_with_right_flank_shoulder(length: int = 260) -> tuple[np.ndarray, int]:
+    x = np.arange(length, dtype=float)
+    mag = np.zeros(length, dtype=float)
+    mag += 1.0 * np.exp(-0.5 * ((x - 90.0) / 2.3) ** 2)
+    mag += 0.92 * np.exp(-0.5 * ((x - 118.0) / 2.7) ** 2)
+    mag += 0.22 * np.exp(-0.5 * ((x - 155.0) / 2.0) ** 2)
+    mag += 0.20 * np.exp(-0.5 * ((x - 175.0) / 2.1) ** 2)
+    mag += 0.18 * np.exp(-0.5 * ((x - 195.0) / 2.2) ** 2)
+
+    shoulder_center = 132
+    shoulder = 0.04 * np.exp(-0.5 * ((x - shoulder_center) / 4.0) ** 2)
+    tail = np.where(x >= 118.0, 0.34 * np.exp(-(x - 118.0) / 18.0), 0.0)
+    mag += shoulder + tail
+    return mag, shoulder_center
+
+
+def test_include_shoulders_detects_descending_flank_hump() -> None:
+    mag, shoulder_center = _mag_with_right_flank_shoulder()
+
+    without_shoulders = find_local_maxima_around_peak_from_mag(
+        mag,
+        center_idx=90,
+        peaks_before=0,
+        peaks_after=4,
+        min_rel_height=0.0,
+        include_shoulders=False,
+        repetition_period_samples=240,
+    )
+    with_shoulders = find_local_maxima_around_peak_from_mag(
+        mag,
+        center_idx=90,
+        peaks_before=0,
+        peaks_after=4,
+        min_rel_height=0.0,
+        include_shoulders=True,
+        repetition_period_samples=240,
+    )
+
+    assert all(abs(idx - shoulder_center) > 2 for idx in without_shoulders)
+    assert any(abs(idx - shoulder_center) <= 5 for idx in with_shoulders)
+
+
+def test_include_shoulders_keeps_existing_strict_local_maxima() -> None:
+    mag = np.zeros(220, dtype=float)
+    mag[90] = 1.0
+    mag[118] = 0.85
+    mag[155] = 0.3
+    mag[175] = 0.28
+
+    maxima_no_shoulders = find_local_maxima_around_peak_from_mag(
+        mag,
+        center_idx=90,
+        peaks_before=0,
+        peaks_after=3,
+        min_rel_height=0.0,
+        include_shoulders=False,
+        repetition_period_samples=240,
+    )
+    maxima_with_shoulders = find_local_maxima_around_peak_from_mag(
+        mag,
+        center_idx=90,
+        peaks_before=0,
+        peaks_after=3,
+        min_rel_height=0.0,
+        include_shoulders=True,
+        repetition_period_samples=240,
+    )
+
+    for idx in maxima_no_shoulders:
+        assert idx in maxima_with_shoulders
+
+
+def test_shoulders_do_not_consume_peaks_after_budget() -> None:
+    mag, shoulder_center = _mag_with_right_flank_shoulder()
+    maxima = find_local_maxima_around_peak_from_mag(
+        mag,
+        center_idx=90,
+        peaks_before=0,
+        peaks_after=4,
+        min_rel_height=0.0,
+        include_shoulders=True,
+        repetition_period_samples=240,
+    )
+
+    strict = find_local_maxima_around_peak_from_mag(
+        mag,
+        center_idx=90,
+        peaks_before=0,
+        peaks_after=4,
+        min_rel_height=0.0,
+        include_shoulders=False,
+        repetition_period_samples=240,
+    )
+    assert strict[-1] in maxima
+    assert any(abs(idx - shoulder_center) <= 5 for idx in maxima)
+
+
+def test_shoulder_detection_rejects_small_noise_wiggles() -> None:
+    x = np.arange(260, dtype=float)
+    rng = np.random.default_rng(1234)
+    mag = np.zeros_like(x, dtype=float)
+    mag += 1.0 * np.exp(-0.5 * ((x - 100.0) / 2.6) ** 2)
+    mag += np.where(x >= 100.0, 0.20 * np.exp(-(x - 100.0) / 20.0), 0.0)
+    mag += 0.002 * rng.normal(size=x.size)
+
+    maxima = find_local_maxima_around_peak_from_mag(
+        mag,
+        center_idx=100,
+        peaks_before=0,
+        peaks_after=0,
+        min_rel_height=0.0,
+        include_shoulders=True,
+    )
+
+    assert maxima == [100]
+
+
+def test_shoulder_detection_respects_repetition_period_window() -> None:
+    mag, _shoulder_center = _mag_with_right_flank_shoulder(length=340)
+    outside_shoulder_center = 290
+    x = np.arange(mag.size, dtype=float)
+    mag += 0.13 * np.exp(-0.5 * ((x - outside_shoulder_center) / 3.0) ** 2)
+    mag += np.where(x >= 275.0, 0.20 * np.exp(-(x - 275.0) / 14.0), 0.0)
+
+    maxima = find_local_maxima_around_peak_from_mag(
+        mag,
+        center_idx=90,
+        peaks_before=0,
+        peaks_after=5,
+        min_rel_height=0.0,
+        include_shoulders=True,
+        repetition_period_samples=140,
+    )
+
+    assert all(idx <= 160 for idx in maxima)

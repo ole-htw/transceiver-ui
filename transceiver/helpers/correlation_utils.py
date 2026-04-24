@@ -1,6 +1,169 @@
 import numpy as np
 
 
+def _peak_search_bounds(
+    mag: np.ndarray,
+    *,
+    center_idx: int,
+    repetition_period_samples: int | None = None,
+) -> tuple[int, int]:
+    """Return inclusive [left_bound, right_bound] used for peak search."""
+    center_mag = float(mag[center_idx])
+    if repetition_period_samples is not None and repetition_period_samples > 1:
+        half_period = max(1, int(round(repetition_period_samples / 2.0)))
+        left_bound = max(0, center_idx - half_period)
+        right_bound = min(mag.size - 1, center_idx + half_period)
+        return left_bound, right_bound
+
+    # Fallback segmentation: walk from the center outwards until a local
+    # minimum is reached on each side *and* a new dominant lobe is found
+    # after that minimum. This keeps weaker echoes in the current group.
+    left_bound = 0
+    right_bound = mag.size - 1
+    main_lobe_threshold = 0.8 * center_mag
+
+    for idx in range(center_idx - 1, 0, -1):
+        if mag[idx] <= mag[idx - 1] and mag[idx] <= mag[idx + 1]:
+            has_new_main_lobe = any(
+                mag[j] >= mag[j - 1]
+                and mag[j] >= mag[j + 1]
+                and mag[j] >= main_lobe_threshold
+                for j in range(idx - 1, 0, -1)
+            )
+            if has_new_main_lobe:
+                left_bound = idx
+                break
+
+    for idx in range(center_idx + 1, mag.size - 1):
+        if mag[idx] <= mag[idx - 1] and mag[idx] <= mag[idx + 1]:
+            has_new_main_lobe = any(
+                mag[j] >= mag[j - 1]
+                and mag[j] >= mag[j + 1]
+                and mag[j] >= main_lobe_threshold
+                for j in range(idx + 1, mag.size - 1)
+            )
+            if has_new_main_lobe:
+                right_bound = idx
+                break
+    return left_bound, right_bound
+
+
+def find_shoulder_candidates_from_mag(
+    mag: np.ndarray,
+    *,
+    center_idx: int,
+    strict_peak_indices: list[int],
+    min_height: float,
+    left_bound: int,
+    right_bound: int,
+    include_left_shoulders: bool = True,
+    smooth_window: int = 5,
+    slope_window: int = 3,
+    slope_threshold_factor: float = 1.0,
+    slope_eps_factor: float = 0.2,
+    min_peak_distance: int = 2,
+    snap_window: int = 2,
+    noise_sigma_factor: float = 1.0,
+) -> list[int]:
+    """Return shoulder-like candidates from slope inflections within one group.
+
+    Strict local maxima should be selected first. Shoulders are supplemental and
+    do not consume ``peaks_before``/``peaks_after`` quotas.
+    """
+    if mag.size < 7:
+        return []
+    left_bound = int(np.clip(left_bound, 0, mag.size - 1))
+    right_bound = int(np.clip(right_bound, 0, mag.size - 1))
+    if right_bound - left_bound < 6:
+        return []
+
+    smooth_window = max(3, int(smooth_window))
+    if smooth_window % 2 == 0:
+        smooth_window += 1
+    slope_window = max(1, int(slope_window))
+    min_peak_distance = max(1, int(min_peak_distance))
+    snap_window = max(0, int(snap_window))
+
+    kernel = np.ones(smooth_window, dtype=float)
+    kernel /= kernel.sum()
+    smooth_mag = np.convolve(np.asarray(mag, dtype=float), kernel, mode="same")
+    slope = np.gradient(smooth_mag)
+
+    slope_segment = slope[left_bound : right_bound + 1]
+    slope_baseline = float(np.median(slope_segment))
+    slope_mad = float(np.median(np.abs(slope_segment - slope_baseline)))
+    slope_sigma = 1.4826 * slope_mad
+    slope_threshold = max(1e-12, float(slope_threshold_factor) * slope_sigma)
+    slope_eps = max(1e-12, float(slope_eps_factor) * slope_sigma)
+
+    mag_segment = np.asarray(mag[left_bound : right_bound + 1], dtype=float)
+    mag_baseline = float(np.median(mag_segment))
+    mag_mad = float(np.median(np.abs(mag_segment - mag_baseline)))
+    mag_sigma = 1.4826 * mag_mad
+
+    strict = sorted(
+        {int(i) for i in strict_peak_indices if left_bound <= int(i) <= right_bound}
+    )
+    if len(strict) < 2:
+        return []
+
+    def _inside_strict_interval(idx: int) -> bool:
+        return any(a < idx < b for a, b in zip(strict[:-1], strict[1:]))
+
+    candidates: set[int] = set()
+
+    for i in range(max(left_bound + slope_window, 1), min(right_bound - slope_window, mag.size - 2) + 1):
+        if not _inside_strict_interval(i):
+            continue
+        if any(abs(i - p) <= min_peak_distance for p in strict):
+            continue
+        if float(mag[i]) < float(min_height):
+            continue
+
+        left_slope = float(np.median(slope[i - slope_window : i]))
+        mid_slope = float(slope[i])
+        right_slope = float(np.median(slope[i + 1 : i + 1 + slope_window]))
+
+        is_right_candidate = (
+            left_slope < -slope_eps
+            and right_slope < -slope_eps
+            and mid_slope > left_slope
+            and mid_slope > right_slope
+            and (mid_slope - max(left_slope, right_slope)) >= slope_threshold
+        )
+        is_left_candidate = (
+            include_left_shoulders
+            and left_slope > slope_eps
+            and right_slope > slope_eps
+            and mid_slope < left_slope
+            and mid_slope < right_slope
+            and (min(left_slope, right_slope) - mid_slope) >= slope_threshold
+        )
+        if not (is_right_candidate or is_left_candidate):
+            continue
+
+        mag_prominence = float(mag[i]) - mag_baseline
+        if mag_sigma > 1e-12:
+            if mag_prominence < max(0.0, float(noise_sigma_factor)) * mag_sigma:
+                continue
+        elif mag_prominence <= 0.0:
+            continue
+
+        snap_left = max(left_bound, i - snap_window)
+        snap_right = min(right_bound, i + snap_window)
+        snap_candidates = [j for j in range(snap_left, snap_right + 1) if j not in strict]
+        if snap_candidates:
+            snap_values = np.asarray([mag[j] for j in snap_candidates], dtype=float)
+            i = int(snap_candidates[int(np.argmax(snap_values))])
+
+        if any(abs(i - p) <= min_peak_distance for p in strict):
+            continue
+        if left_bound <= i <= right_bound and float(mag[i]) >= float(min_height):
+            candidates.add(int(i))
+
+    return sorted(candidates)
+
+
 def apply_manual_lags(
     lags: np.ndarray,
     los_idx: int | None,
@@ -77,7 +240,8 @@ def filter_echo_indices_by_noise_prominence(
     los_idx: int | None,
     echo_indices: list[int],
     repetition_period_samples: int | None = None,
-    noise_sigma_factor: float = 0.1,
+    noise_sigma_factor: float = 0.3,
+    min_echo_lag_samples: int = 2,
 ) -> list[int]:
     """Keep echo peaks that stand out from global background noise.
 
@@ -93,7 +257,13 @@ def filter_echo_indices_by_noise_prominence(
         {
             int(idx)
             for idx in echo_indices
-            if 0 <= int(idx) < mag.size and (los_idx_int is None or int(idx) > los_idx_int)
+            if (
+                0 <= int(idx) < mag.size
+                and (
+                    los_idx_int is None
+                    or int(idx) > los_idx_int + max(0, int(min_echo_lag_samples))
+                )
+            )
         }
     )
     if not cleaned_indices:
@@ -143,6 +313,7 @@ def classify_peak_group_from_mag(
     peaks_after: int = 3,
     min_rel_height: float = 0.1,
     repetition_period_samples: int | None = None,
+    include_shoulders: bool = False,
 ) -> tuple[int | None, int | None, list[int], list[int]]:
     """Return (highest_idx, los_idx, echo_indices, group_indices)."""
     if mag.size == 0:
@@ -156,6 +327,7 @@ def classify_peak_group_from_mag(
         peaks_after=peaks_after,
         min_rel_height=min_rel_height,
         repetition_period_samples=repetition_period_samples,
+        include_shoulders=include_shoulders,
     )
     if not peak_indices:
         peak_indices = [highest_idx]
@@ -178,6 +350,7 @@ def find_local_maxima_around_peak(
     peaks_after: int = 3,
     min_rel_height: float = 0.1,
     repetition_period_samples: int | None = None,
+    include_shoulders: bool = False,
 ) -> list[int]:
     """Return local maxima indices around a center peak (before + after)."""
     return find_local_maxima_around_peak_from_mag(
@@ -187,6 +360,7 @@ def find_local_maxima_around_peak(
         peaks_after=peaks_after,
         min_rel_height=min_rel_height,
         repetition_period_samples=repetition_period_samples,
+        include_shoulders=include_shoulders,
     )
 
 
@@ -198,6 +372,7 @@ def find_local_maxima_around_peak_from_mag(
     peaks_after: int = 3,
     min_rel_height: float = 0.1,
     repetition_period_samples: int | None = None,
+    include_shoulders: bool = False,
 ) -> list[int]:
     """Return local maxima indices around a center peak (before + after)."""
     if mag.size < 3:
@@ -209,41 +384,11 @@ def find_local_maxima_around_peak_from_mag(
     center_mag = float(mag[center_idx])
     min_height = max(0.0, float(min_rel_height)) * center_mag
 
-    if repetition_period_samples is not None and repetition_period_samples > 1:
-        half_period = max(1, int(round(repetition_period_samples / 2.0)))
-        left_bound = max(0, center_idx - half_period)
-        right_bound = min(mag.size - 1, center_idx + half_period)
-    else:
-        # Fallback segmentation: walk from the center outwards until a local
-        # minimum is reached on each side *and* a new dominant lobe is found
-        # after that minimum. This keeps weaker echoes in the current group.
-        left_bound = 0
-        right_bound = mag.size - 1
-        main_lobe_threshold = 0.8 * center_mag
-
-        for idx in range(center_idx - 1, 0, -1):
-            if mag[idx] <= mag[idx - 1] and mag[idx] <= mag[idx + 1]:
-                has_new_main_lobe = any(
-                    mag[j] >= mag[j - 1]
-                    and mag[j] >= mag[j + 1]
-                    and mag[j] >= main_lobe_threshold
-                    for j in range(idx - 1, 0, -1)
-                )
-                if has_new_main_lobe:
-                    left_bound = idx
-                    break
-
-        for idx in range(center_idx + 1, mag.size - 1):
-            if mag[idx] <= mag[idx - 1] and mag[idx] <= mag[idx + 1]:
-                has_new_main_lobe = any(
-                    mag[j] >= mag[j - 1]
-                    and mag[j] >= mag[j + 1]
-                    and mag[j] >= main_lobe_threshold
-                    for j in range(idx + 1, mag.size - 1)
-                )
-                if has_new_main_lobe:
-                    right_bound = idx
-                    break
+    left_bound, right_bound = _peak_search_bounds(
+        mag,
+        center_idx=center_idx,
+        repetition_period_samples=repetition_period_samples,
+    )
 
     local_maxima = [
         i
@@ -265,7 +410,19 @@ def find_local_maxima_around_peak_from_mag(
     after_count = max(0, int(peaks_after))
     before_sel = before[-before_count:] if before_count > 0 else []
     after_sel = after[:after_count] if after_count > 0 else []
-    return before_sel + [center_idx] + after_sel
+    selected = before_sel + [center_idx] + after_sel
+    if not include_shoulders:
+        return selected
+
+    shoulder_candidates = find_shoulder_candidates_from_mag(
+        mag,
+        center_idx=center_idx,
+        strict_peak_indices=selected,
+        min_height=min_height,
+        left_bound=left_bound,
+        right_bound=right_bound,
+    )
+    return sorted({*selected, *shoulder_candidates})
 
 
 def filter_peak_indices_to_period_group(
