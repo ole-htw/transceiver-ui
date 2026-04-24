@@ -454,6 +454,58 @@ def test_compute_bistatic_echo_ellipse_axes_rejects_negative_delta() -> None:
     assert _compute_bistatic_echo_ellipse_axes(distance_rx_to_point=10.0, echo_distance_m=-0.1) is None
 
 
+def test_request_live_redraw_marker_only_updates_even_if_live_preview_disabled() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window.live_preview_enabled_var = SimpleNamespace(get=lambda: False)
+    window._live_marker_redraw_pending = False
+    window._live_marker_redraw_job = None
+    marker_draw_calls: list[str] = []
+    window._draw_live_marker = lambda: marker_draw_calls.append("drawn")
+    window.after = lambda _delay, callback: (callback(), None)[1]
+
+    window.request_live_redraw(include_echo=False)
+
+    assert marker_draw_calls == ["drawn"]
+    assert window._live_marker_redraw_pending is False
+    assert window._live_marker_redraw_job is None
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_position"),
+    [
+        (
+            {"type": "pose_stream", "event": {"type": "position_update", "position": {"x": 1.0, "y": 2.0}}},
+            {"x": 1.0, "y": 2.0},
+        ),
+        (
+            {"type": "navigation", "event": {"type": "position_update", "position": {"x": -4.0, "y": 7.5}}},
+            {"x": -4.0, "y": 7.5},
+        ),
+    ],
+)
+def test_handle_executor_runtime_event_position_update_requests_marker_redraw_when_live_preview_disabled(
+    payload: dict[str, object],
+    expected_position: dict[str, float],
+) -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window.live_preview_enabled_var = SimpleNamespace(get=lambda: False)
+    applied_positions: list[dict[str, object]] = []
+    marker_redraw_requests: list[str] = []
+    live_redraw_requests: list[str] = []
+    label_updates: list[str] = []
+    window._apply_live_position_update = lambda position: applied_positions.append(position)
+    window.request_live_marker_redraw = lambda: marker_redraw_requests.append("marker")
+    window.request_live_redraw = lambda: live_redraw_requests.append("echo")
+    window._update_live_label = lambda: label_updates.append("label")
+
+    window._handle_executor_runtime_event(payload)
+
+    assert applied_positions == [expected_position]
+    assert marker_redraw_requests == ["marker"]
+    assert live_redraw_requests == ["echo"]
+    assert label_updates == ["label"]
+
+
 class _FakeAdapter:
     def __init__(self, events):
         self.config = object()

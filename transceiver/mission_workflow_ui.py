@@ -469,6 +469,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._live_position_received_at: float | None = None
         self._live_redraw_pending = False
         self._live_redraw_job: str | None = None
+        self._live_marker_redraw_pending = False
+        self._live_marker_redraw_job: str | None = None
         self._last_live_redraw_ts: float | None = None
         self._live_position_at_measurement_start: dict[str, Any] | None = None
         self._measurement_start_live_position_event = threading.Event()
@@ -3169,7 +3171,10 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             pass
         self._live_label_ticker_job = None
 
-    def request_live_redraw(self) -> None:
+    def request_live_redraw(self, *, include_echo: bool = True) -> None:
+        if not include_echo:
+            self.request_live_marker_redraw()
+            return
         if self._live_redraw_pending or not bool(self.live_preview_enabled_var.get()):
             return
         delay_ms = 0
@@ -3190,15 +3195,35 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._draw_live_overlay_layer()
         self._last_live_redraw_ts = time.time()
 
+    def request_live_marker_redraw(self) -> None:
+        if self._live_marker_redraw_pending:
+            return
+        self._live_marker_redraw_pending = True
+        self._live_marker_redraw_job = self.after(0, self._run_live_marker_redraw)
+
+    def _run_live_marker_redraw(self) -> None:
+        self._live_marker_redraw_job = None
+        self._live_marker_redraw_pending = False
+        self._draw_live_marker()
+
     def _cancel_live_redraw(self) -> None:
         self._live_redraw_pending = False
         if self._live_redraw_job is None:
+            pass
+        else:
+            try:
+                self.after_cancel(self._live_redraw_job)
+            except Exception:
+                pass
+            self._live_redraw_job = None
+        self._live_marker_redraw_pending = False
+        if self._live_marker_redraw_job is None:
             return
         try:
-            self.after_cancel(self._live_redraw_job)
+            self.after_cancel(self._live_marker_redraw_job)
         except Exception:
             pass
-        self._live_redraw_job = None
+        self._live_marker_redraw_job = None
 
     def _review_measurement(self, *, point_context, output_file: str) -> dict[str, object]:  # type: ignore[no-untyped-def]
         manual_review_enabled = bool(self.manual_review_enabled_var.get())
@@ -3649,6 +3674,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 if event.get("type") != "position_update":
                     return
                 self._apply_live_position_update(event.get("position"))
+                self.request_live_marker_redraw()
                 self.request_live_redraw()
                 self._update_live_label()
                 return
@@ -3660,6 +3686,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             event_type = str(event.get("type") or "")
             if event_type == "position_update":
                 self._apply_live_position_update(event.get("position"))
+                self.request_live_marker_redraw()
                 self.request_live_redraw()
                 self._update_live_label()
                 return
