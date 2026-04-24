@@ -452,11 +452,10 @@ class Ros2CliNavigationTransport:
 
     def _cancel_on_server(self) -> None:
         config = self._last_config
-        goal_id = self._last_goal_id
-        if config is None or not goal_id:
+        if config is None:
             return
         try:
-            cancel_cmd = self._build_cancel_command(config=config, goal_id=goal_id)
+            cancel_cmd = self._build_cancel_command(config=config, goal_id=self._last_goal_id)
             subprocess.run(
                 cancel_cmd,
                 capture_output=True,
@@ -484,7 +483,7 @@ class Ros2CliNavigationTransport:
         cls,
         *,
         config: NavigationAdapterConfig,
-        goal_id: str,
+        goal_id: str | None,
     ) -> list[str]:
         resolved_action = cls._resolve_action_name(
             namespace=config.ros2_namespace,
@@ -496,7 +495,8 @@ class Ros2CliNavigationTransport:
             remote_ros_env_cmd=config.remote_ros_env_cmd.strip(),
             remote_ros_setup=config.remote_ros_setup.strip(),
             fastdds_profiles_file=config.fastdds_profiles_file.strip(),
-            remote_command=" ".join(
+        if goal_id:
+            remote_command = " ".join(
                 [
                     "ros2",
                     "action",
@@ -505,7 +505,29 @@ class Ros2CliNavigationTransport:
                     "--goal-id",
                     shlex.quote(goal_id),
                 ]
-            ),
+            )
+        else:
+            cancel_service_name = f"{resolved_action}/_action/cancel_goal"
+            cancel_all_payload = (
+                '{"goal_info":{"goal_id":{"uuid":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]},"stamp":{"sec":0,"nanosec":0}}}'
+            )
+            remote_command = " ".join(
+                [
+                    "ros2",
+                    "service",
+                    "call",
+                    shlex.quote(cancel_service_name),
+                    "action_msgs/srv/CancelGoal",
+                    shlex.quote(cancel_all_payload),
+                ]
+            )
+        return cls._build_remote_ssh_command(
+            robot_host=config.robot_host,
+            connect_timeout_s=config.goal_acceptance_timeout_s,
+            remote_ros_env_cmd=config.remote_ros_env_cmd.strip(),
+            remote_ros_setup=config.remote_ros_setup.strip(),
+            fastdds_profiles_file="",
+            remote_command=remote_command,
             diagnostics_label=f"cancel_action={resolved_action}",
         )
 
