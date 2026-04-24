@@ -581,7 +581,7 @@ def test_rosbridge_pose_stream_sends_subscribe_and_parses_pose(monkeypatch) -> N
             self._recv_calls += 1
             if self._recv_calls == 1:
                 return (
-                    '{"op":"publish","topic":"/amcl_pose","msg":'
+                    '{"op":"publish","topic":"/base_footprint","msg":'
                     '{"header":{"frame_id":"map","stamp":{"sec":10,"nanosec":500000000}},'
                     '"pose":{"pose":{"position":{"x":1.25,"y":2.5},'
                     '"orientation":{"x":0.0,"y":0.0,"z":0.7071068,"w":0.7071068}}}}}'
@@ -630,7 +630,7 @@ def test_rosbridge_pose_stream_sends_subscribe_and_parses_pose(monkeypatch) -> N
     assert sent_messages
     subscribe = sent_messages[0]
     assert '"op": "subscribe"' in subscribe
-    assert '"topic": "/amcl_pose"' in subscribe
+    assert '"topic": "/base_footprint"' in subscribe
     updates = [
         payload["event"]["position"]
         for payload in events
