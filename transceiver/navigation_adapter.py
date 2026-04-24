@@ -489,12 +489,6 @@ class Ros2CliNavigationTransport:
             namespace=config.ros2_namespace,
             action_name=config.ros2_action_name,
         )
-        return cls._build_remote_ssh_command(
-            robot_host=config.robot_host,
-            connect_timeout_s=config.goal_acceptance_timeout_s,
-            remote_ros_env_cmd=config.remote_ros_env_cmd.strip(),
-            remote_ros_setup=config.remote_ros_setup.strip(),
-            fastdds_profiles_file=config.fastdds_profiles_file.strip(),
         if goal_id:
             remote_command = " ".join(
                 [
@@ -1422,4 +1416,3 @@ class RosbridgePoseStreamTransport:
 
 
 Ros2CliPoseStreamTransport = RosbridgePoseStreamTransport
-
