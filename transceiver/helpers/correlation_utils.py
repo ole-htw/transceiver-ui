@@ -263,8 +263,27 @@ def find_local_maxima_around_peak_from_mag(
 
     before_count = max(0, int(peaks_before))
     after_count = max(0, int(peaks_after))
-    before_sel = before[-before_count:] if before_count > 0 else []
-    after_sel = after[:after_count] if after_count > 0 else []
+
+    if before_count > 0 and not before:
+        shoulder_idx = center_idx - 1
+        if shoulder_idx >= max(1, left_bound) and mag[shoulder_idx] >= min_height:
+            if shoulder_idx - 2 >= 0:
+                if mag[shoulder_idx] >= mag[shoulder_idx - 1] >= mag[shoulder_idx - 2]:
+                    before.append(int(shoulder_idx))
+            else:
+                before.append(int(shoulder_idx))
+
+    if after_count > 0 and not after:
+        shoulder_idx = center_idx + 1
+        if shoulder_idx <= min(mag.size - 2, right_bound) and mag[shoulder_idx] >= min_height:
+            if shoulder_idx + 2 < mag.size:
+                if mag[shoulder_idx] >= mag[shoulder_idx + 1] >= mag[shoulder_idx + 2]:
+                    after.append(int(shoulder_idx))
+            else:
+                after.append(int(shoulder_idx))
+
+    before_sel = sorted(before)[-before_count:] if before_count > 0 else []
+    after_sel = sorted(after)[:after_count] if after_count > 0 else []
     return before_sel + [center_idx] + after_sel
 
 
