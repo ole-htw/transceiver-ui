@@ -625,10 +625,11 @@ class NavigationAdapter:
 
 
 class RosbridgePoseStreamTransport:
-    """Continuously streams `/base_footprint` updates via rosbridge through an SSH tunnel."""
+    """Streams `map -> base_footprint` pose updates from `/tf` via rosbridge."""
 
-    _POSE_TOPIC = "/base_footprint"
-    _POSE_TYPE = "geometry_msgs/msg/PoseWithCovarianceStamped"
+    _POSE_TOPIC = "/tf"
+    _POSE_TYPE = "tf2_msgs/msg/TFMessage"
+    _POSE_CHILD_FRAME_ID = "base_footprint"
     _DEFAULT_EXPECTED_FRAME_ID = "map"
     _READY_RETRY_INTERVAL_S = 0.15
 
@@ -680,50 +681,76 @@ class RosbridgePoseStreamTransport:
         return float(math.atan2(siny_cosp, cosy_cosp))
 
     @classmethod
-    def _extract_pose_payload(cls, rosbridge_msg: dict[str, Any]) -> dict[str, Any] | None:
+    def _normalize_frame_id(cls, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip().lstrip("/")
+        return normalized or None
+
+    @classmethod
+    def _extract_pose_payload(
+        cls,
+        rosbridge_msg: dict[str, Any],
+        *,
+        expected_frame_id: str,
+    ) -> dict[str, Any] | None:
         msg = rosbridge_msg.get("msg")
         if not isinstance(msg, dict):
             return None
-        header = msg.get("header")
-        pose_cov = msg.get("pose")
-        if not isinstance(header, dict) or not isinstance(pose_cov, dict):
-            return None
-        pose = pose_cov.get("pose")
-        if not isinstance(pose, dict):
-            return None
-        position = pose.get("position")
-        orientation = pose.get("orientation")
-        if not isinstance(position, dict) or not isinstance(orientation, dict):
-            return None
-        try:
-            px = float(position["x"])
-            py = float(position["y"])
-            qx = float(orientation.get("x", 0.0))
-            qy = float(orientation.get("y", 0.0))
-            qz = float(orientation.get("z", 0.0))
-            qw = float(orientation.get("w", 1.0))
-        except (TypeError, ValueError, KeyError):
+        transforms = msg.get("transforms")
+        if not isinstance(transforms, list):
             return None
 
-        frame_id_raw = header.get("frame_id")
-        frame_id = frame_id_raw if isinstance(frame_id_raw, str) and frame_id_raw.strip() else "map"
-        stamp = header.get("stamp")
-        timestamp = time.time()
-        if isinstance(stamp, dict):
+        expected_parent_frame = cls._normalize_frame_id(expected_frame_id) or "map"
+        expected_child_frame = cls._POSE_CHILD_FRAME_ID
+
+        for transform_entry in transforms:
+            if not isinstance(transform_entry, dict):
+                continue
+            header = transform_entry.get("header")
+            transform = transform_entry.get("transform")
+            if not isinstance(header, dict) or not isinstance(transform, dict):
+                continue
+
+            parent_frame = cls._normalize_frame_id(header.get("frame_id"))
+            child_frame = cls._normalize_frame_id(transform_entry.get("child_frame_id"))
+            if parent_frame != expected_parent_frame or child_frame != expected_child_frame:
+                continue
+
+            translation = transform.get("translation")
+            rotation = transform.get("rotation")
+            if not isinstance(translation, dict) or not isinstance(rotation, dict):
+                continue
+
             try:
-                sec = int(stamp.get("sec", 0))
-                nanosec = int(stamp.get("nanosec", 0))
-                timestamp = float(sec) + float(nanosec) / 1_000_000_000.0
-            except (TypeError, ValueError):
-                timestamp = time.time()
+                px = float(translation["x"])
+                py = float(translation["y"])
+                qx = float(rotation.get("x", 0.0))
+                qy = float(rotation.get("y", 0.0))
+                qz = float(rotation.get("z", 0.0))
+                qw = float(rotation.get("w", 1.0))
+            except (TypeError, ValueError, KeyError):
+                continue
 
-        return {
-            "x": px,
-            "y": py,
-            "frame_id": frame_id,
-            "timestamp": timestamp,
-            "yaw": cls._extract_yaw(x=qx, y=qy, z=qz, w=qw),
-        }
+            stamp = header.get("stamp")
+            timestamp = time.time()
+            if isinstance(stamp, dict):
+                try:
+                    sec = int(stamp.get("sec", 0))
+                    nanosec = int(stamp.get("nanosec", 0))
+                    timestamp = float(sec) + float(nanosec) / 1_000_000_000.0
+                except (TypeError, ValueError):
+                    timestamp = time.time()
+
+            return {
+                "x": px,
+                "y": py,
+                "frame_id": expected_parent_frame,
+                "child_frame_id": expected_child_frame,
+                "timestamp": timestamp,
+                "yaw": cls._extract_yaw(x=qx, y=qy, z=qz, w=qw),
+            }
+        return None
 
     def _stop_ssh_tunnel(self) -> None:
         with self._lock:
@@ -813,7 +840,6 @@ class RosbridgePoseStreamTransport:
         reconnect_attempt = 0
         while not self._stop_event.is_set():
             reconnect_attempt += 1
-            frame_mismatch_reported = False
             disconnect_reason = ""
             try:
                 local_port = self._reserve_local_port()
@@ -913,42 +939,23 @@ class RosbridgePoseStreamTransport:
                         continue
                     if decoded.get("op") != "publish" or decoded.get("topic") != self._POSE_TOPIC:
                         continue
-                    payload = self._extract_pose_payload(decoded)
+                    payload = self._extract_pose_payload(decoded, expected_frame_id=expected_frame)
                     if payload is None:
                         on_event(
                             {
                                 "type": "pose_stream",
                                 "event": {
                                     "type": "stream_error",
-                                    "message": "base_footprint rosbridge message is missing required pose fields",
-                                    "attempt": reconnect_attempt,
-                                    "timestamp": time.time(),
-                                },
-                            }
-                        )
-                        continue
-                    received_frame = payload.get("frame_id")
-                    if (
-                        not frame_mismatch_reported
-                        and isinstance(received_frame, str)
-                        and received_frame.strip()
-                        and received_frame != expected_frame
-                    ):
-                        frame_mismatch_reported = True
-                        on_event(
-                            {
-                                "type": "pose_stream",
-                                "event": {
-                                    "type": "stream_error",
                                     "message": (
-                                        "unerwarteter /base_footprint frame_id: "
-                                        f"erwartet={expected_frame}, empfangen={received_frame}"
+                                        "tf rosbridge message misses map->base_footprint transform "
+                                        f"(expected parent frame: {expected_frame})"
                                     ),
                                     "attempt": reconnect_attempt,
                                     "timestamp": time.time(),
                                 },
                             }
                         )
+                        continue
                     on_event(
                         {
                             "type": "pose_stream",

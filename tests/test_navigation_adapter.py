@@ -581,10 +581,10 @@ def test_rosbridge_pose_stream_sends_subscribe_and_parses_pose(monkeypatch) -> N
             self._recv_calls += 1
             if self._recv_calls == 1:
                 return (
-                    '{"op":"publish","topic":"/base_footprint","msg":'
-                    '{"header":{"frame_id":"map","stamp":{"sec":10,"nanosec":500000000}},'
-                    '"pose":{"pose":{"position":{"x":1.25,"y":2.5},'
-                    '"orientation":{"x":0.0,"y":0.0,"z":0.7071068,"w":0.7071068}}}}}'
+                    '{"op":"publish","topic":"/tf","msg":'
+                    '{"transforms":[{"header":{"frame_id":"map","stamp":{"sec":10,"nanosec":500000000}},'
+                    '"child_frame_id":"base_footprint","transform":{"translation":{"x":1.25,"y":2.5},'
+                    '"rotation":{"x":0.0,"y":0.0,"z":0.7071068,"w":0.7071068}}}]}}'
                 )
             raise RuntimeError("disconnect")
 
@@ -630,7 +630,7 @@ def test_rosbridge_pose_stream_sends_subscribe_and_parses_pose(monkeypatch) -> N
     assert sent_messages
     subscribe = sent_messages[0]
     assert '"op": "subscribe"' in subscribe
-    assert '"topic": "/base_footprint"' in subscribe
+    assert '"topic": "/tf"' in subscribe
     updates = [
         payload["event"]["position"]
         for payload in events
@@ -640,6 +640,7 @@ def test_rosbridge_pose_stream_sends_subscribe_and_parses_pose(monkeypatch) -> N
     assert updates[0]["x"] == 1.25
     assert updates[0]["y"] == 2.5
     assert updates[0]["frame_id"] == "map"
+    assert updates[0]["child_frame_id"] == "base_footprint"
     assert abs(float(updates[0]["timestamp"]) - 10.5) < 1e-6
     assert abs(float(updates[0]["yaw"]) - 1.57079632679) < 1e-3
 
