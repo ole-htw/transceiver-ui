@@ -105,7 +105,12 @@ def filter_echo_indices_by_noise_prominence(
     noise_sigma = 1.4826 * global_mad
 
     filtered: list[int] = []
+    los_mag = float(mag[los_idx_int]) if los_idx_int is not None and 0 <= los_idx_int < mag.size else None
     for idx in cleaned_indices:
+        if los_idx_int is not None and los_mag is not None:
+            los_distance = int(idx) - int(los_idx_int)
+            if 0 < los_distance <= 8 and float(mag[idx]) < 0.08 * los_mag:
+                continue
         prominence = float(mag[idx]) - global_baseline
         if prominence <= 0.0:
             continue
@@ -199,7 +204,15 @@ def find_local_maxima_around_peak_from_mag(
     min_rel_height: float = 0.1,
     repetition_period_samples: int | None = None,
 ) -> list[int]:
-    """Return local maxima indices around a center peak (before + after)."""
+    """Return local maxima indices around a center peak (before + after).
+
+    Notes
+    -----
+    Besides the configured relative-height threshold, we always keep the
+    nearest local maximum on each side of ``center_idx`` (if present). This
+    preserves shoulders directly around the LOS peak and avoids dropping
+    near-LOS candidates when ``min_rel_height`` is strict.
+    """
     if mag.size < 3:
         return []
     if center_idx is None:
@@ -245,21 +258,49 @@ def find_local_maxima_around_peak_from_mag(
                     right_bound = idx
                     break
 
-    local_maxima = [
+    local_maxima_all = [
         i
         for i in range(max(1, left_bound), min(mag.size - 1, right_bound + 1))
         if (
             mag[i] >= mag[i - 1]
             and mag[i] >= mag[i + 1]
             and (mag[i] > mag[i - 1] or mag[i] > mag[i + 1])
-            and mag[i] >= min_height
         )
     ]
-    if not local_maxima:
+    if not local_maxima_all:
         return []
 
+    local_maxima = [
+        i
+        for i in local_maxima_all
+        if mag[i] >= min_height
+    ]
+
+    before_all = [i for i in local_maxima_all if i < center_idx]
+    after_all = [i for i in local_maxima_all if i > center_idx]
     before = [i for i in local_maxima if i < center_idx]
     after = [i for i in local_maxima if i > center_idx]
+
+    nearest_before = before_all[-1] if before_all else None
+    nearest_after = after_all[0] if after_all else None
+    shoulder_max_distance = 8
+    shoulder_min_rel_height = 0.08 * center_mag
+    if (
+        nearest_before is not None
+        and nearest_before not in before
+        and (center_idx - nearest_before) <= shoulder_max_distance
+        and float(mag[nearest_before]) >= shoulder_min_rel_height
+    ):
+        before.append(nearest_before)
+        before.sort()
+    if (
+        nearest_after is not None
+        and nearest_after not in after
+        and (nearest_after - center_idx) <= shoulder_max_distance
+        and float(mag[nearest_after]) >= shoulder_min_rel_height
+    ):
+        after.append(nearest_after)
+        after.sort()
 
     before_count = max(0, int(peaks_before))
     after_count = max(0, int(peaks_after))

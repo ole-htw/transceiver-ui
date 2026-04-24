@@ -55,6 +55,24 @@ def test_local_maxima_keep_visible_echoes_for_lower_secondary_peak() -> None:
     assert maxima == [80, 120]
 
 
+def test_local_maxima_keeps_near_los_shoulder_even_below_rel_height_threshold() -> None:
+    mag = np.zeros(200, dtype=float)
+    mag[100] = 1.0
+    mag[103] = 0.08
+    mag[140] = 0.5
+    cc = mag.astype(np.complex128)
+
+    maxima = find_local_maxima_around_peak(
+        cc,
+        center_idx=100,
+        peaks_before=0,
+        peaks_after=2,
+        min_rel_height=0.1,
+    )
+
+    assert maxima == [100, 103, 140]
+
+
 def test_local_maxima_do_not_include_adjacent_lower_group_when_period_known() -> None:
     n = 1200
     group_a_center = 420
