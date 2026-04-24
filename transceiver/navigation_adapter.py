@@ -625,9 +625,9 @@ class NavigationAdapter:
 
 
 class RosbridgePoseStreamTransport:
-    """Continuously streams `/amcl_pose` updates via rosbridge through an SSH tunnel."""
+    """Continuously streams `/base_footprint` updates via rosbridge through an SSH tunnel."""
 
-    _POSE_TOPIC = "/amcl_pose"
+    _POSE_TOPIC = "/base_footprint"
     _POSE_TYPE = "geometry_msgs/msg/PoseWithCovarianceStamped"
     _DEFAULT_EXPECTED_FRAME_ID = "map"
     _READY_RETRY_INTERVAL_S = 0.15
@@ -920,7 +920,7 @@ class RosbridgePoseStreamTransport:
                                 "type": "pose_stream",
                                 "event": {
                                     "type": "stream_error",
-                                    "message": "amcl_pose rosbridge message is missing required pose fields",
+                                    "message": "base_footprint rosbridge message is missing required pose fields",
                                     "attempt": reconnect_attempt,
                                     "timestamp": time.time(),
                                 },
@@ -941,7 +941,7 @@ class RosbridgePoseStreamTransport:
                                 "event": {
                                     "type": "stream_error",
                                     "message": (
-                                        "unerwarteter /amcl_pose frame_id: "
+                                        "unerwarteter /base_footprint frame_id: "
                                         f"erwartet={expected_frame}, empfangen={received_frame}"
                                     ),
                                     "attempt": reconnect_attempt,
