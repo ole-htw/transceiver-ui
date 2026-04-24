@@ -200,6 +200,26 @@ class MissionRxMeasurementService:
         output_file = mission_dir / filename
         lidar_reference_file = mission_dir / f"{output_file.stem}.lidar.scan.txt"
 
+        try:
+            result = self._app.receive_for_mission(
+                output_file=str(output_file),
+                point_context=point_context,
+            )
+        except Exception as exc:
+            self._on_status("measurement", "failed")
+            if self._on_operator_message is not None:
+                self._on_operator_message(f"RX-Fehler bei Punkt {point_context.global_index}: {exc}")
+            raise RuntimeError("measurement_failed") from exc
+
+        if not result.get("ok"):
+            self._on_status("measurement", "failed")
+            detail = str(result.get("error") or "Receive fehlgeschlagen")
+            if self._on_operator_message is not None:
+                self._on_operator_message(f"RX-Fehler bei Punkt {point_context.global_index}: {detail}")
+            raise RuntimeError("measurement_failed")
+
+        self._on_status("measurement", "measurement_complete")
+
         lidar_reference: dict[str, Any] | None = None
         if self._enable_lidar_reference:
             try:
@@ -225,24 +245,6 @@ class MissionRxMeasurementService:
                         f"LIDAR-Referenzmessung fehlgeschlagen bei Punkt {point_context.global_index}: {exc}"
                     )
                 raise RuntimeError("lidar_reference_failed") from exc
-
-        try:
-            result = self._app.receive_for_mission(
-                output_file=str(output_file),
-                point_context=point_context,
-            )
-        except Exception as exc:
-            self._on_status("measurement", "failed")
-            if self._on_operator_message is not None:
-                self._on_operator_message(f"RX-Fehler bei Punkt {point_context.global_index}: {exc}")
-            raise RuntimeError("measurement_failed") from exc
-
-        if not result.get("ok"):
-            self._on_status("measurement", "failed")
-            detail = str(result.get("error") or "Receive fehlgeschlagen")
-            if self._on_operator_message is not None:
-                self._on_operator_message(f"RX-Fehler bei Punkt {point_context.global_index}: {detail}")
-            raise RuntimeError("measurement_failed")
 
         file_ref = str(result.get("output_file") or output_file)
         review_payload: dict[str, Any] | None = None

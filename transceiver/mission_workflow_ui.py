@@ -3680,7 +3680,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.stop_btn.configure(state="normal" if run_active or manual_measurement_active or nav2point_active else "disabled")
 
     def _on_stage_update(self, stage: str, status: str) -> None:
-        if stage == "measurement" and status == "running":
+        if stage == "measurement" and status == "measurement_complete":
             self._live_position_at_measurement_start = self._wait_for_valid_live_position_for_measurement_start()
         self.after(0, lambda: self._update_live_label(stage=stage, status=status))
 

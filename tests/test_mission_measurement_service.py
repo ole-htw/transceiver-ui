@@ -101,9 +101,33 @@ def test_trigger_waits_for_receive_and_runs_review_after_success() -> None:
     elapsed = time.perf_counter() - started
 
     assert elapsed >= 0.045
-    assert status_events == [("measurement", "running"), ("measurement", "succeeded")]
+    assert status_events == [
+        ("measurement", "running"),
+        ("measurement", "measurement_complete"),
+        ("measurement", "succeeded"),
+    ]
     assert timestamps["review_called"] >= timestamps["receive_end"]
     assert payload["file_ref"].endswith(".bin")
+
+
+def test_trigger_runs_lidar_reference_after_receive() -> None:
+    call_order: list[str] = []
+
+    class _OrderedApp:
+        def receive_for_mission(self, *, output_file: str, point_context=None):
+            call_order.append("receive")
+            return {"ok": True, "output_file": output_file}
+
+    service = MissionRxMeasurementService(
+        app=_OrderedApp(),
+        on_status=lambda *_args: None,
+        collect_lidar_reference=lambda _output_file: call_order.append("lidar_reference") or {"topic": "/scan"},
+    )
+
+    payload = service.trigger(_point_context())
+
+    assert call_order == ["receive", "lidar_reference"]
+    assert payload.get("lidar_reference", {}).get("topic") == "/scan"
 
 
 def test_trigger_skips_lidar_reference_when_disabled() -> None:
