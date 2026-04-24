@@ -396,12 +396,7 @@ class MeasurementRunExecutor:
 
         if self._cancel_requested and nav_state == "succeeded":
             nav_state = "canceled"
-        if self._cancel_requested and nav_state != "succeeded":
-            # A manual stop was requested while navigation was active.
-            # Depending on timing/transport teardown we may observe "aborted",
-            # "timeout" or "connection_error" instead of an explicit cancel ack.
-            # Treat these as cancel-confirmed to keep stop semantics stable.
-            nav_state = "canceled"
+        if self._cancel_requested and nav_state == "canceled":
             self._cancel_confirmed = True
 
         point_context = PointExecutionContext(
