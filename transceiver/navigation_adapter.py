@@ -680,52 +680,6 @@ class RosbridgePoseStreamTransport:
         cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
         return float(math.atan2(siny_cosp, cosy_cosp))
 
-    @staticmethod
-    def _quat_multiply(
-        q1: tuple[float, float, float, float],
-        q2: tuple[float, float, float, float],
-    ) -> tuple[float, float, float, float]:
-        x1, y1, z1, w1 = q1
-        x2, y2, z2, w2 = q2
-        return (
-            (w1 * x2) + (x1 * w2) + (y1 * z2) - (z1 * y2),
-            (w1 * y2) - (x1 * z2) + (y1 * w2) + (z1 * x2),
-            (w1 * z2) + (x1 * y2) - (y1 * x2) + (z1 * w2),
-            (w1 * w2) - (x1 * x2) - (y1 * y2) - (z1 * z2),
-        )
-
-    @staticmethod
-    def _rotate_vector_by_quaternion(
-        x: float,
-        y: float,
-        z: float,
-        q: tuple[float, float, float, float],
-    ) -> tuple[float, float, float]:
-        qx, qy, qz, qw = q
-        vx, vy, vz = x, y, z
-        ux = (qy * vz) - (qz * vy)
-        uy = (qz * vx) - (qx * vz)
-        uz = (qx * vy) - (qy * vx)
-        uux = (qy * uz) - (qz * uy)
-        uuy = (qz * ux) - (qx * uz)
-        uuz = (qx * uy) - (qy * ux)
-        return (
-            vx + 2.0 * ((qw * ux) + uux),
-            vy + 2.0 * ((qw * uy) + uuy),
-            vz + 2.0 * ((qw * uz) + uuz),
-        )
-
-    @staticmethod
-    def _extract_timestamp(stamp: Any) -> float:
-        if isinstance(stamp, dict):
-            try:
-                sec = int(stamp.get("sec", 0))
-                nanosec = int(stamp.get("nanosec", 0))
-                return float(sec) + float(nanosec) / 1_000_000_000.0
-            except (TypeError, ValueError):
-                return time.time()
-        return time.time()
-
     @classmethod
     def _normalize_frame_id(cls, value: Any) -> str | None:
         if not isinstance(value, str):
@@ -750,15 +704,6 @@ class RosbridgePoseStreamTransport:
         expected_parent_frame = cls._normalize_frame_id(expected_frame_id) or "map"
         expected_child_frame = cls._POSE_CHILD_FRAME_ID
 
-        edge_lookup: dict[
-            tuple[str, str],
-            tuple[
-                tuple[float, float, float],
-                tuple[float, float, float, float],
-                float,
-            ],
-        ] = {}
-
         for transform_entry in transforms:
             if not isinstance(transform_entry, dict):
                 continue
@@ -769,7 +714,7 @@ class RosbridgePoseStreamTransport:
 
             parent_frame = cls._normalize_frame_id(header.get("frame_id"))
             child_frame = cls._normalize_frame_id(transform_entry.get("child_frame_id"))
-            if parent_frame is None or child_frame is None:
+            if parent_frame != expected_parent_frame or child_frame != expected_child_frame:
                 continue
 
             translation = transform.get("translation")
@@ -778,9 +723,8 @@ class RosbridgePoseStreamTransport:
                 continue
 
             try:
-                tx = float(translation["x"])
-                ty = float(translation["y"])
-                tz = float(translation.get("z", 0.0))
+                px = float(translation["x"])
+                py = float(translation["y"])
                 qx = float(rotation.get("x", 0.0))
                 qy = float(rotation.get("y", 0.0))
                 qz = float(rotation.get("z", 0.0))
@@ -788,15 +732,16 @@ class RosbridgePoseStreamTransport:
             except (TypeError, ValueError, KeyError):
                 continue
 
-            edge_lookup[(parent_frame, child_frame)] = (
-                (tx, ty, tz),
-                (qx, qy, qz, qw),
-                cls._extract_timestamp(header.get("stamp")),
-            )
+            stamp = header.get("stamp")
+            timestamp = time.time()
+            if isinstance(stamp, dict):
+                try:
+                    sec = int(stamp.get("sec", 0))
+                    nanosec = int(stamp.get("nanosec", 0))
+                    timestamp = float(sec) + float(nanosec) / 1_000_000_000.0
+                except (TypeError, ValueError):
+                    timestamp = time.time()
 
-        direct = edge_lookup.get((expected_parent_frame, expected_child_frame))
-        if direct is not None:
-            (px, py, _pz), (qx, qy, qz, qw), timestamp = direct
             return {
                 "x": px,
                 "y": py,
@@ -805,29 +750,6 @@ class RosbridgePoseStreamTransport:
                 "timestamp": timestamp,
                 "yaw": cls._extract_yaw(x=qx, y=qy, z=qz, w=qw),
             }
-
-        for (parent_frame, mid_frame), first_edge in edge_lookup.items():
-            if parent_frame != expected_parent_frame:
-                continue
-            second_edge = edge_lookup.get((mid_frame, expected_child_frame))
-            if second_edge is None:
-                continue
-
-            (t1x, t1y, t1z), q1, ts1 = first_edge
-            (t2x, t2y, t2z), q2, ts2 = second_edge
-            rt2x, rt2y, _rt2z = cls._rotate_vector_by_quaternion(t2x, t2y, t2z, q1)
-            px = t1x + rt2x
-            py = t1y + rt2y
-            qx, qy, qz, qw = cls._quat_multiply(q1, q2)
-            return {
-                "x": px,
-                "y": py,
-                "frame_id": expected_parent_frame,
-                "child_frame_id": expected_child_frame,
-                "timestamp": max(ts1, ts2),
-                "yaw": cls._extract_yaw(x=qx, y=qy, z=qz, w=qw),
-            }
-
         return None
 
     def _stop_ssh_tunnel(self) -> None:
@@ -1025,8 +947,8 @@ class RosbridgePoseStreamTransport:
                                 "event": {
                                     "type": "stream_error",
                                     "message": (
-                                        "tf rosbridge message misses expected transform path "
-                                        f"({expected_frame}->base_footprint directly or via one intermediate frame)"
+                                        "tf rosbridge message misses map->base_footprint transform "
+                                        f"(expected parent frame: {expected_frame})"
                                     ),
                                     "attempt": reconnect_attempt,
                                     "timestamp": time.time(),
