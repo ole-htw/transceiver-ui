@@ -755,6 +755,44 @@ def test_on_map_canvas_release_queues_nav2point_with_dragged_yaw() -> None:
     assert queued == [((4.0, -3.0), 1.2)]
 
 
+def test_stop_run_cancels_active_nav2point_goal() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    cancel_calls: list[str] = []
+    messages: list[str] = []
+    window._nav2point_thread = SimpleNamespace(is_alive=lambda: True)
+    window._executor = None
+    window._navigator = SimpleNamespace(cancel_current_goal=lambda: cancel_calls.append("cancel"))
+    window._append_validation = messages.append
+
+    window._stop_run()
+
+    assert cancel_calls == ["cancel"]
+    assert any("nav2point-Cancel" in message for message in messages)
+
+
+def test_refresh_stop_button_state_enables_stop_while_nav2point_runs() -> None:
+    class _DummyButton:
+        def __init__(self) -> None:
+            self.state = "disabled"
+
+        def configure(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            if "state" in kwargs:
+                self.state = kwargs["state"]
+
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window.stop_btn = _DummyButton()
+    window._run_thread = None
+    window._manual_measurement_thread = None
+    window._nav2point_thread = SimpleNamespace(is_alive=lambda: True)
+
+    window._refresh_stop_button_state()
+    assert window.stop_btn.state == "normal"
+
+    window._nav2point_thread = SimpleNamespace(is_alive=lambda: False)
+    window._refresh_stop_button_state()
+    assert window.stop_btn.state == "disabled"
+
+
 def test_review_measurement_auto_approves_when_manual_review_disabled() -> None:
     window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
     window.manual_review_enabled_var = SimpleNamespace(get=lambda: False)

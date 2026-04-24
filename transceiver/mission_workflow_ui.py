@@ -319,6 +319,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._executor: MeasurementRunExecutor | None = None
         self._navigator: _UiNavigator | None = None
         self._run_thread: threading.Thread | None = None
+        self._nav2point_thread: threading.Thread | None = None
         self._manual_measurement_thread: threading.Thread | None = None
         self._records: list[dict[str, Any]] = []
         self._run_started_at: float | None = None
@@ -1125,14 +1126,21 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if self._run_thread and self._run_thread.is_alive():
             self._append_validation("⚠️ nav2point ist während eines aktiven Runs deaktiviert.")
             return
+        if self._nav2point_thread and self._nav2point_thread.is_alive():
+            self._append_validation("⚠️ nav2point läuft bereits. Bitte aktuellen Zielpunkt zuerst stoppen oder abwarten.")
+            return
         target = self._navigation_point_from_world_position(world_position, yaw_radians=yaw_radians)
 
         def _worker() -> None:
-            navigator = self._ensure_navigator()
-            state = navigator.navigate_to_point(
-                target,
-                timeout_s=float(self._runtime_config.goal_reached_timeout_s),
-            )
+            state: TerminalNavigationState = "aborted"
+            try:
+                navigator = self._ensure_navigator()
+                state = navigator.navigate_to_point(
+                    target,
+                    timeout_s=float(self._runtime_config.goal_reached_timeout_s),
+                )
+            finally:
+                self.after(0, self._refresh_stop_button_state)
             if state == "succeeded":
                 self.after(
                     0,
@@ -1148,7 +1156,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 ),
             )
 
-        threading.Thread(target=_worker, daemon=True).start()
+        self._nav2point_thread = threading.Thread(target=_worker, daemon=True)
+        self._nav2point_thread.start()
+        self._refresh_stop_button_state()
 
     @staticmethod
     def _measurement_distance_m(
@@ -3633,6 +3643,14 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             messagebox.showwarning("Fortsetzen", str(exc), parent=self)
 
     def _stop_run(self) -> None:
+        if self._nav2point_thread and self._nav2point_thread.is_alive() and self._executor is None:
+            if self._navigator is None:
+                self._append_validation("⚠️ Stop angefordert, aber kein aktives nav2point-Ziel gefunden.")
+                self._refresh_stop_button_state()
+                return
+            self._navigator.cancel_current_goal()
+            self._append_validation("Stop angefordert: nav2point-Cancel wurde an die Navigation gesendet.")
+            return
         if not self._executor:
             return
         try:
@@ -3651,7 +3669,15 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             manual_measurement_btn.configure(state="disabled" if running else "normal")
         self.pause_btn.configure(state="normal" if running and not paused else "disabled")
         self.resume_btn.configure(state="normal" if running and paused else "disabled")
-        self.stop_btn.configure(state="normal" if running else "disabled")
+        self._refresh_stop_button_state()
+
+    def _refresh_stop_button_state(self) -> None:
+        run_active = bool(self._run_thread is not None and self._run_thread.is_alive())
+        manual_measurement_active = bool(
+            self._manual_measurement_thread is not None and self._manual_measurement_thread.is_alive()
+        )
+        nav2point_active = bool(self._nav2point_thread is not None and self._nav2point_thread.is_alive())
+        self.stop_btn.configure(state="normal" if run_active or manual_measurement_active or nav2point_active else "disabled")
 
     def _on_stage_update(self, stage: str, status: str) -> None:
         if stage == "measurement" and status == "running":
