@@ -426,6 +426,60 @@ def test_cancel_current_goal_uses_server_side_cancel_before_signals(monkeypatch)
     assert process.sent_signals == [signal.SIGINT]
 
 
+def test_cancel_current_goal_calls_cancel_service_when_goal_id_missing(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class _Process:
+        def __init__(self) -> None:
+            self.sent_signals: list[int] = []
+
+        def poll(self):
+            return None
+
+        def send_signal(self, sig: int) -> None:
+            self.sent_signals.append(sig)
+            calls.append(("signal", sig))
+
+        def wait(self, timeout: float) -> int:
+            raise TimeoutError("still running")
+
+        def terminate(self) -> None:
+            calls.append(("terminate", None))
+
+        def kill(self) -> None:
+            calls.append(("kill", None))
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(("server_cancel", cmd))
+
+        class _Done:
+            returncode = 0
+
+        return _Done()
+
+    monkeypatch.setattr("transceiver.navigation_adapter.subprocess.run", _fake_run)
+
+    transport = Ros2CliNavigationTransport()
+    process = _Process()
+    transport._last_process = process
+    transport._last_config = NavigationAdapterConfig(
+        robot_host="robot@10.0.0.2",
+        ros2_namespace="robot1",
+        remote_ros_setup="/opt/ros/jazzy/setup.bash",
+    )
+    transport._last_goal_id = None
+
+    transport.cancel_current_goal()
+
+    assert calls[0][0] == "server_cancel"
+    cancel_cmd = " ".join(str(part) for part in calls[0][1])
+    assert "service call" in cancel_cmd
+    assert "/robot1/navigate_to_pose/_action/cancel_goal" in cancel_cmd
+    assert "action_msgs/srv/CancelGoal" in cancel_cmd
+    assert "uuid" in cancel_cmd
+    assert process.sent_signals == [signal.SIGINT]
+
+
 def test_send_goal_maps_dead_transport_to_connection_error_even_after_accept(monkeypatch) -> None:
     class _Stream:
         def __init__(self, lines: list[str], rest: str = "") -> None:
