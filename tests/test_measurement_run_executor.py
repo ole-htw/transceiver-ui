@@ -289,7 +289,7 @@ def test_manual_stop_after_last_point_uses_completed_with_abort_substatus() -> N
     assert summaries[0]["abort_reason"] == "run_cancelled.manual_stop_after_completion"
 
 
-def test_manual_stop_with_transport_connection_error_still_marks_cancelled() -> None:
+def test_manual_stop_without_cancel_confirmation_marks_failed() -> None:
     class NoCancelConfirmationNavigator(FakeNavigator):
         def __init__(self) -> None:
             super().__init__(["connection_error"])
@@ -307,7 +307,7 @@ def test_manual_stop_with_transport_connection_error_still_marks_cancelled() -> 
     nav = NoCancelConfirmationNavigator()
     summaries: list[dict] = []
     executor = MeasurementRunExecutor(
-        mission=_mission(),
+        mission=MeasurementMission(name="single", points=[_mission().points[0]], repeat=1),
         navigator=nav,
         trigger_measurement=lambda _point: {"ok": True},
         persist_result=lambda _payload: None,
@@ -321,9 +321,9 @@ def test_manual_stop_with_transport_connection_error_still_marks_cancelled() -> 
     executor.stop()
     thread.join(timeout=2)
 
-    assert executor.state == "cancelled"
+    assert executor.state == "failed"
     assert nav.cancel_calls == 1
-    assert summaries[0]["abort_reason"] == "run_cancelled.manual_stop"
+    assert summaries[0]["abort_reason"] == "navigation_failed.connection_error"
 
 def test_invalid_transitions_raise() -> None:
     executor = MeasurementRunExecutor(
