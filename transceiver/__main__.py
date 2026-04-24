@@ -180,6 +180,7 @@ def _classify_visible_xcorr_peaks(
         peaks_after=peaks_after,
         min_rel_height=min_rel_height,
         repetition_period_samples=repetition_period_samples,
+        include_shoulders=True,
     )
     _los_highest_idx, los_idx, _los_echo_indices, _los_group_indices = _classify_peak_group_from_mag(
         mag,
