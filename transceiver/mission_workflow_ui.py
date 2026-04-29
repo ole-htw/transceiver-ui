@@ -463,6 +463,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "echo_slots": {},
             "marker": None,
             "heading": None,
+            "position_info_box": None,
+            "position_info_text": None,
         }
         self._static_map_layer_signature: tuple[Any, ...] | None = None
         self._map_image_size: tuple[int, int] | None = None
@@ -832,6 +834,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "echo_slots": {},
             "marker": None,
             "heading": None,
+            "position_info_box": None,
+            "position_info_text": None,
         }
         self._static_map_layer_signature = None
         self._invalidate_live_echo_geometry_cache()
@@ -1300,6 +1304,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "echo_slots": {},
             "marker": None,
             "heading": None,
+            "position_info_box": None,
+            "position_info_text": None,
         }
         self._static_map_layer_signature = None
         self._invalidate_live_echo_geometry_cache()
@@ -1365,6 +1371,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "echo_slots": {},
             "marker": None,
             "heading": None,
+            "position_info_box": None,
+            "position_info_text": None,
         }
         self._invalidate_live_echo_geometry_cache()
         self._map_canvas_image_id = self.map_preview_canvas.create_image(offset_x, offset_y, anchor="nw", image=preview)
@@ -1379,8 +1387,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
     def _draw_live_overlay_layer(self) -> None:
         self._draw_live_echo_preview_overlay()
         self._draw_live_marker()
+        self._draw_live_position_info_overlay()
 
-    def _clear_live_overlay_layer(self, *, components: tuple[str, ...] = ("echo_slots", "marker", "heading")) -> None:
+    def _clear_live_overlay_layer(
+        self,
+        *,
+        components: tuple[str, ...] = ("echo_slots", "marker", "heading", "position_info_box", "position_info_text"),
+    ) -> None:
         if not self._live_overlay_item_ids:
             return
         if "echo_slots" in components:
@@ -1396,7 +1409,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                     echo_slots.pop(slot_name, None)
             self._live_overlay_item_ids["echo_slots"] = {}
             self._invalidate_live_echo_geometry_cache()
-        for key in ("marker", "heading"):
+        for key in ("marker", "heading", "position_info_box", "position_info_text"):
             if key not in components:
                 continue
             item_id = self._live_overlay_item_ids.get(key)
@@ -2380,6 +2393,66 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                     self._live_overlay_item_ids["heading"] = heading_item_id
             return
         self._clear_live_overlay_layer(components=("heading",))
+
+
+    def _draw_live_position_info_overlay(self) -> None:
+        if not bool(self.live_pose_stream_enabled_var.get()):
+            self._clear_live_overlay_layer(components=("position_info_box", "position_info_text"))
+            return
+        position = self._copy_valid_live_position()
+        if position is None:
+            self._clear_live_overlay_layer(components=("position_info_box", "position_info_text"))
+            return
+        x_value = float(position["x"])
+        y_value = float(position["y"])
+        distance_text = "-"
+        if self._rx_antenna_global_position is not None:
+            rx_x, rx_y = self._rx_antenna_global_position
+            distance_text = f"{math.hypot(x_value - rx_x, y_value - rx_y):.2f} m"
+
+        overlay_text = f"Live: x={x_value:.2f}, y={y_value:.2f}\nAbstand zu RX: {distance_text}"
+        try:
+            canvas_width = max(1, self.map_preview_canvas.winfo_width())
+            canvas_height = max(1, self.map_preview_canvas.winfo_height())
+        except tk.TclError:
+            return
+        margin = 10
+        anchor_x = canvas_width - margin
+        anchor_y = canvas_height - margin
+
+        text_item_id = self._live_overlay_item_ids.get("position_info_text")
+        if not isinstance(text_item_id, int):
+            text_item_id = int(self.map_preview_canvas.create_text(anchor_x, anchor_y, anchor="se"))
+            self._live_overlay_item_ids["position_info_text"] = text_item_id
+        self.map_preview_canvas.coords(text_item_id, anchor_x, anchor_y)
+        self.map_preview_canvas.itemconfigure(
+            text_item_id,
+            text=overlay_text,
+            fill="#eaf2ff",
+            font=("TkDefaultFont", 10, "bold"),
+            justify="right",
+            state="normal",
+        )
+
+        bbox = self.map_preview_canvas.bbox(text_item_id)
+        if bbox is None:
+            self._clear_live_overlay_layer(components=("position_info_box",))
+            return
+        x1, y1, x2, y2 = bbox
+        padding = 6
+        box_item_id = self._live_overlay_item_ids.get("position_info_box")
+        if not isinstance(box_item_id, int):
+            box_item_id = int(self.map_preview_canvas.create_rectangle(x1, y1, x2, y2))
+            self._live_overlay_item_ids["position_info_box"] = box_item_id
+        self.map_preview_canvas.coords(box_item_id, x1 - padding, y1 - padding, x2 + padding, y2 + padding)
+        self.map_preview_canvas.itemconfigure(
+            box_item_id,
+            fill="#0b1220",
+            outline="#91a4c5",
+            width=1,
+            state="normal",
+        )
+        self.map_preview_canvas.tag_lower(box_item_id, text_item_id)
 
     def _highlight_marker(self, marker_id: int) -> None:
         self.map_preview_canvas.itemconfigure(
