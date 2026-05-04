@@ -61,6 +61,8 @@ LIVE_ECHO_CACHE_POSITION_DELTA_M = 0.015
 LIVE_ECHO_CACHE_DISTANCE_DELTA_M = 0.02
 LIVE_ECHO_SAMPLING_NORMAL = (24, 32, 48)
 LIVE_ECHO_SAMPLING_REDUCED = (16, 24, 32)
+MULTI_SELECTION_PROBABILITY_SIGMA_M = 1.5
+MULTI_SELECTION_PROBABILITY_GRID_STEP_PX = 10
 
 
 
@@ -1553,8 +1555,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         return (map_pixel_x, map_pixel_y)
 
     def _preview_pixel_to_world(self, *, preview_x: float, preview_y: float) -> tuple[float, float] | None:
-        mission = self._mission
-        original = self._map_image_original
+        mission = getattr(self, "_mission", None)
+        original = getattr(self, "_map_image_original", None)
         if mission is None or mission.map_config is None or original is None:
             return None
         scale_x, scale_y = self._map_preview_scale
@@ -1756,8 +1758,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         echo_distance_m: float,
         reduced_sampling: bool,
     ) -> tuple[list[float] | None, int]:
-        mission = self._mission
-        original = self._map_image_original
+        mission = getattr(self, "_mission", None)
+        original = getattr(self, "_map_image_original", None)
         if mission is None or mission.map_config is None or original is None:
             return (None, 1)
         resolution = mission.map_config.resolution
@@ -1802,7 +1804,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         rx_position = self._rx_antenna_global_position
         if rx_position is None:
             return
-        for record in self._selected_record_payloads():
+        selected_records = self._selected_record_payloads()
+        if len(selected_records) > 1 and self._draw_selected_echo_probability_overlay(
+            rx_position=rx_position,
+            records=selected_records,
+        ):
+            return
+        for record in selected_records:
             measurement_position = self._selected_record_measurement_position(record)
             if measurement_position is None:
                 continue
@@ -1823,6 +1831,84 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                     echo_distance_m=echo_distance,
                     color=color,
                 )
+
+    def _draw_selected_echo_probability_overlay(
+        self,
+        *,
+        rx_position: tuple[float, float],
+        records: list[dict[str, Any]],
+    ) -> bool:
+        mission = getattr(self, "_mission", None)
+        original = getattr(self, "_map_image_original", None)
+        if mission is None or mission.map_config is None or original is None:
+            return False
+        resolution = mission.map_config.resolution
+        if not math.isfinite(resolution) or resolution <= 0.0:
+            return False
+        sigma_sq = MULTI_SELECTION_PROBABILITY_SIGMA_M * MULTI_SELECTION_PROBABILITY_SIGMA_M
+        if sigma_sq <= 0.0 or not math.isfinite(sigma_sq):
+            return False
+        rx_x, rx_y = rx_position
+        candidates: list[tuple[tuple[float, float], float]] = []
+        for record in records:
+            measurement_position = self._selected_record_measurement_position(record)
+            if measurement_position is None:
+                continue
+            measurement = record.get("measurement")
+            if not isinstance(measurement, dict):
+                continue
+            result = measurement.get("result")
+            if not isinstance(result, dict):
+                continue
+            echo_distances = self._extract_echo_distances(result.get("echo_delays"), limit=1)
+            if not echo_distances:
+                continue
+            point_x, point_y = measurement_position
+            rho_i = math.hypot(point_x - rx_x, point_y - rx_y) + echo_distances[0]
+            if not math.isfinite(rho_i) or rho_i <= 0.0:
+                continue
+            candidates.append((measurement_position, rho_i))
+        if not candidates:
+            return False
+        step_px = max(4, int(MULTI_SELECTION_PROBABILITY_GRID_STEP_PX))
+        canvas_width = max(1, self.map_preview_canvas.winfo_width())
+        canvas_height = max(1, self.map_preview_canvas.winfo_height())
+        values: list[tuple[float, float, float]] = []
+        max_value = 0.0
+        for py in range(0, canvas_height, step_px):
+            for px in range(0, canvas_width, step_px):
+                world_pos = self._preview_canvas_to_world(px + (step_px / 2.0), py + (step_px / 2.0))
+                if world_pos is None:
+                    continue
+                world_x, world_y = world_pos
+                value = 0.0
+                for (s_x, s_y), rho_i in candidates:
+                    residual = math.hypot(world_x - s_x, world_y - s_y) + math.hypot(world_x - rx_x, world_y - rx_y) - rho_i
+                    value += math.exp(-((residual * residual) / (2.0 * sigma_sq)))
+                if value <= 0.0 or not math.isfinite(value):
+                    continue
+                max_value = max(max_value, value)
+                values.append((float(px), float(py), value))
+        if max_value <= 0.0:
+            return False
+        for px, py, value in values:
+            normalized = value / max_value
+            if normalized < 0.2:
+                continue
+            heat = min(1.0, max(0.0, normalized))
+            red = int(round(255 * heat))
+            green = int(round(180 * (1.0 - heat)))
+            blue = int(round(48 * (1.0 - heat)))
+            self.map_preview_canvas.create_rectangle(
+                px,
+                py,
+                px + step_px,
+                py + step_px,
+                fill=f"#{red:02x}{green:02x}{blue:02x}",
+                outline="",
+                stipple="gray50",
+            )
+        return True
 
     def _draw_live_echo_preview_overlay(self) -> None:
         if not bool(self.live_preview_enabled_var.get()):
