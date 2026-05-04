@@ -1751,7 +1751,16 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if normalized_echo_delays:
             review_outcome["echo_delays"] = normalized_echo_delays
 
-        for key in ("manual_lags", "los_idx", "echo_indices", "los_lag", "echo_lags", "echo_delays"):
+        for key in (
+            "manual_lags",
+            "los_idx",
+            "echo_indices",
+            "los_lag",
+            "echo_lags",
+            "echo_delays",
+            "interpolation_enabled",
+            "interpolation_factor",
+        ):
             if key in review_outcome:
                 result_payload[key] = review_outcome.get(key)
 
@@ -1759,7 +1768,16 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if not isinstance(review_payload, dict):
             review_payload = {}
             result_payload["review"] = review_payload
-        for key in ("manual_lags", "los_idx", "echo_indices", "los_lag", "echo_lags", "echo_delays"):
+        for key in (
+            "manual_lags",
+            "los_idx",
+            "echo_indices",
+            "los_lag",
+            "echo_lags",
+            "echo_delays",
+            "interpolation_enabled",
+            "interpolation_factor",
+        ):
             if key in review_outcome:
                 review_payload[key] = review_outcome.get(key)
 
@@ -1793,6 +1811,8 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             echo_indices=[] if has_structured_echo_delays else review_outcome.get("echo_indices"),
             echo_lags=[] if has_structured_echo_delays else review_outcome.get("echo_lags"),
             los_lag=review_outcome.get("los_lag"),
+            interpolation_enabled=review_outcome.get("interpolation_enabled"),
+            interpolation_factor=review_outcome.get("interpolation_factor"),
         )
 
     @staticmethod
@@ -1815,6 +1835,21 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                     parsed_manual[key] = int(round(float(value)))
             if parsed_manual:
                 prefill["manual_lags"] = parsed_manual
+        interpolation_enabled = result_payload.get("interpolation_enabled")
+        if interpolation_enabled is None:
+            review_payload = result_payload.get("review")
+            if isinstance(review_payload, dict):
+                interpolation_enabled = review_payload.get("interpolation_enabled")
+        if interpolation_enabled is not None:
+            prefill["interpolation_enabled"] = bool(interpolation_enabled)
+
+        interpolation_factor = result_payload.get("interpolation_factor")
+        if interpolation_factor is None:
+            review_payload = result_payload.get("review")
+            if isinstance(review_payload, dict):
+                interpolation_factor = review_payload.get("interpolation_factor")
+        if interpolation_factor is not None:
+            prefill["interpolation_factor"] = interpolation_factor
         return prefill
 
     def _on_results_table_select(self, _event: tk.Event) -> None:
