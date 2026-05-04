@@ -471,3 +471,32 @@ def test_review_add_echo_marker_near_lag_ignores_existing_marker() -> None:
     assert dialog._selected_echo_indices == [1]
     assert dialog._base_echo_indices == [1]
     assert dialog._manual_lags["echo"] is None
+
+def test_review_focused_x_range_includes_all_selected_markers() -> None:
+    from transceiver.__main__ import MissionMeasurementReviewDialog
+
+    dialog = types.SimpleNamespace()
+    dialog._lags = np.array([-250.0, -120.0, -20.0, 10.0, 40.0, 260.0], dtype=float)
+    dialog._selected_los_idx = 1
+    dialog._selected_echo_indices = [5]
+
+    x_range = MissionMeasurementReviewDialog._focused_x_range(dialog)
+
+    assert x_range is not None
+    assert x_range[0] <= -120.0
+    assert x_range[1] >= 260.0
+
+
+def test_review_focused_x_range_keeps_single_marker_visible_with_margin() -> None:
+    from transceiver.__main__ import MissionMeasurementReviewDialog
+
+    dialog = types.SimpleNamespace()
+    dialog._lags = np.array([-100.0, -50.0, 0.0, 50.0, 100.0], dtype=float)
+    dialog._selected_los_idx = 2
+    dialog._selected_echo_indices = []
+
+    x_range = MissionMeasurementReviewDialog._focused_x_range(dialog)
+
+    assert x_range is not None
+    assert x_range[0] < 0.0
+    assert x_range[1] > 0.0

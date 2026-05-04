@@ -1939,12 +1939,26 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         if not focus_lags:
             return None
 
-        center = float(sum(focus_lags) / len(focus_lags))
         lag_min = float(np.min(self._lags))
         lag_max = float(np.max(self._lags))
-        max_half_window = max(10.0, (lag_max - lag_min) / 2.0)
-        zoom_half_window = float(np.clip(50.0, 10.0, max_half_window))
-        return (center - zoom_half_window, center + zoom_half_window)
+        selected_min = float(min(focus_lags))
+        selected_max = float(max(focus_lags))
+
+        if len(focus_lags) == 1:
+            selected_span = 0.0
+        else:
+            selected_span = selected_max - selected_min
+
+        margin = max(10.0, selected_span * 0.2)
+        range_min = max(lag_min, selected_min - margin)
+        range_max = min(lag_max, selected_max + margin)
+
+        if range_max <= range_min:
+            center = float(focus_lags[0])
+            fallback_half_window = max(10.0, (lag_max - lag_min) * 0.1)
+            range_min = max(lag_min, center - fallback_half_window)
+            range_max = min(lag_max, center + fallback_half_window)
+        return (range_min, range_max)
 
     def _apply_manual_lag(self, kind: str, lag_value: float) -> None:
         if kind not in ("los", "echo"):
