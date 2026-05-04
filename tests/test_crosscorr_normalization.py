@@ -324,6 +324,52 @@ def test_review_manual_echo_click_updates_first_echo_distance() -> None:
     assert delays == [10, 30]
 
 
+
+
+def test_review_manual_echo_click_updates_nearest_echo_slot_not_always_first() -> None:
+    dialog = types.SimpleNamespace()
+    dialog._lags = np.array([0.0, 10.0, 20.0, 30.0, 40.0], dtype=float)
+    dialog._manual_lags = {"los": None, "echo": None}
+    dialog._selected_los_idx = 0
+    dialog._selected_echo_indices = [1, 3, 4]
+    dialog._base_echo_indices = [1, 3, 4]
+    dialog._render_plot = lambda: None
+    dialog._plot = None
+
+    from transceiver.__main__ import MissionMeasurementReviewDialog
+
+    MissionMeasurementReviewDialog._apply_manual_lag(dialog, "echo", 32.0)
+
+    assert dialog._selected_echo_indices == [1, 2, 4]
+    assert dialog._base_echo_indices == [1, 2, 4]
+    delays = MissionMeasurementReviewDialog.echo_delays.fget(dialog)
+    assert delays == [10, 20, 40]
+
+
+def test_review_manual_echo_preview_updates_nearest_echo_slot_and_base_indices() -> None:
+    dialog = types.SimpleNamespace()
+    dialog._lags = np.array([0.0, 10.0, 20.0, 30.0, 40.0], dtype=float)
+    dialog._manual_lags = {"los": None, "echo": None}
+    dialog._selected_los_idx = 0
+    dialog._selected_echo_indices = [1, 3, 4]
+    dialog._base_echo_indices = [1, 3, 4]
+    dialog._update_peak_label_positions = lambda: None
+    dialog._update_stats_label = lambda: None
+    dialog._plot = None
+
+    from transceiver.__main__ import MissionMeasurementReviewDialog
+
+    MissionMeasurementReviewDialog._preview_manual_lag(dialog, "echo", 39.0)
+
+    assert dialog._selected_echo_indices == [1, 3, 4]
+    assert dialog._base_echo_indices == [1, 3, 4]
+    MissionMeasurementReviewDialog._preview_manual_lag(dialog, "echo", 29.0)
+    assert dialog._selected_echo_indices == [1, 3, 4]
+    assert dialog._base_echo_indices == [1, 3, 4]
+    MissionMeasurementReviewDialog._preview_manual_lag(dialog, "echo", 19.0)
+    assert dialog._selected_echo_indices == [1, 2, 4]
+    assert dialog._base_echo_indices == [1, 2, 4]
+
 def test_review_drag_preview_updates_echo_distances_live() -> None:
     dialog = types.SimpleNamespace()
     dialog._lags = np.array([0.0, 10.0, 20.0, 30.0], dtype=float)
