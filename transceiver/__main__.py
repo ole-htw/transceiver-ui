@@ -1988,6 +1988,36 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             range_max = min(lag_max, center + fallback_half_window)
         return (range_min, range_max)
 
+    def _resolve_echo_marker_slot_for_lag(self, target_lag: float) -> int | None:
+        if not self._selected_echo_indices:
+            return None
+
+        max_lag_distance = 25.0
+        plot = getattr(self, "_plot", None)
+        view_box = plot.getViewBox() if plot is not None else None
+        if view_box is not None:
+            view_range = view_box.viewRange()
+            visible_x = view_range[0]
+            visible_width = max(0.0, float(visible_x[1]) - float(visible_x[0]))
+            max_lag_distance = float(np.clip(visible_width * 0.02, 2.0, 25.0))
+
+        marker_slot = _find_echo_marker_slot_near_lag(
+            self._lags,
+            self._selected_echo_indices,
+            float(target_lag),
+            max_lag_distance=max_lag_distance,
+        )
+        if marker_slot is not None:
+            return int(marker_slot)
+
+        nearest_slot = int(
+            min(
+                range(len(self._selected_echo_indices)),
+                key=lambda slot: abs(float(self._lags[int(self._selected_echo_indices[slot])]) - float(target_lag)),
+            )
+        )
+        return nearest_slot
+
     def _apply_manual_lag(self, kind: str, lag_value: float) -> None:
         if kind not in ("los", "echo"):
             return
@@ -2001,10 +2031,13 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             return
 
         if self._selected_echo_indices:
+            marker_slot = MissionMeasurementReviewDialog._resolve_echo_marker_slot_for_lag(self, float(lag_value))
+            if marker_slot is None:
+                return
             self._selected_echo_indices = _update_echo_indices_after_manual_drag(
                 self._lags,
                 self._selected_echo_indices,
-                0,
+                int(marker_slot),
                 float(lag_value),
             )
             self._base_echo_indices = [int(idx) for idx in self._selected_echo_indices]
@@ -2024,12 +2057,16 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
             return
 
         if self._selected_echo_indices:
+            marker_slot = MissionMeasurementReviewDialog._resolve_echo_marker_slot_for_lag(self, float(lag_value))
+            if marker_slot is None:
+                return
             self._selected_echo_indices = _update_echo_indices_after_manual_drag(
                 self._lags,
                 self._selected_echo_indices,
-                0,
+                int(marker_slot),
                 float(lag_value),
             )
+            self._base_echo_indices = [int(idx) for idx in self._selected_echo_indices]
             self._update_peak_label_positions()
             self._update_stats_label()
 
