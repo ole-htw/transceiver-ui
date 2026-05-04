@@ -717,6 +717,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         scroll.grid(row=0, column=1, sticky="ns")
         self.results_table.configure(yscrollcommand=scroll.set)
         self.results_table.bind("<<TreeviewSelect>>", self._on_results_table_select)
+        self.results_table.bind("<Button-1>", self._on_results_table_click, add="+")
 
         self._mission_points: list[MeasurementPoint] = []
         self.mission_name_var.trace_add("write", lambda *_args: self._persist_workflow_state())
@@ -1655,6 +1656,21 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         selected_index = self.points_table.index(selected[0])
         self._selected_point_index = selected_index if selected_index >= 0 else None
         self._draw_map_preview()
+
+
+    def _on_results_table_click(self, event: tk.Event) -> str | None:
+        row_id = self.results_table.identify_row(event.y)
+        if row_id:
+            return None
+        region = self.results_table.identify("region", event.x, event.y)
+        if region in {"heading", "separator"}:
+            return None
+        self.results_table.selection_remove(*self.results_table.selection())
+        self.results_table.focus("")
+        self._selected_result_index = None
+        self._selected_result_indices = ()
+        self._draw_map_preview()
+        return "break"
 
     def _on_results_table_select(self, _event: tk.Event) -> None:
         selected = self.results_table.selection()
