@@ -4443,7 +4443,16 @@ class TransceiverUI(ctk.CTk):
             rx_params_left, "rx_rate", textvariable=self.rx_rate_var
         )
         self.rx_rate.grid(row=0, column=1, sticky="ew")
+        self.rx_rate.entry.bind(
+            "<KeyRelease>",
+            lambda _e: self._sync_rx_parameter_entries("single", "rate"),
+        )
         self.rx_rate.entry.bind("<FocusOut>", lambda _e: self.auto_update_rx_filename())
+        self.rx_rate.entry.bind(
+            "<FocusOut>",
+            lambda _e: self._sync_rx_parameter_entries("single", "rate"),
+            add="+",
+        )
 
         ctk.CTkLabel(rx_params_right, text="Freq", anchor="e").grid(
             row=0, column=0, sticky="e", padx=label_padx
@@ -4452,6 +4461,15 @@ class TransceiverUI(ctk.CTk):
         self.rx_freq.insert(0, "5.18e9")
         self.rx_freq.grid(row=0, column=1, sticky="ew")
         self.rx_freq.entry.bind("<FocusOut>", lambda _e: self.auto_update_rx_filename())
+        self.rx_freq.entry.bind(
+            "<KeyRelease>",
+            lambda _e: self._sync_rx_parameter_entries("single", "freq"),
+        )
+        self.rx_freq.entry.bind(
+            "<FocusOut>",
+            lambda _e: self._sync_rx_parameter_entries("single", "freq"),
+            add="+",
+        )
 
         ctk.CTkLabel(rx_params_left, text="Duration", anchor="e").grid(
             row=1, column=0, sticky="e", padx=label_padx
@@ -4468,6 +4486,15 @@ class TransceiverUI(ctk.CTk):
         self.rx_gain.insert(0, "80")
         self.rx_gain.grid(row=1, column=1, sticky="ew")
         self.rx_gain.entry.bind("<FocusOut>", lambda _e: self.auto_update_rx_filename())
+        self.rx_gain.entry.bind(
+            "<KeyRelease>",
+            lambda _e: self._sync_rx_parameter_entries("single", "gain"),
+        )
+        self.rx_gain.entry.bind(
+            "<FocusOut>",
+            lambda _e: self._sync_rx_parameter_entries("single", "gain"),
+            add="+",
+        )
 
         ctk.CTkLabel(rx_params_body, text="Args", anchor="e").grid(
             row=1, column=0, sticky="e", padx=label_padx
@@ -4771,6 +4798,14 @@ class TransceiverUI(ctk.CTk):
         self.rx_cont_rate = SuggestEntry(rx_cont_params_left, "rx_cont_rate")
         self.rx_cont_rate.insert(0, "200e6")
         self.rx_cont_rate.grid(row=0, column=1, sticky="ew")
+        self.rx_cont_rate.entry.bind(
+            "<KeyRelease>",
+            lambda _e: self._sync_rx_parameter_entries("continuous", "rate"),
+        )
+        self.rx_cont_rate.entry.bind(
+            "<FocusOut>",
+            lambda _e: self._sync_rx_parameter_entries("continuous", "rate"),
+        )
 
         ctk.CTkLabel(rx_cont_params_right, text="Freq", anchor="e").grid(
             row=0, column=0, sticky="e", padx=label_padx
@@ -4778,6 +4813,14 @@ class TransceiverUI(ctk.CTk):
         self.rx_cont_freq = SuggestEntry(rx_cont_params_right, "rx_cont_freq")
         self.rx_cont_freq.insert(0, "5.18e9")
         self.rx_cont_freq.grid(row=0, column=1, sticky="ew")
+        self.rx_cont_freq.entry.bind(
+            "<KeyRelease>",
+            lambda _e: self._sync_rx_parameter_entries("continuous", "freq"),
+        )
+        self.rx_cont_freq.entry.bind(
+            "<FocusOut>",
+            lambda _e: self._sync_rx_parameter_entries("continuous", "freq"),
+        )
 
         ctk.CTkLabel(rx_cont_params_left, text="Ring (s)", anchor="e").grid(
             row=1, column=0, sticky="e", padx=label_padx
@@ -4794,6 +4837,14 @@ class TransceiverUI(ctk.CTk):
         self.rx_cont_gain = SuggestEntry(rx_cont_params_right, "rx_cont_gain")
         self.rx_cont_gain.insert(0, "80")
         self.rx_cont_gain.grid(row=1, column=1, sticky="ew")
+        self.rx_cont_gain.entry.bind(
+            "<KeyRelease>",
+            lambda _e: self._sync_rx_parameter_entries("continuous", "gain"),
+        )
+        self.rx_cont_gain.entry.bind(
+            "<FocusOut>",
+            lambda _e: self._sync_rx_parameter_entries("continuous", "gain"),
+        )
 
         ctk.CTkLabel(rx_cont_params_left, text="Restart margin (s)", anchor="e").grid(
             row=2, column=0, sticky="e", padx=label_padx
@@ -5291,6 +5342,33 @@ class TransceiverUI(ctk.CTk):
     def _on_rx_magnitude_toggle(self) -> None:
         self._reset_manual_xcorr_lags("Betrag geändert")
         self.update_trim()
+
+    def _sync_rx_parameter_entries(self, source: str, field: str) -> None:
+        if getattr(self, "_syncing_rx_parameter_entries", False):
+            return
+        mapping = {
+            "rate": ("rx_rate", "rx_cont_rate"),
+            "freq": ("rx_freq", "rx_cont_freq"),
+            "gain": ("rx_gain", "rx_cont_gain"),
+        }
+        entry_names = mapping.get(field)
+        if entry_names is None:
+            return
+        single_widget = getattr(self, entry_names[0], None)
+        continuous_widget = getattr(self, entry_names[1], None)
+        if single_widget is None or continuous_widget is None:
+            return
+        source_widget = single_widget if source == "single" else continuous_widget
+        target_widget = continuous_widget if source == "single" else single_widget
+        value = source_widget.get()
+        if target_widget.get() == value:
+            return
+        self._syncing_rx_parameter_entries = True
+        try:
+            target_widget.delete(0, tk.END)
+            target_widget.insert(0, value)
+        finally:
+            self._syncing_rx_parameter_entries = False
 
     def _sync_rx_interpolation_factor_entries(self, source: str | None = None) -> None:
         source_widget = None
