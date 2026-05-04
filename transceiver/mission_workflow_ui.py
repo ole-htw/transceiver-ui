@@ -1681,7 +1681,17 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         row_id = self.results_table.identify_row(event.y)
         identify_column = getattr(self.results_table, "identify_column", None)
         column_id = identify_column(event.x) if callable(identify_column) else ""
-        if row_id and column_id == "#9":
+        review_column_id = "#10"
+        try:
+            columns = tuple(self.results_table.cget("columns"))
+        except Exception:
+            columns = ()
+        if columns:
+            try:
+                review_column_id = f"#{columns.index('review_action') + 1}"
+            except ValueError:
+                pass
+        if row_id and column_id == review_column_id:
             row_index = self.results_table.index(row_id)
             self._open_review_for_result_row(row_index)
             return "break"
