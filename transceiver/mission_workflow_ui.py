@@ -1732,13 +1732,50 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         point_label = f"Punktindex {self._format_one_based_index(record.get('global_index'))}"
         review_prefill = self._build_review_prefill_from_result(result_payload)
         try:
-            review_fn(
+            review_outcome = review_fn(
                 point_label=point_label,
                 output_file=output_file,
                 initial_review=review_prefill,
             )
         except Exception as exc:
             self._append_validation(f"⚠️ Review konnte nicht geöffnet werden: {exc}")
+            return
+        if not isinstance(review_outcome, dict):
+            return
+        if not bool(review_outcome.get("approved")):
+            self._append_validation("ℹ️ Review nicht freigegeben; Messresultat bleibt unverändert.")
+            return
+
+        for key in ("manual_lags", "los_idx", "echo_indices", "los_lag", "echo_lags", "echo_delays"):
+            if key in review_outcome:
+                result_payload[key] = review_outcome.get(key)
+
+        review_payload = result_payload.get("review")
+        if not isinstance(review_payload, dict):
+            review_payload = {}
+            result_payload["review"] = review_payload
+        for key in ("manual_lags", "los_idx", "echo_indices", "los_lag", "echo_lags", "echo_delays"):
+            if key in review_outcome:
+                review_payload[key] = review_outcome.get(key)
+
+        self._persist_workflow_state()
+        if 0 <= row_index < len(self.results_table.get_children()):
+            error_text = record.get("error") or ""
+            combined_status = self._compose_table_outcome(record, error_text)
+            self.results_table.item(
+                self.results_table.get_children()[row_index],
+                values=(
+                    self._format_one_based_index(record.get("global_index")),
+                    self._format_one_based_index(record.get("point_index")),
+                    self._format_live_position_for_table(record),
+                    self._format_live_distance_to_rx_for_table(record),
+                    *self._format_echo_distances_for_table(result_payload.get("echo_delays")),
+                    "Review",
+                    combined_status,
+                ),
+            )
+        self._update_results_selection_diagnostics()
+        self._draw_map_preview()
 
     @staticmethod
     def _build_review_prefill_from_result(result_payload: dict[str, Any]) -> dict[str, Any]:
