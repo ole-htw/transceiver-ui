@@ -1732,13 +1732,41 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         point_label = f"Punktindex {self._format_one_based_index(record.get('global_index'))}"
         review_prefill = self._build_review_prefill_from_result(result_payload)
         try:
-            review_fn(
+            review_result = review_fn(
                 point_label=point_label,
                 output_file=output_file,
                 initial_review=review_prefill,
             )
+            if isinstance(review_result, dict) and bool(review_result.get("approved")):
+                self._apply_manual_review_result(row_index=row_index, result_payload=result_payload, review_result=review_result)
         except Exception as exc:
             self._append_validation(f"⚠️ Review konnte nicht geöffnet werden: {exc}")
+
+    def _apply_manual_review_result(
+        self,
+        *,
+        row_index: int,
+        result_payload: dict[str, Any],
+        review_result: dict[str, Any],
+    ) -> None:
+        for key in ("manual_lags", "los_idx", "echo_indices", "los_lag", "echo_lags"):
+            if key in review_result:
+                result_payload[key] = review_result.get(key)
+        if "echo_delays" in review_result:
+            result_payload["echo_delays"] = review_result.get("echo_delays")
+
+        row_ids = self.results_table.get_children()
+        if row_index < 0 or row_index >= len(row_ids):
+            return
+        row_id = row_ids[row_index]
+        current_values = list(self.results_table.item(row_id, "values"))
+        if len(current_values) < 10:
+            return
+        echo_distances = self._format_echo_distances_for_table(result_payload.get("echo_delays"))
+        for idx, value in enumerate(echo_distances):
+            current_values[4 + idx] = value
+        self.results_table.item(row_id, values=tuple(current_values))
+        self._draw_map_preview()
 
     @staticmethod
     def _build_review_prefill_from_result(result_payload: dict[str, Any]) -> dict[str, Any]:
