@@ -338,6 +338,9 @@ def find_left_flank_los_candidates_from_mag(
         if mag_f[i] < amp_threshold:
             continue
 
+
+        
+        
         # Small hump after trend removal.
         is_residual_hump = (
             residual[i] >= residual[i - 1]
@@ -355,7 +358,18 @@ def find_left_flank_los_candidates_from_mag(
             and (left_slope - right_slope) >= kink_threshold
         )
 
-        if not (is_residual_hump or is_rising_kink):
+        is_strong_residual_hump = (
+            residual[i] - res_baseline >= 1.5 * res_threshold
+        )
+
+        if require_hump_and_kink:
+            is_valid_candidate = (
+                is_residual_hump and is_rising_kink
+            ) or is_strong_residual_hump
+        else:
+            is_valid_candidate = is_residual_hump or is_rising_kink
+
+        if not is_valid_candidate:
             continue
 
         # Snap to strongest residual, not strongest magnitude. Snapping to
@@ -385,7 +399,73 @@ def find_left_flank_los_candidates_from_mag(
     kept = [int(max(cluster, key=lambda j: float(residual[j]))) for cluster in clusters]
     return sorted(kept)
 
+def collapse_unresolved_lobes(
+    indices: list[int],
+    mag: np.ndarray,
+    *,
+    min_distance: int = 4,
+    min_valley_drop_rel: float = 0.20,
+    min_valley_drop_sigma: float = 0.5,
+    smooth_window: int = 5,
+) -> list[int]:
+    """Merge candidates that are not separated by a sufficiently deep valley.
 
+    This treats small shoulders/ripples on the same correlation lobe as one
+    physical arrival and keeps the strongest candidate per lobe.
+    """
+    mag_f = np.asarray(mag, dtype=float)
+
+    raw = sorted(
+        {
+            int(idx)
+            for idx in indices
+            if 0 <= int(idx) < mag_f.size
+        }
+    )
+    if not raw:
+        return []
+
+    work = _smooth_edge(mag_f, smooth_window)
+    _baseline, sigma = _robust_baseline_sigma(work)
+    sigma = max(float(sigma), 1e-12)
+
+    clusters: list[list[int]] = [[raw[0]]]
+
+    for idx in raw[1:]:
+        prev = clusters[-1][-1]
+
+        if idx - prev < int(min_distance):
+            clusters[-1].append(idx)
+            continue
+
+        lo, hi = sorted((prev, idx))
+        valley = float(np.min(work[lo : hi + 1]))
+
+        prev_h = float(work[prev])
+        curr_h = float(work[idx])
+        smaller_peak = max(1e-12, min(prev_h, curr_h))
+
+        valley_drop = smaller_peak - valley
+        valley_drop_rel = valley_drop / smaller_peak
+
+        is_resolved_lobe = (
+            valley_drop_rel >= float(min_valley_drop_rel)
+            and valley_drop >= float(min_valley_drop_sigma) * sigma
+        )
+
+        if is_resolved_lobe:
+            clusters.append([idx])
+        else:
+            clusters[-1].append(idx)
+
+    # For echo lobes, keep the strongest point of each unresolved cluster.
+    kept = [
+        int(max(cluster, key=lambda j: float(mag_f[j])))
+        for cluster in clusters
+    ]
+
+    return sorted(kept)
+    
 def find_shoulder_candidates_from_mag(
     mag: np.ndarray,
     *,
@@ -804,9 +884,11 @@ def classify_peak_group_from_mag(
     if mag.size == 0:
         return None, None, [], []
 
-    highest_idx = int(np.argmax(mag))
+    mag_f = np.asarray(mag, dtype=float)
+
+    highest_idx = int(np.argmax(mag_f))
     peak_indices = find_local_maxima_around_peak_from_mag(
-        mag,
+        mag_f,
         center_idx=highest_idx,
         peaks_before=peaks_before,
         peaks_after=peaks_after,
@@ -814,20 +896,36 @@ def classify_peak_group_from_mag(
         repetition_period_samples=repetition_period_samples,
         include_shoulders=include_shoulders,
     )
+
     if not peak_indices:
         peak_indices = [highest_idx]
 
-    group_indices = sorted({int(idx) for idx in peak_indices})
-    if highest_idx not in group_indices:
-        group_indices.append(highest_idx)
-        group_indices.sort()
+    raw_group_indices = sorted({int(idx) for idx in peak_indices})
 
-    # LOS is intentionally the earliest significant candidate in the active
-    # group, not necessarily the largest magnitude peak.
-    los_idx = int(group_indices[0])
-    echo_indices = [int(idx) for idx in group_indices[1:]]
+    if highest_idx not in raw_group_indices:
+        raw_group_indices.append(highest_idx)
+        raw_group_indices.sort()
+
+    los_idx = int(raw_group_indices[0])
+
+    raw_echo_indices = [
+        int(idx)
+        for idx in raw_group_indices
+        if int(idx) > los_idx
+    ]
+
+    echo_indices = collapse_unresolved_lobes(
+        raw_echo_indices,
+        mag_f,
+        min_distance=4,
+        min_valley_drop_rel=0.20,
+        min_valley_drop_sigma=0.5,
+        smooth_window=5,
+    )
+
+    group_indices = [los_idx, *echo_indices]
+
     return highest_idx, los_idx, echo_indices, group_indices
-
 
 def find_local_maxima_around_peak(
     cc: np.ndarray,
