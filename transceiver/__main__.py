@@ -1722,6 +1722,7 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         los_idx: int | None,
         echo_indices: list[int],
         interpolation_factor: float = 1.0,
+        repetition_period_samples: int | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Mission Measurement Review")
@@ -1741,6 +1742,7 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         except (TypeError, ValueError):
             interpolation_factor_value = 1.0
         self._interpolation_factor = interpolation_factor_value if interpolation_factor_value > 0 else 1.0
+        self._repetition_period_samples = int(repetition_period_samples) if repetition_period_samples else len(self._lags)
 
         layout = QtWidgets.QVBoxLayout(self)
         header = QtWidgets.QLabel(
@@ -1770,13 +1772,39 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
 
         button_row = QtWidgets.QHBoxLayout()
         button_row.addStretch(1)
+        auto_detect_btn = QtWidgets.QPushButton("Auto Detect")
         cancel_btn = QtWidgets.QPushButton("Abbrechen / Wiederholen")
         confirm_btn = QtWidgets.QPushButton("Bestätigen")
+        auto_detect_btn.clicked.connect(self._on_auto_detect)
         cancel_btn.clicked.connect(self.reject)
         confirm_btn.clicked.connect(self._on_confirm)
+        button_row.addWidget(auto_detect_btn)
         button_row.addWidget(cancel_btn)
         button_row.addWidget(confirm_btn)
         layout.addLayout(button_row)
+
+
+    def _on_auto_detect(self) -> None:
+        if self._magnitudes.size == 0 or self._lags.size == 0:
+            return
+        _highest_idx, detected_los_idx, detected_echo_indices = _classify_visible_xcorr_peaks(
+            self._magnitudes,
+            repetition_period_samples=max(1, int(self._repetition_period_samples)),
+        )
+        if detected_los_idx is None:
+            return
+        period_samples: int | None = self._repetition_period_samples
+        filtered_echo_indices = _filter_peak_indices_to_period_group(
+            self._lags,
+            [int(idx) for idx in detected_echo_indices if idx is not None],
+            int(detected_los_idx),
+            period_samples,
+        )
+        self._selected_los_idx = int(detected_los_idx)
+        self._selected_echo_indices = [int(idx) for idx in filtered_echo_indices]
+        self._base_echo_indices = [int(idx) for idx in self._selected_echo_indices]
+        self._manual_lags = {"los": None, "echo": None}
+        self._render_plot()
 
     def _on_confirm(self) -> None:
         self._confirmed = True
@@ -7475,6 +7503,7 @@ class TransceiverUI(ctk.CTk):
                     interpolation_factor=self._rx_effective_interpolation_factor()
                     if self.rx_interpolation_enable.get()
                     else 1.0,
+                    repetition_period_samples=int(ctx.get("period_samples")) if ctx.get("period_samples") is not None else None,
                 )
                 dialog.raise_()
                 dialog.activateWindow()
