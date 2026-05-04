@@ -464,6 +464,7 @@ def test_open_review_for_result_row_uses_file_ref_fallback() -> None:
         {
             "point_label": "Punktindex 1",
             "output_file": "signals/rx/mission/run/point-0000.bin",
+            "initial_review": {},
         }
     ]
     assert messages == []
@@ -476,7 +477,14 @@ def test_open_review_for_result_row_uses_rx_output_file_fallback() -> None:
     window._records = [
         {
             "global_index": 1,
-            "measurement": {"result": {"rx": {"output_file": "signals/rx/mission/run/point-0001.bin"}}},
+            "measurement": {
+                "result": {
+                    "rx": {"output_file": "signals/rx/mission/run/point-0001.bin"},
+                    "los_lag": 11,
+                    "echo_lags": [22.2, 35],
+                    "manual_lags": {"los": 11, "echo": 35},
+                }
+            },
         }
     ]
     window.master = SimpleNamespace(
@@ -490,6 +498,7 @@ def test_open_review_for_result_row_uses_rx_output_file_fallback() -> None:
         {
             "point_label": "Punktindex 2",
             "output_file": "signals/rx/mission/run/point-0001.bin",
+            "initial_review": {"los_lag": 11, "echo_lags": [22, 35], "manual_lags": {"los": 11, "echo": 35}},
         }
     ]
     assert messages == []
