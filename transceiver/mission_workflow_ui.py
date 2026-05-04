@@ -687,6 +687,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "echo_3_m",
             "echo_4_m",
             "echo_5_m",
+            "review_action",
             "status",
         )
         self.results_table = ttk.Treeview(
@@ -707,6 +708,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "echo_3_m": f"{ECHO_HEADING_MARKERS[2]} E3",
             "echo_4_m": f"{ECHO_HEADING_MARKERS[3]} E4",
             "echo_5_m": f"{ECHO_HEADING_MARKERS[4]} E5",
+            "review_action": "Review",
             "status": "Status",
         }
         for key, title in headings.items():
@@ -720,6 +722,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.results_table.column("echo_3_m", width=80)
         self.results_table.column("echo_4_m", width=80)
         self.results_table.column("echo_5_m", width=80)
+        self.results_table.column("review_action", width=90, stretch=False)
         self.results_table.column("status", width=320)
 
         scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.results_table.yview)
@@ -1676,6 +1679,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
 
     def _on_results_table_click(self, event: tk.Event) -> str | None:
         row_id = self.results_table.identify_row(event.y)
+        identify_column = getattr(self.results_table, "identify_column", None)
+        column_id = identify_column(event.x) if callable(identify_column) else ""
+        if row_id and column_id == "#9":
+            row_index = self.results_table.index(row_id)
+            self._open_review_for_result_row(row_index)
+            return "break"
         if row_id:
             return None
         region = self.results_table.identify("region", event.x, event.y)
@@ -1683,6 +1692,32 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             return None
         self._update_results_selection_diagnostics()
         return "break"
+
+    def _open_review_for_result_row(self, row_index: int) -> None:
+        if row_index < 0 or row_index >= len(self._records):
+            return
+        record = self._records[row_index]
+        if not isinstance(record, dict):
+            return
+        measurement = record.get("measurement")
+        if not isinstance(measurement, dict):
+            return
+        result_payload = measurement.get("result")
+        if not isinstance(result_payload, dict):
+            return
+        output_file = result_payload.get("output_file")
+        if not isinstance(output_file, str) or not output_file.strip():
+            self._append_validation("⚠️ Review kann nicht geöffnet werden: output_file fehlt.")
+            return
+        review_fn = getattr(self.master, "review_measurement_for_mission", None)
+        if not callable(review_fn):
+            self._append_validation("⚠️ Review kann nicht geöffnet werden: Review-Funktion nicht verfügbar.")
+            return
+        point_label = f"Punktindex {self._format_one_based_index(record.get('global_index'))}"
+        try:
+            review_fn(point_label=point_label, output_file=output_file)
+        except Exception as exc:
+            self._append_validation(f"⚠️ Review konnte nicht geöffnet werden: {exc}")
 
     def _on_results_table_select(self, _event: tk.Event) -> None:
         selected = self.results_table.selection()
@@ -4033,6 +4068,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 live_position_text,
                 live_distance_to_rx,
                 *echo_distances,
+                "Review",
                 combined_status,
             ),
         )
