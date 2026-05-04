@@ -63,6 +63,10 @@ LIVE_ECHO_SAMPLING_NORMAL = (24, 32, 48)
 LIVE_ECHO_SAMPLING_REDUCED = (16, 24, 32)
 MULTI_SELECTION_PROBABILITY_SIGMA_M = 1.5
 MULTI_SELECTION_PROBABILITY_GRID_STEP_PX = 10
+MULTI_SELECTION_PROBABILITY_MIN_NORMALIZED = 0.05
+MULTI_SELECTION_PROBABILITY_MIN_HEAT = 0.2
+MULTI_SELECTION_PROBABILITY_USE_STIPPLE = False
+MULTI_SELECTION_PROBABILITY_DEBUG_LOG = True
 
 
 
@@ -1891,24 +1895,39 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 values.append((float(px), float(py), value))
         if max_value <= 0.0:
             return False
+        total_cells = len(values)
+        drawn_cells = 0
         for px, py, value in values:
             normalized = value / max_value
-            if normalized < 0.2:
+            if normalized < MULTI_SELECTION_PROBABILITY_MIN_NORMALIZED:
                 continue
-            heat = min(1.0, max(0.0, normalized))
+            heat = min(1.0, max(MULTI_SELECTION_PROBABILITY_MIN_HEAT, normalized))
             red = int(round(255 * heat))
             green = int(round(180 * (1.0 - heat)))
             blue = int(round(48 * (1.0 - heat)))
+            rectangle_kwargs: dict[str, Any] = {
+                "fill": f"#{red:02x}{green:02x}{blue:02x}",
+                "outline": "",
+            }
+            if MULTI_SELECTION_PROBABILITY_USE_STIPPLE:
+                rectangle_kwargs["stipple"] = "gray50"
             self.map_preview_canvas.create_rectangle(
                 px,
                 py,
                 px + step_px,
                 py + step_px,
-                fill=f"#{red:02x}{green:02x}{blue:02x}",
-                outline="",
-                stipple="gray50",
+                **rectangle_kwargs,
             )
-        return True
+            drawn_cells += 1
+        if MULTI_SELECTION_PROBABILITY_DEBUG_LOG:
+            self._append_validation(
+                "ℹ️ Echo-Heatmap: "
+                f"{drawn_cells}/{total_cells} Zellen gezeichnet "
+                f"(min_norm={MULTI_SELECTION_PROBABILITY_MIN_NORMALIZED:.2f}, "
+                f"min_heat={MULTI_SELECTION_PROBABILITY_MIN_HEAT:.2f}, "
+                f"stipple={'an' if MULTI_SELECTION_PROBABILITY_USE_STIPPLE else 'aus'})."
+            )
+        return drawn_cells > 0
 
     def _draw_live_echo_preview_overlay(self) -> None:
         if not bool(self.live_preview_enabled_var.get()):
