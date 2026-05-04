@@ -1101,6 +1101,49 @@ def test_open_review_for_result_row_derives_echo_delays_from_echo_lags() -> None
     assert result["echo_delays"] == [{"echo_index": 0, "delta_lag": 15.0, "distance_m": 22.5}]
 
 
+
+
+def test_open_review_for_result_row_scales_rereview_echo_delays_with_interpolation() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._records = [
+        {
+            "global_index": 0,
+            "point_index": 0,
+            "error": "",
+            "measurement": {
+                "status": "succeeded",
+                "result": {
+                    "output_file": "dummy.bin",
+                    "review": {},
+                },
+            },
+        }
+    ]
+    window._append_validation = lambda _msg: None
+    window._persist_workflow_state = lambda: None
+    window._update_results_selection_diagnostics = lambda: None
+    window._draw_map_preview = lambda: None
+    window._format_live_position_for_table = lambda _payload: "-"
+    window._format_live_distance_to_rx_for_table = lambda _payload: "-"
+    window.results_table = SimpleNamespace(get_children=lambda: (), item=lambda *_args, **_kwargs: None)
+    window.master = SimpleNamespace(
+        review_measurement_for_mission=lambda **_kwargs: {
+            "approved": True,
+            "los_lag": 100,
+            "echo_lags": [112],
+            "interpolation_enabled": True,
+            "interpolation_factor": 4,
+        }
+    )
+
+    window._open_review_for_result_row(0)
+
+    result = window._records[0]["measurement"]["result"]
+    assert result["echo_delays"] == [{"echo_index": 0, "delta_lag": 3.0, "distance_m": 4.5}]
+    assert result["interpolation_enabled"] is True
+    assert result["interpolation_factor"] == 4
+    assert result["review"]["echo_delays"] == result["echo_delays"]
+
 def test_open_review_for_result_row_applies_approved_review_and_persists() -> None:
     window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
     window._records = [
