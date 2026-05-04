@@ -338,6 +338,20 @@ class _TreeviewSelectionStub:
         self._indices: dict[str, int] = {}
         self._region = "cell"
         self._row_id = ""
+        self._column_id = ""
+        self._columns = (
+            "measurement_idx",
+            "idx",
+            "live_position",
+            "live_distance_to_rx_m",
+            "echo_1_m",
+            "echo_2_m",
+            "echo_3_m",
+            "echo_4_m",
+            "echo_5_m",
+            "review_action",
+            "status",
+        )
 
     def selection(self) -> tuple[str, ...]:
         return self._selected
@@ -348,8 +362,16 @@ class _TreeviewSelectionStub:
     def identify_row(self, _y: int) -> str:
         return self._row_id
 
+    def identify_column(self, _x: int) -> str:
+        return self._column_id
+
     def identify(self, _kind: str, _x: int, _y: int) -> str:
         return self._region
+
+    def cget(self, key: str):
+        if key == "columns":
+            return self._columns
+        return None
 
 
 class _StringVarStub:
@@ -403,6 +425,22 @@ def test_on_results_table_click_on_empty_region_preserves_multiselect() -> None:
     assert window._selected_result_indices == (0, 1)
     assert window._selected_result_index == 0
     assert window.results_selection_diagnostics_var.value == "Auswahl: 2 Zeilen"
+
+
+def test_on_results_table_click_opens_review_in_review_column() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    table = _TreeviewSelectionStub()
+    table._row_id = "row-a"
+    table._column_id = "#10"
+    table._indices = {"row-a": 3}
+    window.results_table = table
+    opened_rows: list[int] = []
+    window._open_review_for_result_row = lambda row_index: opened_rows.append(row_index)
+
+    result = window._on_results_table_click(SimpleNamespace(x=5, y=5))
+
+    assert result == "break"
+    assert opened_rows == [3]
 
 
 def test_parse_lidar_scan_text_for_overlay_supports_inline_ranges() -> None:
