@@ -627,6 +627,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         ctk.CTkButton(controls, text="Run-Logs exportieren", command=self._export_logs).grid(
             row=2, column=4, padx=(10, 8), pady=3, sticky="w"
         )
+        ctk.CTkButton(controls, text="Importieren", command=self._import_logs).grid(
+            row=2, column=5, padx=(0, 8), pady=3, sticky="w"
+        )
         ctk.CTkCheckBox(
             controls,
             text="LIDAR-Referenzmessung aktiv",
@@ -4250,3 +4253,47 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             for path in sorted(self._run_log_dir.glob("*.json")):
                 zf.write(path, arcname=path.name)
         messagebox.showinfo("Export", f"Exportiert nach:\n{destination}", parent=self)
+
+    def _import_logs(self) -> None:
+        source = filedialog.askopenfilename(
+            title="Run-Logs importieren",
+            parent=self,
+            filetypes=[("ZIP", "*.zip")],
+        )
+        if not source:
+            return
+
+        try:
+            with zipfile.ZipFile(source, "r") as zf:
+                json_members = sorted(
+                    member
+                    for member in zf.namelist()
+                    if member.endswith(".json") and "/" not in member.strip("/")
+                )
+                point_members = [member for member in json_members if member != "run-summary.json"]
+                if not point_members:
+                    messagebox.showerror("Import", "Keine Punkt-Logs im ZIP gefunden.", parent=self)
+                    return
+
+                imported_records: list[dict[str, Any]] = []
+                for member in point_members:
+                    payload_raw = zf.read(member).decode("utf-8")
+                    payload = json.loads(payload_raw)
+                    if isinstance(payload, dict):
+                        imported_records.append(payload)
+        except (OSError, zipfile.BadZipFile, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            messagebox.showerror("Import", f"Import fehlgeschlagen:\n{exc}", parent=self)
+            return
+
+        if not imported_records:
+            messagebox.showerror("Import", "Keine gültigen Punkt-Logs gefunden.", parent=self)
+            return
+
+        self.results_table.delete(*self.results_table.get_children())
+        self._records = []
+        for payload in imported_records:
+            self._on_record(payload)
+
+        self._append_validation(
+            f"✅ Run-Logs importiert: {len(imported_records)} Messpunkte aus {Path(source).name}"
+        )
