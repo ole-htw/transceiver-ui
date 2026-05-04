@@ -3148,6 +3148,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             )
 
         def _persist(payload: dict[str, Any]) -> None:
+            self._attach_result_table_snapshot(payload)
             self.after(0, self._on_record, payload)
 
         self._sync_live_pose_stream_state()
@@ -4007,8 +4008,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         )
 
     def _on_record(self, payload: dict[str, Any]) -> None:
-        payload["live_position_at_measurement"] = self._live_position_at_measurement_start
-        self._live_position_at_measurement_start = None
+        self._attach_result_table_snapshot(payload)
         self._records.append(payload)
         meas = payload.get("measurement", {})
         result = meas.get("result", {}) if isinstance(meas.get("result"), dict) else {}
@@ -4037,6 +4037,15 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             ),
         )
         self._update_live_label()
+
+    def _attach_result_table_snapshot(self, payload: dict[str, Any]) -> None:
+        if "live_position_at_measurement" not in payload:
+            payload["live_position_at_measurement"] = self._live_position_at_measurement_start
+            self._live_position_at_measurement_start = None
+        payload["result_table"] = {
+            "position": self._format_live_position_for_table(payload),
+            "abstand": self._format_live_distance_to_rx_for_table(payload),
+        }
 
     @staticmethod
     def _compose_table_outcome(payload: dict[str, Any], error_text: str) -> str:
