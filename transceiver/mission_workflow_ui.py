@@ -1730,10 +1730,37 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._append_validation("⚠️ Review kann nicht geöffnet werden: Review-Funktion nicht verfügbar.")
             return
         point_label = f"Punktindex {self._format_one_based_index(record.get('global_index'))}"
+        review_prefill = self._build_review_prefill_from_result(result_payload)
         try:
-            review_fn(point_label=point_label, output_file=output_file)
+            review_fn(
+                point_label=point_label,
+                output_file=output_file,
+                initial_review=review_prefill,
+            )
         except Exception as exc:
             self._append_validation(f"⚠️ Review konnte nicht geöffnet werden: {exc}")
+
+    @staticmethod
+    def _build_review_prefill_from_result(result_payload: dict[str, Any]) -> dict[str, Any]:
+        prefill: dict[str, Any] = {}
+        los_lag = result_payload.get("los_lag")
+        if isinstance(los_lag, (int, float)):
+            prefill["los_lag"] = int(round(float(los_lag)))
+        echo_lags = result_payload.get("echo_lags")
+        if isinstance(echo_lags, (list, tuple)):
+            parsed_echo_lags = [int(round(float(value))) for value in echo_lags if isinstance(value, (int, float))]
+            if parsed_echo_lags:
+                prefill["echo_lags"] = parsed_echo_lags
+        manual_lags = result_payload.get("manual_lags")
+        if isinstance(manual_lags, dict):
+            parsed_manual: dict[str, int] = {}
+            for key in ("los", "echo"):
+                value = manual_lags.get(key)
+                if isinstance(value, (int, float)):
+                    parsed_manual[key] = int(round(float(value)))
+            if parsed_manual:
+                prefill["manual_lags"] = parsed_manual
+        return prefill
 
     def _on_results_table_select(self, _event: tk.Event) -> None:
         selected = self.results_table.selection()

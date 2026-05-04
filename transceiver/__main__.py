@@ -7408,6 +7408,7 @@ class TransceiverUI(ctk.CTk):
         point_label: str,
         output_file: str,
         auto_approve: bool = False,
+        initial_review: dict[str, object] | None = None,
     ) -> dict[str, object]:
         """Open a blocking cross-correlation review dialog for one mission point."""
         outcome: dict[str, object] = {
@@ -7452,6 +7453,20 @@ class TransceiverUI(ctk.CTk):
                 mag = np.asarray(ctx.get("mag", np.array([], dtype=float)))
                 los_idx = ctx.get("los_idx")
                 echo_indices = [int(idx) for idx in list(ctx.get("echo_indices", []))]
+                if isinstance(initial_review, dict) and lags.size:
+                    prefill_los_lag = initial_review.get("los_lag")
+                    if isinstance(prefill_los_lag, (int, float)):
+                        los_idx = int(np.argmin(np.abs(lags - float(prefill_los_lag))))
+                    prefill_echo_lags = initial_review.get("echo_lags")
+                    if isinstance(prefill_echo_lags, list):
+                        prefilled_echo_indices = []
+                        for value in prefill_echo_lags:
+                            if isinstance(value, (int, float)):
+                                prefilled_echo_indices.append(
+                                    int(np.argmin(np.abs(lags - float(value))))
+                                )
+                        if prefilled_echo_indices:
+                            echo_indices = prefilled_echo_indices
                 if lags.size == 0 or mag.size == 0 or los_idx is None:
                     detail = "Crosscorrelation enthält keine auswertbaren Peaks (LOS fehlt)."
                     messagebox.showerror("Mission Review", detail)
