@@ -29,6 +29,7 @@ from .measurement_run_executor import (
 )
 from .mission_measurement_service import (
     MissionRxMeasurementService,
+    _coerce_echo_delay_entries,
     REVIEW_REASON_OPERATOR_REJECTED,
     REVIEW_REASON_REVIEW_EXCEPTION,
     REVIEW_REASON_REVIEW_UNAVAILABLE,
@@ -1746,6 +1747,10 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._append_validation("ℹ️ Review nicht freigegeben; Messresultat bleibt unverändert.")
             return
 
+        normalized_echo_delays = self._normalize_review_echo_delays(review_outcome)
+        if normalized_echo_delays:
+            review_outcome["echo_delays"] = normalized_echo_delays
+
         for key in ("manual_lags", "los_idx", "echo_indices", "los_lag", "echo_lags", "echo_delays"):
             if key in review_outcome:
                 result_payload[key] = review_outcome.get(key)
@@ -1776,6 +1781,19 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             )
         self._update_results_selection_diagnostics()
         self._draw_map_preview()
+
+    @staticmethod
+    def _normalize_review_echo_delays(review_outcome: dict[str, Any]) -> list[dict[str, Any]]:
+        raw_echo_delays = review_outcome.get("echo_delays")
+        has_structured_echo_delays = isinstance(raw_echo_delays, list) and any(
+            isinstance(entry, dict) for entry in raw_echo_delays
+        )
+        return _coerce_echo_delay_entries(
+            echo_delays=raw_echo_delays,
+            echo_indices=[] if has_structured_echo_delays else review_outcome.get("echo_indices"),
+            echo_lags=[] if has_structured_echo_delays else review_outcome.get("echo_lags"),
+            los_lag=review_outcome.get("los_lag"),
+        )
 
     @staticmethod
     def _build_review_prefill_from_result(result_payload: dict[str, Any]) -> dict[str, Any]:
