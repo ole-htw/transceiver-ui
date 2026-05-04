@@ -1008,6 +1008,99 @@ def test_review_measurement_auto_approves_when_manual_review_disabled() -> None:
     }
 
 
+def test_open_review_for_result_row_normalizes_review_echo_delays_for_table_and_payload() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._records = [
+        {
+            "global_index": 0,
+            "point_index": 0,
+            "error": "",
+            "measurement": {
+                "status": "succeeded",
+                "result": {
+                    "output_file": "dummy.bin",
+                    "echo_delays": [{"distance_m": 3.0}],
+                    "review": {},
+                },
+            },
+        }
+    ]
+    calls: list[str] = []
+    observed_values: list[object] = []
+    window._append_validation = lambda _msg: calls.append("validation")
+    window._persist_workflow_state = lambda: calls.append("persist")
+    window._update_results_selection_diagnostics = lambda: calls.append("refresh")
+    window._draw_map_preview = lambda: calls.append("draw")
+    window._format_live_position_for_table = lambda _payload: "-"
+    window._format_live_distance_to_rx_for_table = lambda _payload: "-"
+
+    class _DummyResultsTable:
+        def get_children(self):  # type: ignore[no-untyped-def]
+            return ("item-0",)
+
+        def item(self, _item_id, **kwargs):  # type: ignore[no-untyped-def]
+            values = kwargs.get("values", ())
+            observed_values.append(values)
+            calls.append(f"item:{len(values)}")
+
+    window.results_table = _DummyResultsTable()
+    window.master = SimpleNamespace(
+        review_measurement_for_mission=lambda **_kwargs: {
+            "approved": True,
+            "los_lag": 10,
+            "echo_indices": [3],
+            "echo_lags": [22],
+            "echo_delays": [12],
+        }
+    )
+
+    window._open_review_for_result_row(0)
+
+    result = window._records[0]["measurement"]["result"]
+    assert result["echo_delays"] == [{"echo_index": 3, "delta_lag": 12.0, "distance_m": 18.0}]
+    assert result["review"]["echo_delays"] == result["echo_delays"]
+    assert observed_values
+    assert observed_values[0][4] == "18"
+    assert "persist" in calls
+
+
+def test_open_review_for_result_row_derives_echo_delays_from_echo_lags() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._records = [
+        {
+            "global_index": 0,
+            "point_index": 0,
+            "error": "",
+            "measurement": {
+                "status": "succeeded",
+                "result": {
+                    "output_file": "dummy.bin",
+                    "review": {},
+                },
+            },
+        }
+    ]
+    window._append_validation = lambda _msg: None
+    window._persist_workflow_state = lambda: None
+    window._update_results_selection_diagnostics = lambda: None
+    window._draw_map_preview = lambda: None
+    window._format_live_position_for_table = lambda _payload: "-"
+    window._format_live_distance_to_rx_for_table = lambda _payload: "-"
+    window.results_table = SimpleNamespace(get_children=lambda: (), item=lambda *_args, **_kwargs: None)
+    window.master = SimpleNamespace(
+        review_measurement_for_mission=lambda **_kwargs: {
+            "approved": True,
+            "los_lag": 10,
+            "echo_lags": [25],
+        }
+    )
+
+    window._open_review_for_result_row(0)
+
+    result = window._records[0]["measurement"]["result"]
+    assert result["echo_delays"] == [{"echo_index": 0, "delta_lag": 15.0, "distance_m": 22.5}]
+
+
 def test_open_review_for_result_row_applies_approved_review_and_persists() -> None:
     window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
     window._records = [
