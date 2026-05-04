@@ -443,6 +443,58 @@ def test_on_results_table_click_opens_review_in_review_column() -> None:
     assert opened_rows == [3]
 
 
+def test_open_review_for_result_row_uses_file_ref_fallback() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    calls: list[dict[str, str]] = []
+    messages: list[str] = []
+    window._records = [
+        {
+            "global_index": 0,
+            "measurement": {"result": {"file_ref": "signals/rx/mission/run/point-0000.bin"}},
+        }
+    ]
+    window.master = SimpleNamespace(
+        review_measurement_for_mission=lambda **kwargs: calls.append(kwargs)
+    )
+    window._append_validation = messages.append
+
+    window._open_review_for_result_row(0)
+
+    assert calls == [
+        {
+            "point_label": "Punktindex 1",
+            "output_file": "signals/rx/mission/run/point-0000.bin",
+        }
+    ]
+    assert messages == []
+
+
+def test_open_review_for_result_row_uses_rx_output_file_fallback() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    calls: list[dict[str, str]] = []
+    messages: list[str] = []
+    window._records = [
+        {
+            "global_index": 1,
+            "measurement": {"result": {"rx": {"output_file": "signals/rx/mission/run/point-0001.bin"}}},
+        }
+    ]
+    window.master = SimpleNamespace(
+        review_measurement_for_mission=lambda **kwargs: calls.append(kwargs)
+    )
+    window._append_validation = messages.append
+
+    window._open_review_for_result_row(0)
+
+    assert calls == [
+        {
+            "point_label": "Punktindex 2",
+            "output_file": "signals/rx/mission/run/point-0001.bin",
+        }
+    ]
+    assert messages == []
+
+
 def test_parse_lidar_scan_text_for_overlay_supports_inline_ranges() -> None:
     parsed = MissionWorkflowWindow._parse_lidar_scan_text_for_overlay(
         "angle_min: -1.57\nangle_increment: 0.1\nranges: [1.0, 2.5, inf, nan]\n"
