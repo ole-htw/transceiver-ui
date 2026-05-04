@@ -1877,7 +1877,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         max_value = 0.0
         for py in range(0, canvas_height, step_px):
             for px in range(0, canvas_width, step_px):
-                world_pos = self._preview_canvas_to_world(px + (step_px / 2.0), py + (step_px / 2.0))
+                world_pos = self._preview_pixel_to_world(preview_x=px + (step_px / 2.0), preview_y=py + (step_px / 2.0))
                 if world_pos is None:
                     continue
                 world_x, world_y = world_pos
