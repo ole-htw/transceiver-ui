@@ -7415,7 +7415,6 @@ class TransceiverUI(ctk.CTk):
             "reason": REVIEW_REASON_OPERATOR_REJECTED,
             "detail": "Messung wurde vom Operator verworfen.",
         }
-        done = threading.Event()
 
         def _show_review() -> None:
             try:
@@ -7560,11 +7559,13 @@ class TransceiverUI(ctk.CTk):
                 outcome["approved"] = False
                 outcome["reason"] = REVIEW_REASON_REVIEW_EXCEPTION
                 outcome["detail"] = str(exc)
-            finally:
-                done.set()
+
+        if threading.current_thread() is threading.main_thread():
+            _show_review()
+            return outcome
 
         self._ui(_show_review)
-        done.wait()
+        self._call_in_main_thread_sync(lambda: None)
         return outcome
 
     def _reset_rx_buttons(self) -> None:
