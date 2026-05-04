@@ -318,6 +318,79 @@ def test_format_position_for_table_returns_dash_without_known_point() -> None:
     assert position == "-"
 
 
+class _TreeviewSelectionStub:
+    def __init__(self) -> None:
+        self._selected: tuple[str, ...] = ()
+        self._indices: dict[str, int] = {}
+        self._region = "cell"
+        self._row_id = ""
+
+    def selection(self) -> tuple[str, ...]:
+        return self._selected
+
+    def index(self, item_id: str) -> int:
+        return self._indices[item_id]
+
+    def identify_row(self, _y: int) -> str:
+        return self._row_id
+
+    def identify(self, _kind: str, _x: int, _y: int) -> str:
+        return self._region
+
+
+class _StringVarStub:
+    def __init__(self) -> None:
+        self.value = ""
+
+    def set(self, value: str) -> None:
+        self.value = value
+
+
+def test_results_table_allows_extended_multiselect_mode() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window.results_table = SimpleNamespace(cget=lambda key: "extended" if key == "selectmode" else None)
+
+    assert window.results_table.cget("selectmode") == "extended"
+
+
+def test_on_results_table_select_updates_multi_selection_and_diagnostics() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    table = _TreeviewSelectionStub()
+    table._selected = ("row-a", "row-c", "row-b")
+    table._indices = {"row-a": 0, "row-b": 1, "row-c": 2}
+    window.results_table = table
+    window.results_selection_diagnostics_var = _StringVarStub()
+    draw_calls: list[str] = []
+    window._draw_map_preview = lambda: draw_calls.append("draw")
+
+    window._on_results_table_select(SimpleNamespace())
+
+    assert window._selected_result_indices == (0, 1, 2)
+    assert window._selected_result_index == 0
+    assert window.results_selection_diagnostics_var.value == "Auswahl: 3 Zeilen"
+    assert draw_calls == ["draw"]
+
+
+def test_on_results_table_click_on_empty_region_preserves_multiselect() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    table = _TreeviewSelectionStub()
+    table._selected = ("row-a", "row-b")
+    table._region = "cell"
+    table._row_id = ""
+    window.results_table = table
+    window._selected_result_index = 0
+    window._selected_result_indices = (0, 1)
+    window.results_selection_diagnostics_var = _StringVarStub()
+    window._draw_map_preview = lambda: (_ for _ in ()).throw(AssertionError("must not redraw on empty click"))
+
+    result = window._on_results_table_click(SimpleNamespace(x=5, y=5))
+
+    assert result == "break"
+    assert window._selected_result_indices == (0, 1)
+    assert window._selected_result_index == 0
+    assert window.results_selection_diagnostics_var.value == "Auswahl: 2 Zeilen"
+
+
 def test_parse_lidar_scan_text_for_overlay_supports_inline_ranges() -> None:
     parsed = MissionWorkflowWindow._parse_lidar_scan_text_for_overlay(
         "angle_min: -1.57\nangle_increment: 0.1\nranges: [1.0, 2.5, inf, nan]\n"

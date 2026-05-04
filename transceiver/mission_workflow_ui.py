@@ -724,6 +724,13 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self.results_table.configure(yscrollcommand=scroll.set)
         self.results_table.bind("<<TreeviewSelect>>", self._on_results_table_select)
         self.results_table.bind("<Button-1>", self._on_results_table_click, add="+")
+        self.results_selection_diagnostics_var = tk.StringVar(value="Auswahl: 0 Zeilen")
+        ctk.CTkLabel(
+            table_frame,
+            textvariable=self.results_selection_diagnostics_var,
+            anchor="w",
+            justify="left",
+        ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=(2, 0), pady=(4, 0))
 
         self._mission_points: list[MeasurementPoint] = []
         self.mission_name_var.trace_add("write", lambda *_args: self._persist_workflow_state())
@@ -1671,11 +1678,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         region = self.results_table.identify("region", event.x, event.y)
         if region in {"heading", "separator"}:
             return None
-        self.results_table.selection_remove(*self.results_table.selection())
-        self.results_table.focus("")
-        self._selected_result_index = None
-        self._selected_result_indices = ()
-        self._draw_map_preview()
+        self._update_results_selection_diagnostics()
         return "break"
 
     def _on_results_table_select(self, _event: tk.Event) -> None:
@@ -1683,6 +1686,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if not selected:
             self._selected_result_index = None
             self._selected_result_indices = ()
+            self._update_results_selection_diagnostics()
             self._draw_map_preview()
             return
         selected_indices = tuple(
@@ -1694,7 +1698,15 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         )
         self._selected_result_indices = selected_indices
         self._selected_result_index = selected_indices[0] if selected_indices else None
+        self._update_results_selection_diagnostics()
         self._draw_map_preview()
+
+    def _update_results_selection_diagnostics(self) -> None:
+        diagnostics_var = getattr(self, "results_selection_diagnostics_var", None)
+        if diagnostics_var is None:
+            return
+        selected_count = len(getattr(self, "_selected_result_indices", ()))
+        diagnostics_var.set(f"Auswahl: {selected_count} Zeilen")
 
     def _invalidate_live_echo_geometry_cache(self) -> None:
         self._live_echo_geometry_cache = {}
@@ -3121,6 +3133,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._records = []
         self._selected_result_index = None
         self._selected_result_indices = ()
+        self._update_results_selection_diagnostics()
         self._run_started_at = time.time()
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         self._run_log_dir = Path("signals") / "mission-runs" / ts
