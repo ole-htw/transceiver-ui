@@ -131,16 +131,22 @@ def find_shoulder_candidates_from_mag(
     strict = sorted(
         {int(i) for i in strict_peak_indices if left_bound <= int(i) <= right_bound}
     )
-    if len(strict) < 2:
+    if not strict:
         return []
 
-    def _inside_strict_interval(idx: int) -> bool:
+    def _inside_search_interval(idx: int) -> bool:
+        # Neu: erlaube auch Schulter auf der linken steigenden Flanke
+        # vor dem dominanten Peak.
+        if left_bound < idx < center_idx:
+            return True
+
+        # Bisheriges Verhalten: Schultern zwischen strikten Peaks.
         return any(a < idx < b for a, b in zip(strict[:-1], strict[1:]))
 
     candidates: set[int] = set()
 
     for i in range(max(left_bound + slope_window, 1), min(right_bound - slope_window, mag.size - 2) + 1):
-        if not _inside_strict_interval(i):
+        if not _inside_search_interval(i):
             continue
         if any(abs(i - p) <= min_peak_distance for p in strict):
             continue
@@ -178,17 +184,37 @@ def find_shoulder_candidates_from_mag(
 
         snap_left = max(left_bound, i - snap_window)
         snap_right = min(right_bound, i + snap_window)
-        snap_candidates = [j for j in range(snap_left, snap_right + 1) if j not in strict]
-        if snap_candidates:
-            snap_values = np.asarray([mag[j] for j in snap_candidates], dtype=float)
-            i = int(snap_candidates[int(np.argmax(snap_values))])
+        
+        candidate_kind = None
+
+        if is_right_candidate:
+            candidate_kind = "right"
+        elif is_left_candidate:
+            candidate_kind = "left"
+        else:
+            continue
+            
+        if candidate_kind == "right":
+            snap_left = max(left_bound, i - snap_window)
+            snap_right = min(right_bound, i + snap_window)
+            snap_candidates = [j for j in range(snap_left, snap_right + 1) if j not in strict]
+            if snap_candidates:
+                snap_values = np.asarray([mag[j] for j in snap_candidates], dtype=float)
+                i = int(snap_candidates[int(np.argmax(snap_values))])
+        
 
         if any(abs(i - p) <= min_peak_distance for p in strict):
             continue
         if left_bound <= i <= right_bound and float(mag[i]) >= float(min_height):
             candidates.add(int(i))
+    raw_candidates = sorted(candidates)
+    merged = _suppress_nearby_candidates(
+        raw_candidates,
+        mag,
+        min_distance=max(min_peak_distance, 2 * snap_window + 1),
+    )
+    return merged
 
-    return sorted(candidates)
 
 
 def apply_manual_lags(
@@ -248,8 +274,9 @@ def find_los_echo_from_mag(
         mag,
         peaks_before=0,
         peaks_after=1,
-        min_rel_height=0.0,
+        min_rel_height=0.05,
         repetition_period_samples=repetition_period_samples,
+        include_shoulders=True,
     )
     echo_indices = filter_echo_indices_by_noise_prominence(
         mag,
