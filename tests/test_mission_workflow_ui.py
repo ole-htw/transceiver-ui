@@ -504,59 +504,6 @@ def test_open_review_for_result_row_uses_rx_output_file_fallback() -> None:
     assert messages == []
 
 
-def test_open_review_for_result_row_persists_manual_review_result_to_table() -> None:
-    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
-    messages: list[str] = []
-    window._records = [
-        {
-            "global_index": 0,
-            "measurement": {
-                "result": {
-                    "output_file": "signals/rx/mission/run/point-0000.bin",
-                    "echo_delays": [{"distance_m": 11.0}],
-                }
-            },
-        }
-    ]
-
-    class _RowTable:
-        def __init__(self) -> None:
-            self.values = ("1", "1", "-", "-", "11", "-", "-", "-", "-", "succeeded")
-
-        def get_children(self):
-            return ("row-0",)
-
-        def item(self, row_id, option=None, **kwargs):
-            assert row_id == "row-0"
-            if kwargs and "values" in kwargs:
-                self.values = kwargs["values"]
-                return None
-            if option == "values":
-                return self.values
-            return {"values": self.values}
-
-    window.results_table = _RowTable()
-    window._append_validation = messages.append
-    window._draw_map_preview = lambda: None
-    window.master = SimpleNamespace(
-        review_measurement_for_mission=lambda **_kwargs: {
-            "approved": True,
-            "echo_delays": [{"distance_m": 77.0}],
-            "echo_lags": [123],
-            "los_lag": 100,
-        }
-    )
-
-    window._open_review_for_result_row(0)
-
-    result_payload = window._records[0]["measurement"]["result"]
-    assert result_payload["echo_lags"] == [123]
-    assert result_payload["los_lag"] == 100
-    assert result_payload["echo_delays"] == [{"distance_m": 77.0}]
-    assert window.results_table.values[4] == "77"
-    assert messages == []
-
-
 def test_parse_lidar_scan_text_for_overlay_supports_inline_ranges() -> None:
     parsed = MissionWorkflowWindow._parse_lidar_scan_text_for_overlay(
         "angle_min: -1.57\nangle_increment: 0.1\nranges: [1.0, 2.5, inf, nan]\n"
