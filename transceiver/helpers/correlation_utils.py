@@ -1,6 +1,33 @@
 import numpy as np
 
 
+def _suppress_nearby_candidates(
+    indices: list[int],
+    mag: np.ndarray,
+    min_distance: int,
+) -> list[int]:
+    """Merge nearby candidate peaks and keep only the strongest per cluster."""
+    if not indices:
+        return []
+
+    min_distance = max(0, int(min_distance))
+    sorted_indices = sorted(
+        {int(idx) for idx in indices if 0 <= int(idx) < mag.size}
+    )
+    if not sorted_indices:
+        return []
+
+    clusters: list[list[int]] = [[sorted_indices[0]]]
+    for idx in sorted_indices[1:]:
+        if idx - clusters[-1][-1] <= min_distance:
+            clusters[-1].append(idx)
+        else:
+            clusters.append([idx])
+
+    kept = [int(max(cluster, key=lambda j: float(mag[j]))) for cluster in clusters]
+    return sorted(kept)
+
+
 def _peak_search_bounds(
     mag: np.ndarray,
     *,
@@ -229,6 +256,11 @@ def find_los_echo_from_mag(
         los_idx=los_idx,
         echo_indices=echo_indices,
         repetition_period_samples=repetition_period_samples,
+    )
+    echo_indices = _suppress_nearby_candidates(
+        echo_indices,
+        mag,
+        min_distance=2,
     )
     echo_idx = echo_indices[0] if echo_indices else None
     return los_idx, echo_idx

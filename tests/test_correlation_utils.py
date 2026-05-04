@@ -1,6 +1,7 @@
 import numpy as np
 
 from transceiver.helpers.correlation_utils import (
+    _suppress_nearby_candidates,
     classify_peak_group,
     classify_peak_group_from_mag,
     filter_peak_indices_to_period_group,
@@ -76,6 +77,30 @@ def test_local_maxima_do_not_include_adjacent_lower_group_when_period_known() ->
     assert group_b_center in maxima
     assert all(abs(idx - group_b_center) <= period / 2 for idx in maxima)
     assert all(abs(idx - group_a_center) > period / 2 for idx in maxima)
+
+
+def test_suppress_nearby_candidates_keeps_strongest_per_cluster() -> None:
+    mag = np.zeros(30, dtype=float)
+    mag[10] = 0.6
+    mag[11] = 0.9
+    mag[20] = 0.7
+    mag[22] = 0.8
+
+    kept = _suppress_nearby_candidates([10, 11, 20, 22], mag, min_distance=2)
+
+    assert kept == [11, 22]
+
+
+def test_find_los_echo_from_mag_suppresses_echo_candidates_that_are_too_close() -> None:
+    mag = np.zeros(220, dtype=float)
+    mag[90] = 1.0
+    mag[130] = 0.75
+    mag[132] = 0.72
+
+    los_idx, echo_idx = find_los_echo_from_mag(mag)
+
+    assert los_idx == 90
+    assert echo_idx == 130
 
 
 def test_local_maxima_with_repetition_period_only_scans_center_window() -> None:
