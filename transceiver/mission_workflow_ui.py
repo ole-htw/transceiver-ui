@@ -4042,10 +4042,33 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if "live_position_at_measurement" not in payload:
             payload["live_position_at_measurement"] = self._live_position_at_measurement_start
             self._live_position_at_measurement_start = None
+        payload["map_name"] = self._current_map_name()
+        payload["rx_antenna_global_position"] = self._serialize_rx_antenna_global_position()
         payload["result_table"] = {
             "position": self._format_live_position_for_table(payload),
             "abstand": self._format_live_distance_to_rx_for_table(payload),
         }
+
+    def _current_map_name(self) -> str | None:
+        map_config_file = self._selected_map_config_file
+        if isinstance(map_config_file, str) and map_config_file.strip():
+            return Path(map_config_file).name
+        if self._selected_map_config is None:
+            return None
+        return Path(self._selected_map_config.image).name
+
+    @staticmethod
+    def _positions_differ(
+        left: tuple[float, float] | None,
+        right: tuple[float, float] | None,
+        *,
+        tolerance: float = 1e-6,
+    ) -> bool:
+        if left is None and right is None:
+            return False
+        if left is None or right is None:
+            return True
+        return not (math.isclose(left[0], right[0], abs_tol=tolerance) and math.isclose(left[1], right[1], abs_tol=tolerance))
 
     @staticmethod
     def _compose_table_outcome(payload: dict[str, Any], error_text: str) -> str:
@@ -4297,6 +4320,50 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if not imported_records:
             messagebox.showerror("Import", "Keine gültigen Punkt-Logs gefunden.", parent=self)
             return
+
+        imported_map_name = next(
+            (
+                str(payload.get("map_name")).strip()
+                for payload in imported_records
+                if isinstance(payload.get("map_name"), str) and str(payload.get("map_name")).strip()
+            ),
+            "",
+        )
+        current_map_name = self._current_map_name() or ""
+        if imported_map_name and current_map_name and imported_map_name != current_map_name:
+            messagebox.showwarning(
+                "Import",
+                (
+                    "Abweichender Map-Name im Import erkannt.\n"
+                    f"Import: {imported_map_name}\n"
+                    f"Aktuell: {current_map_name}"
+                ),
+                parent=self,
+            )
+
+        imported_rx_position = next(
+            (
+                parsed
+                for payload in imported_records
+                for parsed in [self._parse_rx_antenna_global_position(payload.get("rx_antenna_global_position"))]
+                if parsed is not None
+            ),
+            None,
+        )
+        if self._positions_differ(imported_rx_position, self._rx_antenna_global_position):
+            update_rx_position = messagebox.askyesno(
+                "Import",
+                (
+                    "RX-Position aus Import weicht von der aktuellen Position ab.\n"
+                    "Soll die RX-Position auf den Importwert aktualisiert werden?"
+                ),
+                parent=self,
+            )
+            if update_rx_position and imported_rx_position is not None:
+                self._set_rx_antenna_position(
+                    x=imported_rx_position[0],
+                    y=imported_rx_position[1],
+                )
 
         self.results_table.delete(*self.results_table.get_children())
         self._records = []

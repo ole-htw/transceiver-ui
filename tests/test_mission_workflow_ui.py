@@ -128,6 +128,20 @@ def test_format_live_distance_to_rx_for_table_uses_live_position_coordinates() -
     assert distance == "5"
 
 
+def test_current_map_name_prefers_map_config_filename() -> None:
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._selected_map_config_file = "/tmp/maps/demo_map.yaml"
+    window._selected_map_config = None
+
+    assert window._current_map_name() == "demo_map.yaml"
+
+
+def test_positions_differ_detects_deviation_and_none_values() -> None:
+    assert MissionWorkflowWindow._positions_differ((1.0, 2.0), (1.0, 2.0)) is False
+    assert MissionWorkflowWindow._positions_differ((1.0, 2.0), (1.0, 2.001)) is True
+    assert MissionWorkflowWindow._positions_differ(None, (1.0, 2.0)) is True
+
+
 def test_format_live_distance_to_rx_for_table_returns_dash_without_live_position() -> None:
     window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
     window._rx_antenna_global_position = (1.0, 2.0)
