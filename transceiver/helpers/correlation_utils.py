@@ -1,6 +1,148 @@
 import numpy as np
 
 
+def _smooth_edge(x: np.ndarray, window: int) -> np.ndarray:
+    """Moving average with edge padding to avoid boundary dips."""
+    window = max(3, int(window))
+    if window % 2 == 0:
+        window += 1
+
+    pad = window // 2
+    kernel = np.ones(window, dtype=float) / float(window)
+    padded = np.pad(np.asarray(x, dtype=float), (pad, pad), mode="edge")
+    return np.convolve(padded, kernel, mode="valid")
+
+
+def _robust_baseline_sigma(x: np.ndarray) -> tuple[float, float]:
+    """Return median baseline and MAD-scaled robust sigma."""
+    x = np.asarray(x, dtype=float)
+    if x.size == 0:
+        return 0.0, 0.0
+
+    baseline = float(np.median(x))
+    mad = float(np.median(np.abs(x - baseline)))
+    sigma = 1.4826 * mad
+    return baseline, sigma
+
+
+def find_left_flank_shoulder_candidates_from_mag(
+    mag: np.ndarray,
+    *,
+    center_idx: int,
+    left_bound: int,
+    right_bound: int,
+    min_height: float,
+    short_window: int = 5,
+    long_window: int = 31,
+    slope_window: int = 3,
+    residual_sigma_factor: float = 2.0,
+    kink_sigma_factor: float = 1.5,
+    noise_sigma_factor: float = 0.8,
+    min_peak_distance: int = 3,
+    snap_window: int = 3,
+) -> list[int]:
+    """Detect weak LOS-like shoulders on the rising flank before center_idx.
+
+    This catches cases where LOS is not a strict local maximum, but only a
+    small hump or slope kink on the rising flank of a stronger later path.
+    """
+    if mag.size < 9:
+        return []
+
+    mag_f = np.asarray(mag, dtype=float)
+
+    center_idx = int(np.clip(center_idx, 0, mag.size - 1))
+    left_bound = int(np.clip(left_bound, 0, mag.size - 1))
+    right_bound = int(np.clip(right_bound, 0, mag.size - 1))
+
+    search_right = min(center_idx - max(1, int(min_peak_distance)), right_bound)
+    if search_right - left_bound < 8:
+        return []
+
+    left_mag_segment = mag_f[left_bound : search_right + 1]
+    mag_baseline, mag_sigma = _robust_baseline_sigma(left_mag_segment)
+
+    # Do NOT force shoulders to reach the same relative height as real peaks.
+    # LOS can be much weaker than the dominant correlation maximum.
+    center_mag = float(mag_f[center_idx])
+    relative_floor = 0.015 * center_mag
+
+    height_threshold = max(
+        relative_floor,
+        mag_baseline + max(0.0, float(noise_sigma_factor)) * mag_sigma,
+        0.25 * float(min_height),
+    )
+
+    # Compress dynamic range so the huge main peak does not dominate slope
+    # and residual calculations.
+    scale = max(1e-12, mag_baseline + mag_sigma)
+    work = np.log1p(mag_f / scale)
+
+    short = _smooth_edge(work, short_window)
+    long = _smooth_edge(work, long_window)
+
+    residual = short - long
+    slope = np.gradient(short)
+
+    res_segment = residual[left_bound : search_right + 1]
+    res_baseline, res_sigma = _robust_baseline_sigma(res_segment)
+
+    slope_segment = slope[left_bound : search_right + 1]
+    _slope_baseline, slope_sigma = _robust_baseline_sigma(slope_segment)
+
+    res_threshold = residual_sigma_factor * max(res_sigma, 1e-12)
+    kink_threshold = kink_sigma_factor * max(slope_sigma, 1e-12)
+    slope_eps = 0.2 * max(slope_sigma, 1e-12)
+
+    candidates: set[int] = set()
+
+    start = max(left_bound + int(slope_window), 1)
+    stop = min(search_right - int(slope_window), mag.size - 2)
+
+    for i in range(start, stop + 1):
+        if float(mag_f[i]) < height_threshold:
+            continue
+
+        # Small hump after removing broad rising trend.
+        is_residual_hump = (
+            residual[i] >= residual[i - 1]
+            and residual[i] >= residual[i + 1]
+            and residual[i] - res_baseline >= res_threshold
+        )
+
+        left_slope = float(np.median(slope[i - slope_window : i]))
+        right_slope = float(np.median(slope[i + 1 : i + 1 + slope_window]))
+
+        # Kink on a rising flank: slope was clearly positive and then drops.
+        is_rising_kink = (
+            left_slope > slope_eps
+            and (left_slope - right_slope) >= kink_threshold
+        )
+
+        if not (is_residual_hump or is_rising_kink):
+            continue
+
+        # Snap to strongest residual, not strongest magnitude, otherwise the
+        # marker drifts toward the big LOS/main lobe peak.
+        snap_left = max(left_bound, i - int(snap_window))
+        snap_right = min(search_right, i + int(snap_window))
+        snap_candidates = list(range(snap_left, snap_right + 1))
+
+        if snap_candidates:
+            i = int(max(snap_candidates, key=lambda j: float(residual[j])))
+
+        if float(mag_f[i]) >= height_threshold:
+            candidates.add(int(i))
+
+    return _suppress_nearby_candidates(
+        sorted(candidates),
+        mag_f,
+        min_distance=max(
+            int(min_peak_distance),
+            2 * int(snap_window) + 1,
+        ),
+    )
+
 def _suppress_nearby_candidates(
     indices: list[int],
     mag: np.ndarray,
@@ -26,6 +168,33 @@ def _suppress_nearby_candidates(
 
     kept = [int(max(cluster, key=lambda j: float(mag[j]))) for cluster in clusters]
     return sorted(kept)
+
+
+def _smooth_edge(x: np.ndarray, window: int) -> np.ndarray:
+    """Moving average with edge padding, so small windows do not shift peaks."""
+    window = max(1, int(window))
+    if window <= 1 or x.size == 0:
+        return np.asarray(x, dtype=float).copy()
+    if window % 2 == 0:
+        window += 1
+
+    pad = window // 2
+    kernel = np.ones(window, dtype=float) / float(window)
+    return np.convolve(
+        np.pad(np.asarray(x, dtype=float), (pad, pad), mode="edge"),
+        kernel,
+        mode="valid",
+    )
+
+
+def _robust_baseline_sigma(x: np.ndarray) -> tuple[float, float]:
+    """Return median baseline and MAD-based sigma."""
+    x = np.asarray(x, dtype=float)
+    if x.size == 0:
+        return 0.0, 0.0
+    baseline = float(np.median(x))
+    mad = float(np.median(np.abs(x - baseline)))
+    return baseline, 1.4826 * mad
 
 
 def _peak_search_bounds(
@@ -75,6 +244,148 @@ def _peak_search_bounds(
     return left_bound, right_bound
 
 
+def find_left_flank_los_candidates_from_mag(
+    mag: np.ndarray,
+    *,
+    center_idx: int,
+    left_bound: int,
+    right_bound: int,
+    min_rel_height: float = 0.005,
+    short_window: int = 5,
+    long_window: int = 31,
+    slope_window: int = 3,
+    residual_sigma_factor: float = 3.0,
+    kink_sigma_factor: float = 2.5,
+    noise_sigma_factor: float = 1.3,
+    min_peak_distance: int = 3,
+    snap_window: int = 3,
+) -> list[int]:
+    """Detect weak LOS-like bumps/kinks on the rising flank before center_idx.
+
+    This is the important extension for cases where LOS is not a strict local
+    maximum but only a small shoulder on the left flank of a later dominant
+    correlation peak.
+
+    The detector works on log-compressed magnitude and looks for:
+    - a local high-pass residual hump on the broad rising flank, or
+    - a kink where the positive slope drops noticeably.
+    """
+    if mag.size < 9:
+        return []
+
+    mag_f = np.asarray(mag, dtype=float)
+    center_idx = int(np.clip(center_idx, 0, mag_f.size - 1))
+    left_bound = int(np.clip(left_bound, 0, mag_f.size - 1))
+    right_bound = int(np.clip(right_bound, 0, mag_f.size - 1))
+
+    search_right = min(center_idx - max(1, int(min_peak_distance)), right_bound)
+    if search_right - left_bound < 8:
+        return []
+
+    # Use the early part of the left side as noise/floor estimate. Using the
+    # whole rising flank would overestimate the noise floor and hide weak LOS.
+    left_span = search_right - left_bound + 1
+    noise_stop = left_bound + max(5, left_span // 4)
+    noise_stop = min(noise_stop, search_right + 1)
+    noise_segment = mag_f[left_bound:noise_stop]
+    if noise_segment.size < 3:
+        noise_segment = mag_f[left_bound : search_right + 1]
+
+    floor, noise_sigma = _robust_baseline_sigma(noise_segment)
+    center_mag = float(mag_f[center_idx])
+
+    # Weak LOS can be far below the dominant peak, so this floor is deliberately
+    # lower than the usual strict peak min_height.
+    amp_threshold = max(
+        floor + max(0.0, float(noise_sigma_factor)) * noise_sigma,
+        max(0.0, float(min_rel_height)) * center_mag,
+    )
+
+    smooth_mag = _smooth_edge(mag_f, max(3, short_window))
+    above = [
+        i
+        for i in range(left_bound, search_right + 1)
+        if smooth_mag[i] >= amp_threshold
+    ]
+    if not above:
+        return []
+
+    # Start slightly before the first sustained rise above the floor.
+    search_left = max(left_bound, above[0] - max(2, snap_window))
+
+    # Log compression keeps the huge main peak from dominating the derivative.
+    scale = max(1e-12, floor + noise_sigma)
+    work = np.log1p(mag_f / scale)
+
+    short = _smooth_edge(work, max(3, short_window))
+    long = _smooth_edge(work, max(5, long_window))
+    residual = short - long
+    slope = np.gradient(short)
+
+    res_segment = residual[search_left : search_right + 1]
+    res_baseline, res_sigma = _robust_baseline_sigma(res_segment)
+
+    slope_segment = slope[search_left : search_right + 1]
+    _slope_baseline, slope_sigma = _robust_baseline_sigma(slope_segment)
+    slope_eps = max(1e-12, 0.2 * slope_sigma)
+    kink_threshold = max(1e-12, float(kink_sigma_factor) * slope_sigma)
+
+    candidates: set[int] = set()
+
+    start = max(search_left + slope_window, 1)
+    stop = min(search_right - slope_window, mag_f.size - 2)
+    for i in range(start, stop + 1):
+        if mag_f[i] < amp_threshold:
+            continue
+
+        # Small hump after trend removal.
+        is_residual_hump = (
+            residual[i] >= residual[i - 1]
+            and residual[i] >= residual[i + 1]
+            and residual[i] - res_baseline
+            >= float(residual_sigma_factor) * max(res_sigma, 1e-12)
+        )
+
+        # Kink on a rising flank: slope is positive before the candidate and
+        # drops afterwards. The point itself does not need to be a magnitude max.
+        left_slope = float(np.median(slope[i - slope_window : i]))
+        right_slope = float(np.median(slope[i + 1 : i + 1 + slope_window]))
+        is_rising_kink = (
+            left_slope > slope_eps
+            and (left_slope - right_slope) >= kink_threshold
+        )
+
+        if not (is_residual_hump or is_rising_kink):
+            continue
+
+        # Snap to strongest residual, not strongest magnitude. Snapping to
+        # magnitude would pull the marker toward the later dominant peak.
+        snap_left = max(search_left, i - max(0, int(snap_window)))
+        snap_right = min(search_right, i + max(0, int(snap_window)))
+        snap_candidates = list(range(snap_left, snap_right + 1))
+        if snap_candidates:
+            i = int(max(snap_candidates, key=lambda j: float(residual[j])))
+
+        if mag_f[i] >= amp_threshold:
+            candidates.add(int(i))
+
+    # Suppress using residual strength, not magnitude, to keep shoulder position.
+    raw = sorted(candidates)
+    if not raw:
+        return []
+
+    min_distance = max(1, int(min_peak_distance), 2 * max(0, int(snap_window)) + 1)
+    clusters: list[list[int]] = [[raw[0]]]
+    for idx in raw[1:]:
+        if idx - clusters[-1][-1] <= min_distance:
+            clusters[-1].append(idx)
+        else:
+            clusters.append([idx])
+
+    kept = [int(max(cluster, key=lambda j: float(residual[j]))) for cluster in clusters]
+    return sorted(kept)
+
+
 def find_shoulder_candidates_from_mag(
     mag: np.ndarray,
     *,
@@ -95,57 +406,164 @@ def find_shoulder_candidates_from_mag(
     """Return shoulder-like candidates from slope inflections within one group.
 
     Strict local maxima should be selected first. Shoulders are supplemental and
-    do not consume ``peaks_before``/``peaks_after`` quotas.
+    do not consume peaks_before / peaks_after quotas.
+
+    This version supports:
+    - right-side shoulders between peaks,
+    - left-side shoulders before the dominant peak,
+    - weak LOS humps on the rising flank.
     """
     if mag.size < 7:
         return []
+
+    mag_f = np.asarray(mag, dtype=float)
+
     left_bound = int(np.clip(left_bound, 0, mag.size - 1))
     right_bound = int(np.clip(right_bound, 0, mag.size - 1))
+    center_idx = int(np.clip(center_idx, 0, mag.size - 1))
+
     if right_bound - left_bound < 6:
         return []
 
     smooth_window = max(3, int(smooth_window))
     if smooth_window % 2 == 0:
         smooth_window += 1
+
     slope_window = max(1, int(slope_window))
     min_peak_distance = max(1, int(min_peak_distance))
     snap_window = max(0, int(snap_window))
 
-    kernel = np.ones(smooth_window, dtype=float)
-    kernel /= kernel.sum()
-    smooth_mag = np.convolve(np.asarray(mag, dtype=float), kernel, mode="same")
+    smooth_mag = _smooth_edge(mag_f, smooth_window)
     slope = np.gradient(smooth_mag)
 
     slope_segment = slope[left_bound : right_bound + 1]
-    slope_baseline = float(np.median(slope_segment))
-    slope_mad = float(np.median(np.abs(slope_segment - slope_baseline)))
-    slope_sigma = 1.4826 * slope_mad
-    slope_threshold = max(1e-12, float(slope_threshold_factor) * slope_sigma)
-    slope_eps = max(1e-12, float(slope_eps_factor) * slope_sigma)
+    slope_baseline, slope_sigma = _robust_baseline_sigma(slope_segment)
 
-    mag_segment = np.asarray(mag[left_bound : right_bound + 1], dtype=float)
-    mag_baseline = float(np.median(mag_segment))
-    mag_mad = float(np.median(np.abs(mag_segment - mag_baseline)))
-    mag_sigma = 1.4826 * mag_mad
+    slope_threshold = max(
+        1e-12,
+        float(slope_threshold_factor) * slope_sigma,
+    )
+    slope_eps = max(
+        1e-12,
+        float(slope_eps_factor) * slope_sigma,
+    )
+
+    mag_segment = mag_f[left_bound : right_bound + 1]
+    mag_baseline, mag_sigma = _robust_baseline_sigma(mag_segment)
 
     strict = sorted(
-        {int(i) for i in strict_peak_indices if left_bound <= int(i) <= right_bound}
+        {
+            int(i)
+            for i in strict_peak_indices
+            if left_bound <= int(i) <= right_bound
+        }
     )
     if not strict:
         return []
 
     def _inside_search_interval(idx: int) -> bool:
-        # Neu: erlaube auch Schulter auf der linken steigenden Flanke
-        # vor dem dominanten Peak.
-        if left_bound < idx < center_idx:
+        # Allow LOS shoulders on the left rising flank.
+        if include_left_shoulders and left_bound < idx < center_idx:
             return True
 
-        # Bisheriges Verhalten: Schultern zwischen strikten Peaks.
+        # Keep previous behaviour: shoulders between strict peaks.
         return any(a < idx < b for a, b in zip(strict[:-1], strict[1:]))
 
     candidates: set[int] = set()
 
-    for i in range(max(left_bound + slope_window, 1), min(right_bound - slope_window, mag.size - 2) + 1):
+    start = max(left_bound + slope_window, 1)
+    stop = min(right_bound - slope_window, mag.size - 2)
+
+    for i in range(start, stop + 1):
+        if not _inside_search_interval(i):
+            continue
+
+        if any(abs(i - p) <= min_peak_distance for p in strict):
+            continue
+
+        if float(mag_f[i]) < float(min_height):
+            continue
+
+        left_slope = float(np.median(slope[i - slope_window : i]))
+        mid_slope = float(slope[i])
+        right_slope = float(np.median(slope[i + 1 : i + 1 + slope_window]))
+
+        # Shoulder on falling flank.
+        is_right_candidate = (
+            left_slope < -slope_eps
+            and right_slope < -slope_eps
+            and mid_slope > left_slope
+            and mid_slope > right_slope
+            and (mid_slope - max(left_slope, right_slope)) >= slope_threshold
+        )
+
+        # Improved shoulder on rising flank:
+        # not a true maximum, but a meaningful slope break / kink.
+        is_left_candidate = (
+            include_left_shoulders
+            and i < center_idx
+            and left_slope > slope_eps
+            and (left_slope - right_slope) >= slope_threshold
+        )
+
+        if not (is_right_candidate or is_left_candidate):
+            continue
+
+        mag_prominence = float(mag_f[i]) - mag_baseline
+        if mag_sigma > 1e-12:
+            if mag_prominence < max(0.0, float(noise_sigma_factor)) * mag_sigma:
+                continue
+        elif mag_prominence <= 0.0:
+            continue
+
+        snap_left = max(left_bound, i - snap_window)
+        snap_right = min(right_bound, i + snap_window)
+        snap_candidates = [j for j in range(snap_left, snap_right + 1) if j not in strict]
+
+        if snap_candidates:
+            if is_right_candidate:
+                # On falling side, snap to local magnitude.
+                i = int(max(snap_candidates, key=lambda j: float(mag_f[j])))
+            else:
+                # On rising side, avoid snapping into the main peak.
+                # Prefer the strongest slope break.
+                i = int(
+                    max(
+                        snap_candidates,
+                        key=lambda j: float(abs(np.gradient(smooth_mag)[j])),
+                    )
+                )
+
+        if any(abs(i - p) <= min_peak_distance for p in strict):
+            continue
+
+        if left_bound <= i <= right_bound and float(mag_f[i]) >= float(min_height):
+            candidates.add(int(i))
+
+    raw_candidates = sorted(candidates)
+
+    merged = _suppress_nearby_candidates(
+        raw_candidates,
+        mag_f,
+        min_distance=max(min_peak_distance, 2 * snap_window + 1),
+    )
+
+    return merged
+
+    def _inside_search_interval(idx: int) -> bool:
+        # Allow a shoulder on the left rising flank before the dominant peak.
+        if include_left_shoulders and left_bound < idx < center_idx:
+            return True
+
+        # Existing behavior: shoulders between strict peaks.
+        return any(a < idx < b for a, b in zip(strict[:-1], strict[1:]))
+
+    candidates: set[int] = set()
+
+    for i in range(
+        max(left_bound + slope_window, 1),
+        min(right_bound - slope_window, mag.size - 2) + 1,
+    ):
         if not _inside_search_interval(i):
             continue
         if any(abs(i - p) <= min_peak_distance for p in strict):
@@ -157,6 +575,7 @@ def find_shoulder_candidates_from_mag(
         mid_slope = float(slope[i])
         right_slope = float(np.median(slope[i + 1 : i + 1 + slope_window]))
 
+        # Right-side shoulder: falling flank briefly flattens or rises.
         is_right_candidate = (
             left_slope < -slope_eps
             and right_slope < -slope_eps
@@ -164,14 +583,18 @@ def find_shoulder_candidates_from_mag(
             and mid_slope > right_slope
             and (mid_slope - max(left_slope, right_slope)) >= slope_threshold
         )
+
+        # Left-side shoulder: rising flank forms a small bump/kink.
+        # This is intentionally different from the old "mid_slope is a local
+        # minimum" rule. Here the relevant signal is a positive slope that
+        # noticeably drops after the candidate.
         is_left_candidate = (
             include_left_shoulders
+            and i < center_idx
             and left_slope > slope_eps
-            and right_slope > slope_eps
-            and mid_slope < left_slope
-            and mid_slope < right_slope
-            and (min(left_slope, right_slope) - mid_slope) >= slope_threshold
+            and (left_slope - right_slope) >= slope_threshold
         )
+
         if not (is_right_candidate or is_left_candidate):
             continue
 
@@ -182,31 +605,28 @@ def find_shoulder_candidates_from_mag(
         elif mag_prominence <= 0.0:
             continue
 
-        snap_left = max(left_bound, i - snap_window)
-        snap_right = min(right_bound, i + snap_window)
-        
-        candidate_kind = None
-
         if is_right_candidate:
-            candidate_kind = "right"
-        elif is_left_candidate:
-            candidate_kind = "left"
-        else:
-            continue
-            
-        if candidate_kind == "right":
+            # For normal right-side shoulders, snap to magnitude.
             snap_left = max(left_bound, i - snap_window)
             snap_right = min(right_bound, i + snap_window)
-            snap_candidates = [j for j in range(snap_left, snap_right + 1) if j not in strict]
+            snap_candidates = [
+                j for j in range(snap_left, snap_right + 1) if j not in strict
+            ]
             if snap_candidates:
-                snap_values = np.asarray([mag[j] for j in snap_candidates], dtype=float)
-                i = int(snap_candidates[int(np.argmax(snap_values))])
-        
+                i = int(
+                    snap_candidates[
+                        int(np.argmax([mag[j] for j in snap_candidates]))
+                    ]
+                )
+
+        # For left shoulders, do not snap to magnitude, because that would drift
+        # toward the dominant peak. Keep the kink location.
 
         if any(abs(i - p) <= min_peak_distance for p in strict):
             continue
         if left_bound <= i <= right_bound and float(mag[i]) >= float(min_height):
             candidates.add(int(i))
+
     raw_candidates = sorted(candidates)
     merged = _suppress_nearby_candidates(
         raw_candidates,
@@ -214,7 +634,6 @@ def find_shoulder_candidates_from_mag(
         min_distance=max(min_peak_distance, 2 * snap_window + 1),
     )
     return merged
-
 
 
 def apply_manual_lags(
@@ -269,26 +688,35 @@ def find_los_echo_from_mag(
     *,
     repetition_period_samples: int | None = None,
 ) -> tuple[int | None, int | None]:
-    """Return LOS + first echo indices using the shared peak grouping logic."""
+    """Return LOS + first echo indices.
+
+    LOS is treated as the earliest significant arrival in the dominant group,
+    not necessarily as a strict local maximum.
+    """
     _highest_idx, los_idx, echo_indices, _group_indices = classify_peak_group_from_mag(
         mag,
-        peaks_before=2,
+        peaks_before=4,
         peaks_after=1,
-        min_rel_height=0.05,
+        min_rel_height=0.01,
         repetition_period_samples=repetition_period_samples,
         include_shoulders=True,
     )
+
     echo_indices = filter_echo_indices_by_noise_prominence(
         mag,
         los_idx=los_idx,
         echo_indices=echo_indices,
         repetition_period_samples=repetition_period_samples,
+        noise_sigma_factor=0.3,
+        min_echo_lag_samples=2,
     )
+
     echo_indices = _suppress_nearby_candidates(
         echo_indices,
         mag,
         min_distance=2,
     )
+
     echo_idx = echo_indices[0] if echo_indices else None
     return los_idx, echo_idx
 
@@ -329,9 +757,7 @@ def filter_echo_indices_by_noise_prominence(
         return []
 
     mag_global = np.asarray(mag, dtype=float)
-    global_baseline = float(np.median(mag_global))
-    global_mad = float(np.median(np.abs(mag_global - global_baseline)))
-    noise_sigma = 1.4826 * global_mad
+    global_baseline, noise_sigma = _robust_baseline_sigma(mag_global)
 
     filtered: list[int] = []
     for idx in cleaned_indices:
@@ -396,6 +822,8 @@ def classify_peak_group_from_mag(
         group_indices.append(highest_idx)
         group_indices.sort()
 
+    # LOS is intentionally the earliest significant candidate in the active
+    # group, not necessarily the largest magnitude peak.
     los_idx = int(group_indices[0])
     echo_indices = [int(idx) for idx in group_indices[1:]]
     return highest_idx, los_idx, echo_indices, group_indices
@@ -433,55 +861,84 @@ def find_local_maxima_around_peak_from_mag(
     repetition_period_samples: int | None = None,
     include_shoulders: bool = False,
 ) -> list[int]:
-    """Return local maxima indices around a center peak (before + after)."""
+    """Return local maxima and optional shoulder candidates around center peak."""
     if mag.size < 3:
         return []
-    if center_idx is None:
-        center_idx = int(np.argmax(mag))
-    center_idx = int(np.clip(center_idx, 0, mag.size - 1))
 
-    center_mag = float(mag[center_idx])
+    mag_f = np.asarray(mag, dtype=float)
+
+    if center_idx is None:
+        center_idx = int(np.argmax(mag_f))
+    center_idx = int(np.clip(center_idx, 0, mag_f.size - 1))
+
+    center_mag = float(mag_f[center_idx])
     min_height = max(0.0, float(min_rel_height)) * center_mag
 
     left_bound, right_bound = _peak_search_bounds(
-        mag,
+        mag_f,
         center_idx=center_idx,
         repetition_period_samples=repetition_period_samples,
     )
 
     local_maxima = [
         i
-        for i in range(max(1, left_bound), min(mag.size - 1, right_bound + 1))
+        for i in range(max(1, left_bound), min(mag_f.size - 1, right_bound + 1))
         if (
-            mag[i] >= mag[i - 1]
-            and mag[i] >= mag[i + 1]
-            and (mag[i] > mag[i - 1] or mag[i] > mag[i + 1])
-            and mag[i] >= min_height
+            mag_f[i] >= mag_f[i - 1]
+            and mag_f[i] >= mag_f[i + 1]
+            and (mag_f[i] > mag_f[i - 1] or mag_f[i] > mag_f[i + 1])
+            and mag_f[i] >= min_height
         )
     ]
-    if not local_maxima:
-        return []
 
     before = [i for i in local_maxima if i < center_idx]
     after = [i for i in local_maxima if i > center_idx]
 
     before_count = max(0, int(peaks_before))
     after_count = max(0, int(peaks_after))
+
     before_sel = before[-before_count:] if before_count > 0 else []
     after_sel = after[:after_count] if after_count > 0 else []
+
     selected = before_sel + [center_idx] + after_sel
+
     if not include_shoulders:
         return selected
 
     shoulder_candidates = find_shoulder_candidates_from_mag(
-        mag,
+        mag_f,
         center_idx=center_idx,
         strict_peak_indices=selected,
         min_height=min_height,
         left_bound=left_bound,
         right_bound=right_bound,
+        include_left_shoulders=True,
+        smooth_window=5,
+        slope_window=3,
+        slope_threshold_factor=1.0,
+        slope_eps_factor=0.2,
+        min_peak_distance=2,
+        snap_window=2,
+        noise_sigma_factor=0.8,
     )
-    return sorted({*selected, *shoulder_candidates})
+
+    left_flank_candidates = find_left_flank_shoulder_candidates_from_mag(
+        mag_f,
+        center_idx=center_idx,
+        left_bound=left_bound,
+        right_bound=right_bound,
+        min_height=min_height,
+        short_window=5,
+        long_window=31,
+        slope_window=3,
+        residual_sigma_factor=2.0,
+        kink_sigma_factor=1.5,
+        noise_sigma_factor=0.8,
+        min_peak_distance=3,
+        snap_window=3,
+    )
+
+    return sorted({*selected, *shoulder_candidates, *left_flank_candidates})
 
 
 def filter_peak_indices_to_period_group(
@@ -588,3 +1045,4 @@ def lag_overlap(
         s_start = -lag
         length = min(data_len, ref_len - s_start)
     return r_start, s_start, length
+
