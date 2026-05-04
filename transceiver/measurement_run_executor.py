@@ -133,7 +133,7 @@ class MeasurementRunExecutorConfig:
     reverse_point_order: bool = False
     enable_measurements: bool = True
     confirm_measurement_after_navigation_failure: (
-        Callable[[PointExecutionContext, TerminalNavigationState], bool] | None
+        Callable[[PointExecutionContext, TerminalNavigationState], bool | str] | None
     ) = None
 
 
@@ -383,7 +383,9 @@ class MeasurementRunExecutor:
                 }
             )
 
-        for attempt in range(1, attempts + 1):
+        attempt = 0
+        while attempt < attempts:
+            attempt += 1
             nav_state = self.navigator.navigate_to_point(
                 self._to_navigation_point(
                     point, rotate_heading_by_pi=self.config.reverse_point_order
@@ -415,16 +417,31 @@ class MeasurementRunExecutor:
         if nav_state != "succeeded":
             confirm_measurement = self.config.confirm_measurement_after_navigation_failure
             proceed_with_measurement = False
+            retry_navigation = False
             if (
                 not self._cancel_requested
                 and callable(confirm_measurement)
                 and nav_state is not None
             ):
                 try:
-                    proceed_with_measurement = bool(confirm_measurement(point_context, nav_state))
+                    decision = confirm_measurement(point_context, nav_state)
+                    retry_navigation = isinstance(decision, str) and decision == "retry_navigation"
+                    proceed_with_measurement = bool(decision) and not retry_navigation
                 except Exception:
                     proceed_with_measurement = False
-            if (
+                    retry_navigation = False
+            if not self._cancel_requested and retry_navigation:
+                nav_state = self.navigator.navigate_to_point(
+                    self._to_navigation_point(
+                        point, rotate_heading_by_pi=self.config.reverse_point_order
+                    ),
+                    timeout_s=self.config.goal_reached_timeout_s,
+                    on_navigation_event=_emit_navigation_event,
+                )
+                attempt += 1
+            if nav_state == "succeeded":
+                navigation_done_at = time.time()
+            elif (
                 not self._cancel_requested
                 and proceed_with_measurement
             ):
