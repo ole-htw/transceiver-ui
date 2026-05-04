@@ -1716,6 +1716,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         if not isinstance(result_payload, dict):
             return
         output_file = result_payload.get("output_file")
+        if (not isinstance(output_file, str) or not output_file.strip()) and isinstance(result_payload.get("file_ref"), str):
+            output_file = result_payload.get("file_ref")
+        if not isinstance(output_file, str) or not output_file.strip():
+            rx_payload = result_payload.get("rx")
+            if isinstance(rx_payload, dict):
+                output_file = rx_payload.get("output_file")
         if not isinstance(output_file, str) or not output_file.strip():
             self._append_validation("⚠️ Review kann nicht geöffnet werden: output_file fehlt.")
             return
