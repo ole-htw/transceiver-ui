@@ -272,7 +272,7 @@ def find_los_echo_from_mag(
     """Return LOS + first echo indices using the shared peak grouping logic."""
     _highest_idx, los_idx, echo_indices, _group_indices = classify_peak_group_from_mag(
         mag,
-        peaks_before=0,
+        peaks_before=2,
         peaks_after=1,
         min_rel_height=0.05,
         repetition_period_samples=repetition_period_samples,
