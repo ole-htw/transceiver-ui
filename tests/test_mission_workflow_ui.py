@@ -172,7 +172,7 @@ def test_draw_selected_echo_overlay_uses_live_measurement_position() -> None:
     assert calls[0]["measurement_position"] == (7.0, -2.0)
 
 
-def test_draw_selected_echo_overlay_renders_all_selected_results() -> None:
+def test_draw_selected_echo_overlay_renders_intersections_for_multi_selection() -> None:
     window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
     window._selected_result_index = 0
     window._selected_result_indices = (0, 1)
@@ -193,13 +193,17 @@ def test_draw_selected_echo_overlay_renders_all_selected_results() -> None:
         MeasurementPoint(id="p0", name="P0", x=50.0, y=50.0, yaw=0.0),
         MeasurementPoint(id="p1", name="P1", x=60.0, y=60.0, yaw=0.0),
     ]
-    calls: list[dict[str, object]] = []
-    window._draw_echo_ellipse_for_overlay = lambda **kwargs: calls.append(kwargs)
+    ellipse_calls: list[dict[str, object]] = []
+    intersection_calls: list[list[list[tuple[float, float]]]] = []
+    window._draw_echo_ellipse_for_overlay = lambda **kwargs: ellipse_calls.append(kwargs)
+    window._build_echo_overlay_preview_points = lambda **kwargs: ([0.0, 0.0, 5.0, 5.0, 0.0, 0.0], 2)
+    window._draw_echo_overlay_intersection_points = lambda ellipses: intersection_calls.append(ellipses)
 
     window._draw_selected_echo_overlay()
 
-    assert len(calls) == 2
-    assert {call["measurement_position"] for call in calls} == {(7.0, -2.0), (8.0, -1.0)}
+    assert len(ellipse_calls) == 0
+    assert len(intersection_calls) == 1
+    assert len(intersection_calls[0]) == 2
 
 
 def test_selected_record_overlay_point_prefers_live_yaw() -> None:
@@ -949,3 +953,16 @@ def test_manual_measurement_point_context_falls_back_to_selected_active_start_po
     assert context is not None
     assert context.point_index == 1
     assert context.point.id == "p2"
+
+
+def test_polyline_intersection_points_finds_crossing() -> None:
+    from transceiver.mission_workflow_ui import _polyline_intersection_points
+
+    first = [(0.0, 0.0), (10.0, 10.0)]
+    second = [(0.0, 10.0), (10.0, 0.0)]
+
+    intersections = _polyline_intersection_points(first, second)
+
+    assert len(intersections) == 1
+    assert intersections[0][0] == 5.0
+    assert intersections[0][1] == 5.0

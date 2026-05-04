@@ -64,6 +64,56 @@ LIVE_ECHO_SAMPLING_REDUCED = (16, 24, 32)
 
 
 
+
+
+def _segment_intersection(
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    q1: tuple[float, float],
+    q2: tuple[float, float],
+    *,
+    epsilon: float = 1e-9,
+) -> tuple[float, float] | None:
+    r_x = p2[0] - p1[0]
+    r_y = p2[1] - p1[1]
+    s_x = q2[0] - q1[0]
+    s_y = q2[1] - q1[1]
+    denom = r_x * s_y - r_y * s_x
+    if abs(denom) <= epsilon:
+        return None
+    qmp_x = q1[0] - p1[0]
+    qmp_y = q1[1] - p1[1]
+    t = (qmp_x * s_y - qmp_y * s_x) / denom
+    u = (qmp_x * r_y - qmp_y * r_x) / denom
+    if -epsilon <= t <= 1.0 + epsilon and -epsilon <= u <= 1.0 + epsilon:
+        return (p1[0] + t * r_x, p1[1] + t * r_y)
+    return None
+
+
+def _polyline_intersection_points(
+    first: list[tuple[float, float]],
+    second: list[tuple[float, float]],
+    *,
+    min_distance_px: float = 3.0,
+) -> list[tuple[float, float]]:
+    if len(first) < 2 or len(second) < 2:
+        return []
+    min_distance_squared = max(0.5, min_distance_px) ** 2
+    intersections: list[tuple[float, float]] = []
+    for idx in range(len(first) - 1):
+        p1 = first[idx]
+        p2 = first[idx + 1]
+        for jdx in range(len(second) - 1):
+            q1 = second[jdx]
+            q2 = second[jdx + 1]
+            intersection = _segment_intersection(p1, p2, q1, q2)
+            if intersection is None:
+                continue
+            if any((intersection[0]-x)**2 + (intersection[1]-y)**2 <= min_distance_squared for x,y in intersections):
+                continue
+            intersections.append(intersection)
+    return intersections
+
 def _load_json_dict(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -1802,7 +1852,33 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         rx_position = self._rx_antenna_global_position
         if rx_position is None:
             return
-        for record in self._selected_record_payloads():
+        selected_records = self._selected_record_payloads()
+        if len(selected_records) <= 1:
+            for record in selected_records:
+                measurement_position = self._selected_record_measurement_position(record)
+                if measurement_position is None:
+                    continue
+                measurement = record.get("measurement")
+                if not isinstance(measurement, dict):
+                    continue
+                result = measurement.get("result")
+                if not isinstance(result, dict):
+                    continue
+                echo_distances = self._extract_echo_distances(result.get("echo_delays"), limit=len(ECHO_OVERLAY_COLORS))
+                if not echo_distances:
+                    continue
+                for echo_index, echo_distance in enumerate(echo_distances):
+                    color = ECHO_OVERLAY_COLORS[echo_index % len(ECHO_OVERLAY_COLORS)]
+                    self._draw_echo_ellipse_for_overlay(
+                        rx_position=rx_position,
+                        measurement_position=measurement_position,
+                        echo_distance_m=echo_distance,
+                        color=color,
+                    )
+            return
+
+        selected_ellipse_points: list[list[tuple[float, float]]] = []
+        for record in selected_records:
             measurement_position = self._selected_record_measurement_position(record)
             if measurement_position is None:
                 continue
@@ -1812,17 +1888,34 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             result = measurement.get("result")
             if not isinstance(result, dict):
                 continue
-            echo_distances = self._extract_echo_distances(result.get("echo_delays"), limit=len(ECHO_OVERLAY_COLORS))
+            echo_distances = self._extract_echo_distances(result.get("echo_delays"), limit=1)
             if not echo_distances:
                 continue
-            for echo_index, echo_distance in enumerate(echo_distances):
-                color = ECHO_OVERLAY_COLORS[echo_index % len(ECHO_OVERLAY_COLORS)]
-                self._draw_echo_ellipse_for_overlay(
-                    rx_position=rx_position,
-                    measurement_position=measurement_position,
-                    echo_distance_m=echo_distance,
-                    color=color,
-                )
+            preview_points, _ = self._build_echo_overlay_preview_points(
+                rx_position=rx_position,
+                measurement_position=measurement_position,
+                echo_distance_m=echo_distances[0],
+            )
+            if not preview_points or len(preview_points) < 4:
+                continue
+            paired_points = [(preview_points[idx], preview_points[idx + 1]) for idx in range(0, len(preview_points), 2)]
+            selected_ellipse_points.append(paired_points)
+
+        self._draw_echo_overlay_intersection_points(selected_ellipse_points)
+
+
+    def _draw_echo_overlay_intersection_points(self, ellipses: list[list[tuple[float, float]]]) -> None:
+        if len(ellipses) < 2:
+            return
+        canvas = self.map_preview_canvas
+        intersection_points: list[tuple[float, float]] = []
+        for first_idx in range(len(ellipses) - 1):
+            for second_idx in range(first_idx + 1, len(ellipses)):
+                intersection_points.extend(_polyline_intersection_points(ellipses[first_idx], ellipses[second_idx]))
+        if not intersection_points:
+            return
+        for px, py in intersection_points:
+            canvas.create_oval(px - 3, py - 3, px + 3, py + 3, fill="#FFD54F", outline="#3E2723", width=1)
 
     def _draw_live_echo_preview_overlay(self) -> None:
         if not bool(self.live_preview_enabled_var.get()):
