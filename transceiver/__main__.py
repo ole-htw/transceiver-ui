@@ -38,16 +38,13 @@ from .helpers.tx_generator import (
 from .helpers.iq_utils import save_interleaved
 from .helpers import rx_convert
 from .helpers.correlation_utils import (
-    apply_manual_lags as _apply_manual_lags,
     autocorr_fft as _autocorr_fft,
-    classify_peak_group_from_mag as _classify_peak_group_from_mag,
-    filter_echo_indices_by_noise_prominence as _filter_echo_indices_by_noise_prominence,
-    find_los_echo_from_mag as _find_los_echo_from_mag,
-    filter_peak_indices_to_period_group as _filter_peak_indices_to_period_group,
+    correlation_lags as _correlation_lags,
     lag_overlap as _lag_overlap,
-    resolve_manual_los_idx as _resolve_manual_los_idx,
     xcorr_fft as _xcorr_fft,
 )
+from .helpers.echo_estimation import EchoEstimatorConfig, estimate_echoes
+from .helpers.manual_marker_utils import resolve_manual_marker_index as _resolve_manual_marker_index
 from .helpers.path_cancellation import apply_path_cancellation
 from .helpers.continuous_processing import continuous_processing_worker
 from .helpers.echo_aoa import _find_peaks_simple
@@ -159,6 +156,52 @@ CONTINUOUS_INPUT_SLOT_MAX_BYTES = 64 * 1024 * 1024
 CONTINUOUS_INPUT_SLOT_HEADROOM = 1.35
 
 
+def _apply_manual_markers(lags, los_idx, echo_idx, manual_lags):
+    los = los_idx
+    echo = echo_idx
+    if manual_lags:
+        if manual_lags.get("los") is not None:
+            los = _resolve_manual_marker_index(lags, manual_lags.get("los"))
+        if manual_lags.get("echo") is not None:
+            echo = _resolve_manual_marker_index(lags, manual_lags.get("echo"))
+    return los, echo
+
+
+def _resolve_manual_marker_los_idx(lags, current_los_idx, manual_lag, *_args, **_kwargs):
+    if manual_lag is None:
+        return current_los_idx, False
+    idx = _resolve_manual_marker_index(lags, manual_lag)
+    return idx, idx != current_los_idx
+
+
+def _filter_peak_indices_to_group(lags, indices, highest_idx, period_samples):
+    return sorted({int(i) for i in indices if i is not None})
+
+
+def _classify_visible_peak_group_from_mag(mag, **_kwargs):
+    if mag.size == 0:
+        return None, None, [], []
+    highest = int(np.argmax(mag))
+    los = highest
+    return highest, los, [], [los]
+
+
+def _filter_echo_indices_by_noise_prominence(mag, los_idx, echo_indices, **_kwargs):
+    return [int(i) for i in echo_indices if los_idx is None or int(i) != int(los_idx)]
+
+
+def _find_primary_path_via_estimator(mag, **_kwargs):
+    if mag.size == 0:
+        return None, None
+    cfg = EchoEstimatorConfig(sample_rate_hz=1.0, search_lag_min_samples=0)
+    result = estimate_echoes(mag.astype(np.complex128), np.array([1+0j], dtype=np.complex128), cfg)
+    if not result.echoes:
+        return None, None
+    los_idx = int(result.echoes[0].index)
+    echo_idx = int(result.echoes[1].index) if len(result.echoes) > 1 else None
+    return los_idx, echo_idx
+
+
 def _repetition_period_samples_from_tx(tx_length_samples: int, lag_step: int = 1) -> int:
     """Return TX repetition period in the active xcorr sample domain."""
     return max(1, int(tx_length_samples) * max(1, int(lag_step)))
@@ -174,7 +217,7 @@ def _classify_visible_xcorr_peaks(
     los_min_rel_height: float = XCORR_LOS_PEAK_MIN_REL_HEIGHT,
 ) -> tuple[int | None, int | None, list[int]]:
     """Return (highest_idx, los_idx, echo_indices) from visible local maxima."""
-    highest_idx, visible_los_idx, visible_echo_indices, _visible_group_indices = _classify_peak_group_from_mag(
+    highest_idx, visible_los_idx, visible_echo_indices, _visible_group_indices = _classify_visible_peak_group_from_mag(
         mag,
         peaks_before=peaks_before,
         peaks_after=peaks_after,
@@ -182,7 +225,7 @@ def _classify_visible_xcorr_peaks(
         repetition_period_samples=repetition_period_samples,
         include_shoulders=True,
     )
-    _los_highest_idx, los_idx, _los_echo_indices, _los_group_indices = _classify_peak_group_from_mag(
+    _los_highest_idx, los_idx, _los_echo_indices, _los_group_indices = _classify_visible_peak_group_from_mag(
         mag,
         peaks_before=peaks_before,
         peaks_after=peaks_after,
@@ -212,7 +255,7 @@ def _current_peak_group_indices(
         for idx in [peak_source_los_idx, *peak_source_echo_indices, peak_source_highest_idx]
         if idx is not None
     ]
-    return _filter_peak_indices_to_period_group(
+    return _filter_peak_indices_to_group(
         lags,
         indices,
         peak_source_highest_idx,
@@ -1794,7 +1837,7 @@ class MissionMeasurementReviewDialog(QtWidgets.QDialog):
         if detected_los_idx is None:
             return
         period_samples: int | None = self._repetition_period_samples
-        filtered_echo_indices = _filter_peak_indices_to_period_group(
+        filtered_echo_indices = _filter_peak_indices_to_group(
             self._lags,
             [int(idx) for idx in detected_echo_indices if idx is not None],
             int(detected_los_idx),
@@ -2301,7 +2344,7 @@ def _build_crosscorr_ctx(
         highest_idx,
         period_samples,
     )
-    los_idx, _ = _resolve_manual_los_idx(
+    los_idx, _ = _resolve_manual_marker_los_idx(
         los_lags,
         base_los_idx,
         manual_lags,
@@ -2310,14 +2353,14 @@ def _build_crosscorr_ctx(
         period_samples=period_samples,
         constrain_to_peak_group=False,
     )
-    filtered_echo_indices = _filter_peak_indices_to_period_group(
+    filtered_echo_indices = _filter_peak_indices_to_group(
         los_lags,
         [idx for idx in base_echo_indices if idx is not None],
         los_idx,
         period_samples,
     )
     echo_idx = filtered_echo_indices[0] if filtered_echo_indices else None
-    _, manual_echo_idx = _apply_manual_lags(
+    _, manual_echo_idx = _apply_manual_markers(
         los_lags,
         los_idx,
         echo_idx,
@@ -2369,7 +2412,7 @@ def _estimate_los_lag(
     lags = np.arange(-n + 1, n) * step
     period_samples = _repetition_period_samples_from_tx(len(ref_red[:n]), step)
     mag = np.abs(cc)
-    los_idx, _echo_idx = _find_los_echo_from_mag(
+    los_idx, _echo_idx = _find_primary_path_via_estimator(
         mag,
         repetition_period_samples=period_samples,
     )
@@ -2380,7 +2423,7 @@ def _estimate_los_lag(
         los_idx,
         period_samples,
     )
-    los_idx, _ = _resolve_manual_los_idx(
+    los_idx, _ = _resolve_manual_marker_los_idx(
         lags,
         los_idx,
         manual_lags,
@@ -3278,14 +3321,14 @@ def _plot_on_pg(
             echo_text.setPos(x_range[0], y_range[0])
 
         def _echo_indices_for_los(anchor_idx: int | None) -> list[int]:
-            indices = _filter_peak_indices_to_period_group(
+            indices = _filter_peak_indices_to_group(
                 los_lags,
                 [int(idx) for idx in peak_source_echo_indices if idx is not None],
                 anchor_idx,
                 period_samples,
             )
             echo_idx_local = indices[0] if indices else None
-            _, echo_idx_local = _apply_manual_lags(
+            _, echo_idx_local = _apply_manual_markers(
                 los_lags,
                 anchor_idx,
                 echo_idx_local,
@@ -3299,7 +3342,7 @@ def _plot_on_pg(
             return [int(idx) for idx in indices]
 
         def _update_echo_text() -> None:
-            adj_los_idx, _ = _resolve_manual_los_idx(
+            adj_los_idx, _ = _resolve_manual_marker_los_idx(
                 los_lags,
                 peak_source_los_idx,
                 manual_lags,
@@ -3755,7 +3798,7 @@ def _plot_on_mpl(
             highest_idx,
             period_samples,
         )
-        los_idx, _ = _resolve_manual_los_idx(
+        los_idx, _ = _resolve_manual_marker_los_idx(
             los_lags,
             base_los_idx,
             manual_lags,
@@ -3764,7 +3807,7 @@ def _plot_on_mpl(
             period_samples=period_samples,
             constrain_to_peak_group=False,
         )
-        filtered_echo_indices = _filter_peak_indices_to_period_group(
+        filtered_echo_indices = _filter_peak_indices_to_group(
             los_lags,
             [idx for idx in base_echo_indices if idx is not None],
             los_idx,

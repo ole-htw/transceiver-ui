@@ -1,6 +1,8 @@
 import numpy as np
 
-from .correlation_utils import apply_manual_lags, find_los_echo, lag_overlap, xcorr_fft
+from .correlation_utils import correlation_lags, lag_overlap, xcorr_fft
+from .echo_estimation import EchoEstimatorConfig, estimate_echoes
+from .manual_marker_utils import resolve_manual_marker_index
 
 
 def apply_path_cancellation(
@@ -31,9 +33,12 @@ def apply_path_cancellation(
     if n == 0:
         return data, info
     cc = xcorr_fft(data[:n], ref_data[:n])
-    lags = np.arange(-n + 1, n)
-    base_los_idx, _ = find_los_echo(cc)
-    los_idx, _ = apply_manual_lags(lags, base_los_idx, None, manual_lags)
+    lags = correlation_lags(n, n)
+    est = estimate_echoes(data[:n], ref_data[:n], EchoEstimatorConfig(sample_rate_hz=1.0, search_lag_min_samples=int(lags[0]), search_lag_max_samples=int(lags[-1]), max_echoes=4))
+    base_los_idx = est.echoes[0].index if est.echoes else None
+    los_idx = base_los_idx
+    if manual_lags and manual_lags.get("los") is not None:
+        los_idx = resolve_manual_marker_index(lags, manual_lags.get("los"))
     if los_idx is None:
         _append_warning("Pfad-Cancellation nicht möglich (kein LOS-Peak).")
         return data, info
