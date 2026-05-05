@@ -7565,6 +7565,11 @@ class TransceiverUI(ctk.CTk):
                     outcome.get("detail", ""),
                 )
                 dialog_result = dialog.exec()
+                workflow_window = getattr(self, "_mission_workflow_window", None)
+                if workflow_window is not None and workflow_window.winfo_exists():
+                    workflow_window.deiconify()
+                    workflow_window.lift()
+                    workflow_window.after_idle(workflow_window.focus_force)
                 logging.info(
                     "Mission review dialog finished: point_label=%s result=%s confirmed=%s reason=%s detail=%s",
                     point_label,
