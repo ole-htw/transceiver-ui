@@ -6,7 +6,7 @@ import argparse
 import os # For basename in title
 import time # To measure correlation time
 from transceiver.helpers.plot_colors import PLOT_COLORS
-from transceiver.helpers.correlation_utils import find_los_echo
+from transceiver.helpers.echo_estimation import EchoEstimatorConfig, estimate_echoes
 
 def read_signal_file(filename):
     """Liest eine Binärdatei mit interleaved int16 Samples und gibt ein komplexes Signal zurück."""
@@ -82,7 +82,9 @@ def main():
     lags = np.arange(-(N2 - 1), N1)
     zero_lag_index = N2 - 1  # Index des Lags 0
 
-    los_idx_full, echo_idx_full = find_los_echo(cross_corr)
+    result = estimate_echoes(signal2, signal1, EchoEstimatorConfig(sample_rate_hz=1.0, search_lag_min_samples=int(lags[0]), search_lag_max_samples=int(lags[-1])))
+    los_idx_full = result.echoes[0].index if result.echoes else None
+    echo_idx_full = result.echoes[1].index if len(result.echoes) > 1 else None
     if los_idx_full is not None and echo_idx_full is not None:
         delay_samples = int(lags[echo_idx_full] - lags[los_idx_full])
         print(f"LOS-Echo Abstand: {delay_samples} Samples")
