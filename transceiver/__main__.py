@@ -43,7 +43,7 @@ from .helpers.correlation_utils import (
     lag_overlap as _lag_overlap,
     xcorr_fft as _xcorr_fft,
 )
-from .helpers.echo_estimation import CFARConfig, EchoEstimatorConfig, cfar_1d, estimate_echoes
+from .helpers.echo_estimation import EchoEstimatorConfig, estimate_echoes
 from .helpers.manual_marker_utils import resolve_manual_marker_index as _resolve_manual_marker_index
 from .helpers.path_cancellation import apply_path_cancellation
 from .helpers.continuous_processing import continuous_processing_worker
@@ -181,27 +181,9 @@ def _filter_peak_indices_to_group(lags, indices, highest_idx, period_samples):
 def _classify_visible_peak_group_from_mag(mag, **_kwargs):
     if mag.size == 0:
         return None, None, [], []
-
     highest = int(np.argmax(mag))
-    los = None
-
-    power = np.square(np.clip(mag.astype(float), a_min=0.0, a_max=None))
-    cfar_cfg = CFARConfig()
-    guard = cfar_cfg.resolved_guard_cells(default_guard=4)
-    cfar_mask, _cfar_threshold, _cfar_noise = cfar_1d(
-        power,
-        train_cells=cfar_cfg.train_cells,
-        guard_cells=guard,
-        pfa=cfar_cfg.pfa,
-        mode=cfar_cfg.mode,
-        median_scale=cfar_cfg.median_scale,
-        minimum_noise_power=cfar_cfg.minimum_noise_power,
-    )
-    detected = np.flatnonzero(cfar_mask)
-    if detected.size > 0:
-        los = int(detected[0])
-
-    return highest, los, [], ([los] if los is not None else [])
+    los = highest
+    return highest, los, [], [los]
 
 
 def _filter_echo_indices_by_noise_prominence(mag, los_idx, echo_indices, **_kwargs):
