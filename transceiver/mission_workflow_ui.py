@@ -737,7 +737,12 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             textvariable=self.results_selection_diagnostics_var,
             anchor="w",
             justify="left",
-        ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=(2, 0), pady=(4, 0))
+        ).grid(row=1, column=0, sticky="ew", padx=(2, 0), pady=(4, 0))
+        ctk.CTkButton(
+            table_frame,
+            text="Ergebnisliste leeren",
+            command=self._clear_results_table,
+        ).grid(row=1, column=1, sticky="e", padx=(8, 0), pady=(4, 0))
 
         self._mission_points: list[MeasurementPoint] = []
         self.mission_name_var.trace_add("write", lambda *_args: self._persist_workflow_state())
@@ -3300,11 +3305,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._append_validation("ℹ️ Testlauf aktiv: Wegpunkte werden ohne Messung angefahren.")
         start_point_index = self._selected_start_point_index()
 
-        self.results_table.delete(*self.results_table.get_children())
-        self._records = []
-        self._selected_result_index = None
-        self._selected_result_indices = ()
-        self._update_results_selection_diagnostics()
+        self._clear_results_table()
         self._run_started_at = time.time()
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         self._run_log_dir = Path("signals") / "mission-runs" / ts
@@ -4435,6 +4436,14 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._live_pose_stream_active = False
         self.destroy()
 
+
+    def _clear_results_table(self) -> None:
+        self.results_table.delete(*self.results_table.get_children())
+        self._records = []
+        self._selected_result_index = None
+        self._selected_result_indices = ()
+        self._update_results_selection_diagnostics()
+
     def _export_logs(self) -> None:
         if self._run_log_dir is None or not self._run_log_dir.exists():
             messagebox.showinfo("Export", "Noch keine Run-Logs vorhanden.", parent=self)
@@ -4534,8 +4543,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                     y=imported_rx_position[1],
                 )
 
-        self.results_table.delete(*self.results_table.get_children())
-        self._records = []
+        self._clear_results_table()
         for payload in imported_records:
             self._on_record(payload)
 
