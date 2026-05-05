@@ -3115,6 +3115,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             "reverse_point_order": bool(self.reverse_point_order_var.get()),
             "live_pose_stream_enabled": bool(self.live_pose_stream_enabled_var.get()),
             "live_preview_enabled": bool(self.live_preview_enabled_var.get()),
+            "records": self._records,
         }
 
     def _serialize_rx_antenna_global_position(self) -> dict[str, float] | None:
@@ -3217,6 +3218,16 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                 f"Punkte pro Zyklus: {len(mission.points)} | Wiederholungen: {repeats} | Gesamtpunkte: {total_points}"
             )
             self._refresh_review_ready_indicator()
+            persisted_records = payload.get("records")
+            if isinstance(persisted_records, list):
+                self._clear_results_table()
+                for persisted_payload in persisted_records:
+                    if isinstance(persisted_payload, dict):
+                        self._on_record(dict(persisted_payload))
+                if persisted_records:
+                    self._append_validation(
+                        f"✅ Persistierte Ergebnisliste geladen: {len(self._records)} Messpunkte"
+                    )
         finally:
             self._is_restoring_workflow_state = False
 
