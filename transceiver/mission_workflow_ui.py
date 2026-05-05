@@ -4447,6 +4447,7 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._navigator.stop_pose_stream()
             self._navigator = None
         self._live_pose_stream_active = False
+        self._persist_workflow_state()
         self.destroy()
 
 
