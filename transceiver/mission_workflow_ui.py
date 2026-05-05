@@ -4459,23 +4459,39 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
         self._update_results_selection_diagnostics()
 
     def _export_logs(self) -> None:
-        if self._run_log_dir is None or not self._run_log_dir.exists():
+        if not self._records:
             messagebox.showinfo("Export", "Noch keine Run-Logs vorhanden.", parent=self)
             return
 
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        run_name = self._run_log_dir.name if self._run_log_dir is not None else f"run-logs-{timestamp}"
         destination = filedialog.asksaveasfilename(
             title="Run-Logs exportieren",
             parent=self,
             defaultextension=".zip",
-            initialfile=f"{self._run_log_dir.name}.zip",
+            initialfile=f"{run_name}.zip",
             filetypes=[("ZIP", "*.zip")],
         )
         if not destination:
             return
 
         with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for path in sorted(self._run_log_dir.glob("*.json")):
-                zf.write(path, arcname=path.name)
+            zf.writestr(
+                "run-summary.json",
+                json.dumps(
+                    {
+                        "exported_at": datetime.now().isoformat(timespec="seconds"),
+                        "record_count": len(self._records),
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                ),
+            )
+            for index, payload in enumerate(self._records, start=1):
+                zf.writestr(
+                    f"point-{index:03d}.json",
+                    json.dumps(payload, indent=2, ensure_ascii=False),
+                )
         messagebox.showinfo("Export", f"Exportiert nach:\n{destination}", parent=self)
 
     def _import_logs(self) -> None:
