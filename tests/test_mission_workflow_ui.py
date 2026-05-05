@@ -349,7 +349,6 @@ class _TreeviewSelectionStub:
             "echo_3_m",
             "echo_4_m",
             "echo_5_m",
-            "review_action",
             "status",
         )
 
@@ -427,17 +426,16 @@ def test_on_results_table_click_on_empty_region_preserves_multiselect() -> None:
     assert window.results_selection_diagnostics_var.value == "Auswahl: 2 Zeilen"
 
 
-def test_on_results_table_click_opens_review_in_review_column() -> None:
+def test_on_results_table_double_click_opens_review_for_row() -> None:
     window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
     table = _TreeviewSelectionStub()
     table._row_id = "row-a"
-    table._column_id = "#10"
     table._indices = {"row-a": 3}
     window.results_table = table
     opened_rows: list[int] = []
     window._open_review_for_result_row = lambda row_index: opened_rows.append(row_index)
 
-    result = window._on_results_table_click(SimpleNamespace(x=5, y=5))
+    result = window._on_results_table_double_click(SimpleNamespace(y=5))
 
     assert result == "break"
     assert opened_rows == [3]
