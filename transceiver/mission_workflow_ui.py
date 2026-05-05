@@ -4545,7 +4545,6 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
                     y=imported_rx_position[1],
                 )
 
-        self._clear_results_table()
         for payload in imported_records:
             self._on_record(payload)
 
