@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import NamedTuple
+from dataclasses import dataclass
+from typing import Literal, NamedTuple
 
 import numpy as np
 
@@ -11,6 +12,80 @@ class _RobustScaleEstimate(NamedTuple):
     location: float
     sigma: float
     method: str
+
+
+@dataclass(frozen=True)
+class NoiseFloorEstimate:
+    """Diagnostic noise-floor estimate for magnitude-domain CIR/correlation data.
+
+    ``baseline`` is the robust background level in the magnitude domain.
+    ``sigma`` is an empirical robust scale of background magnitude variations.
+    ``threshold`` is the detection level used for significance tests.
+
+    Notes
+    -----
+    The magnitude of complex Gaussian noise is Rayleigh/Rice distributed, not
+    Gaussian.  Therefore ``sigma`` is intentionally documented as an empirical
+    robust scale, not as a physical AWGN standard deviation.  If
+    ``false_alarm_probability`` is supplied, a Rayleigh tail threshold is also
+    computed from background samples and used as an additional lower bound.
+    """
+
+    baseline: float
+    sigma: float
+    threshold: float
+    method: str
+    n_background: int
+    false_alarm_probability: float | None = None
+    rayleigh_sigma: float | None = None
+    rayleigh_threshold: float | None = None
+
+
+@dataclass(frozen=True)
+class PeakEvidence:
+    """Diagnostic evidence for one selected path/peak marker."""
+
+    index: int
+    magnitude: float
+    prominence: float
+    threshold: float
+    snr_db: float | None
+    method: str
+
+
+@dataclass(frozen=True)
+class CIRPathDetection:
+    """Detailed result of magnitude-domain path detection.
+
+    The public legacy functions still return only indices.  This object is the
+    scientific/diagnostic interface: it keeps the strongest path separate from
+    the first significant path, stores the active search group, the noise-floor
+    estimate, and per-marker evidence.  ``noise`` is kept as a backward-friendly
+    alias for ``first_path_noise``.
+    """
+
+    strongest_idx: int | None
+    first_path_idx: int | None
+    los_idx: int | None
+    echo_indices: list[int]
+    group_indices: list[int]
+    strict_peak_indices: list[int]
+    shoulder_indices: list[int]
+    left_bound: int
+    right_bound: int
+    noise: NoiseFloorEstimate
+    first_path_noise: NoiseFloorEstimate
+    echo_noise: NoiseFloorEstimate
+    evidence: list[PeakEvidence]
+    first_path_policy: str
+
+
+FirstPathPolicy = Literal[
+    "earliest_significant",
+    "earliest_local_maximum",
+    "strongest",
+    "legacy",
+]
 
 
 def _as_finite_1d(y: np.ndarray) -> np.ndarray:
@@ -192,6 +267,154 @@ def _peak_search_bounds(
                 break
 
     return left_bound, right_bound
+
+
+def estimate_noise_floor_from_mag(
+    mag: np.ndarray,
+    *,
+    left_bound: int | None = None,
+    right_bound: int | None = None,
+    exclude_indices: list[int] | None = None,
+    exclude_radius: int = 3,
+    noise_sigma_factor: float = 3.0,
+    false_alarm_probability: float | None = None,
+    min_background_fraction: float = 0.20,
+) -> NoiseFloorEstimate:
+    """Estimate a robust empirical noise floor in the magnitude domain.
+
+    Parameters
+    ----------
+    mag:
+        Magnitude-domain correlation/CIR samples.
+    left_bound, right_bound:
+        Optional inclusive search region.  Background statistics are preferably
+        computed from this region, excluding neighborhoods around known peaks.
+    exclude_indices:
+        Candidate/path indices to remove from the background sample set.
+    exclude_radius:
+        Half-width around each excluded index.
+    noise_sigma_factor:
+        Empirical prominence threshold in units of robust background scale.
+    false_alarm_probability:
+        Optional per-search false alarm probability.  If supplied, a Rayleigh
+        tail threshold is estimated from the background median and used as an
+        additional threshold.  This is only an approximation because the input
+        is magnitude-domain and may contain correlation sidelobes.
+    min_background_fraction:
+        If too many samples are excluded, fall back to a less aggressive mask.
+    """
+    work_mag = _as_finite_1d(mag)
+    n = int(work_mag.size)
+    if n == 0:
+        return NoiseFloorEstimate(
+            baseline=0.0,
+            sigma=0.0,
+            threshold=0.0,
+            method="empty",
+            n_background=0,
+            false_alarm_probability=false_alarm_probability,
+        )
+
+    left = 0 if left_bound is None else int(np.clip(left_bound, 0, n - 1))
+    right = n - 1 if right_bound is None else int(np.clip(right_bound, 0, n - 1))
+    if right < left:
+        left, right = 0, n - 1
+
+    segment = work_mag[left : right + 1]
+    mask = np.ones(segment.size, dtype=bool)
+
+    if exclude_indices:
+        radius = max(0, int(exclude_radius))
+        for idx in exclude_indices:
+            idx = int(idx)
+            if idx < left or idx > right:
+                continue
+            local = idx - left
+            a = max(0, local - radius)
+            b = min(segment.size, local + radius + 1)
+            mask[a:b] = False
+
+    min_count = max(8, int(np.ceil(float(min_background_fraction) * segment.size)))
+    if int(mask.sum()) < min_count:
+        # Fall back to all samples in the active segment.  This prevents the
+        # threshold from becoming unstable in dense multipath or very short CIRs.
+        background = segment
+        mask_method = "all_segment"
+    else:
+        background = segment[mask]
+        mask_method = "peak_excluded"
+
+    robust = _robust_scale_1d(background)
+    baseline = max(0.0, float(robust.location))
+    sigma = max(0.0, float(robust.sigma))
+
+    if sigma <= 1e-12 and background.size >= 2:
+        # Magnitude data with a flat floor is common after quantization or after
+        # a previous preprocessing step.  Accept positive prominence above the
+        # floor instead of silently returning NaN/inf thresholds.
+        sigma = 0.0
+
+    empirical_threshold = baseline + max(0.0, float(noise_sigma_factor)) * sigma
+
+    rayleigh_sigma: float | None = None
+    rayleigh_threshold: float | None = None
+    threshold = empirical_threshold
+    method = f"{robust.method}:{mask_method}:empirical"
+
+    if false_alarm_probability is not None and background.size > 0:
+        pfa = float(false_alarm_probability)
+        if 0.0 < pfa < 1.0:
+            # Estimate Rayleigh scale from the median of non-negative magnitude
+            # samples.  This is a conservative optional statistical guardrail.
+            bg_nonnegative = np.clip(np.asarray(background, dtype=float), 0.0, None)
+            median_mag = float(np.median(bg_nonnegative))
+            if median_mag > 0.0:
+                rayleigh_sigma = median_mag / np.sqrt(2.0 * np.log(2.0))
+                # Bonferroni-style per-bin correction inside the active search.
+                pfa_bin = max(np.finfo(float).tiny, pfa / max(1, int(segment.size)))
+                rayleigh_threshold = float(
+                    rayleigh_sigma * np.sqrt(-2.0 * np.log(pfa_bin))
+                )
+                threshold = max(threshold, rayleigh_threshold)
+                method += "+rayleigh_pfa"
+
+    return NoiseFloorEstimate(
+        baseline=float(baseline),
+        sigma=float(sigma),
+        threshold=float(threshold),
+        method=method,
+        n_background=int(background.size),
+        false_alarm_probability=false_alarm_probability,
+        rayleigh_sigma=rayleigh_sigma,
+        rayleigh_threshold=rayleigh_threshold,
+    )
+
+
+def _prominence_above_noise(mag: np.ndarray, idx: int, noise: NoiseFloorEstimate) -> float:
+    idx = int(np.clip(idx, 0, mag.size - 1))
+    return max(0.0, float(mag[idx]) - float(noise.baseline))
+
+
+def _snr_db_from_prominence(prominence: float, noise: NoiseFloorEstimate) -> float | None:
+    sigma = float(noise.sigma)
+    if sigma <= 1e-12:
+        return None
+    return float(20.0 * np.log10(max(float(prominence), 1e-300) / sigma))
+
+
+def _significant_peak_indices(
+    mag: np.ndarray,
+    candidate_indices: list[int],
+    *,
+    noise: NoiseFloorEstimate,
+    min_prominence: float = 0.0,
+) -> list[int]:
+    threshold = max(float(noise.threshold), float(noise.baseline) + max(0.0, float(min_prominence)))
+    return [
+        int(idx)
+        for idx in sorted({int(i) for i in candidate_indices})
+        if 0 <= int(idx) < mag.size and float(mag[int(idx)]) >= threshold
+    ]
 
 
 def find_shoulder_candidates_from_mag(
@@ -766,6 +989,262 @@ def find_shoulder_candidates_from_mag(
     return sorted(int(idx) for idx, _ in final)
 
 
+def _build_peak_evidence(
+    mag: np.ndarray,
+    indices: list[int],
+    *,
+    noise: NoiseFloorEstimate,
+    echo_noise: NoiseFloorEstimate | None = None,
+    shoulder_indices: set[int] | None = None,
+    first_path_idx: int | None = None,
+    strongest_idx: int | None = None,
+) -> list[PeakEvidence]:
+    shoulder_indices = shoulder_indices or set()
+    evidence: list[PeakEvidence] = []
+    for idx in sorted({int(i) for i in indices if 0 <= int(i) < mag.size}):
+        noise_for_idx = noise if idx == first_path_idx else (echo_noise or noise)
+        prominence = _prominence_above_noise(mag, idx, noise_for_idx)
+        labels: list[str] = []
+        if idx == strongest_idx:
+            labels.append("strongest")
+        if idx == first_path_idx:
+            labels.append("first_path")
+        labels.append("shoulder" if idx in shoulder_indices else "strict_peak")
+        evidence.append(
+            PeakEvidence(
+                index=int(idx),
+                magnitude=float(mag[idx]),
+                prominence=float(prominence),
+                threshold=float(noise_for_idx.threshold),
+                snr_db=_snr_db_from_prominence(prominence, noise_for_idx),
+                method="+".join(labels),
+            )
+        )
+    return evidence
+
+
+def detect_cir_paths_from_mag(
+    mag: np.ndarray,
+    *,
+    repetition_period_samples: int | None = None,
+    include_shoulders: bool = False,
+    first_path_policy: FirstPathPolicy = "earliest_significant",
+    min_rel_height: float = 0.0,
+    peaks_before: int = 32,
+    peaks_after: int = 32,
+    noise_sigma_factor: float = 3.0,
+    first_path_noise_sigma_factor: float | None = 3.0,
+    noise_exclude_radius: int = 3,
+    false_alarm_probability: float | None = None,
+    min_echo_lag_samples: int = 2,
+    max_echoes: int | None = None,
+) -> CIRPathDetection:
+    """Detect first path/LOS and echoes with diagnostics.
+
+    This is the scientifically preferable interface.  It separates the
+    strongest path from the first significant path and returns the noise-floor
+    estimate used for significance filtering.  The legacy wrappers below keep
+    their historical return shapes.
+
+    Parameters
+    ----------
+    first_path_policy:
+        ``"earliest_significant"`` chooses the earliest local maximum in the
+        active group above the robust noise threshold.  ``"strongest"`` and
+        ``"legacy"`` choose the strongest path and therefore reproduce the old
+        dominant-peak LOS semantics.  ``"earliest_local_maximum"`` uses the
+        earliest local maximum in the active group even if the threshold is not
+        exceeded; this is useful only for very high-SNR, manually windowed data.
+    noise_sigma_factor:
+        Echo significance threshold.  The default ``3.0`` is stricter than the
+        old permissive echo filter and reduces the chance that random local
+        maxima between the first path and the strongest path become echoes.
+        For plot-level continuity with the old component, set this to ``0.3``.
+    first_path_noise_sigma_factor:
+        LOS/first-path threshold.  The default ``3.0`` is deliberately stricter
+        than the echo threshold, because choosing the earliest significant path
+        with a permissive threshold can otherwise turn early background noise
+        into a false LOS marker.  Set this to ``None`` to reuse
+        ``noise_sigma_factor`` for both decisions.
+    false_alarm_probability:
+        Optional Rayleigh-tail guardrail for calibrated/high-stakes detection.
+    """
+    work_mag = _as_finite_1d(mag)
+    n = int(work_mag.size)
+    empty_noise = NoiseFloorEstimate(
+        baseline=0.0,
+        sigma=0.0,
+        threshold=0.0,
+        method="empty",
+        n_background=0,
+        false_alarm_probability=false_alarm_probability,
+    )
+    if n == 0:
+        return CIRPathDetection(
+            strongest_idx=None,
+            first_path_idx=None,
+            los_idx=None,
+            echo_indices=[],
+            group_indices=[],
+            strict_peak_indices=[],
+            shoulder_indices=[],
+            left_bound=0,
+            right_bound=-1,
+            noise=empty_noise,
+            first_path_noise=empty_noise,
+            echo_noise=empty_noise,
+            evidence=[],
+            first_path_policy=str(first_path_policy),
+        )
+
+    strongest_idx = int(np.argmax(work_mag))
+    left_bound, right_bound = _peak_search_bounds(
+        work_mag,
+        center_idx=strongest_idx,
+        repetition_period_samples=repetition_period_samples,
+    )
+    if right_bound < left_bound:
+        return CIRPathDetection(
+            strongest_idx=strongest_idx,
+            first_path_idx=strongest_idx,
+            los_idx=strongest_idx,
+            echo_indices=[],
+            group_indices=[strongest_idx],
+            strict_peak_indices=[strongest_idx],
+            shoulder_indices=[],
+            left_bound=left_bound,
+            right_bound=right_bound,
+            noise=empty_noise,
+            first_path_noise=empty_noise,
+            echo_noise=empty_noise,
+            evidence=[],
+            first_path_policy=str(first_path_policy),
+        )
+
+    # Keep the primary peak finder compatible: local maxima are identified with
+    # the historical plateau rule.  ``min_rel_height`` remains optional, but the
+    # default is zero so weak first paths are not suppressed solely because a
+    # later reflection is stronger.
+    min_height = max(0.0, float(min_rel_height)) * float(work_mag[strongest_idx])
+    strict_candidates = _local_maxima_compat(
+        work_mag,
+        left_bound=left_bound,
+        right_bound=right_bound,
+        min_height=min_height,
+    )
+    if strongest_idx not in strict_candidates:
+        strict_candidates.append(strongest_idx)
+    strict_candidates = sorted({int(i) for i in strict_candidates})
+
+    shoulder_indices: list[int] = []
+    if include_shoulders and len(strict_candidates) >= 2:
+        shoulder_indices = find_shoulder_candidates_from_mag(
+            work_mag,
+            center_idx=strongest_idx,
+            strict_peak_indices=strict_candidates,
+            min_height=min_height,
+            left_bound=left_bound,
+            right_bound=right_bound,
+        )
+
+    all_candidates = sorted({*strict_candidates, *shoulder_indices})
+
+    first_factor = (
+        float(noise_sigma_factor)
+        if first_path_noise_sigma_factor is None
+        else float(first_path_noise_sigma_factor)
+    )
+
+    first_path_noise = estimate_noise_floor_from_mag(
+        work_mag,
+        left_bound=left_bound,
+        right_bound=right_bound,
+        exclude_indices=all_candidates,
+        exclude_radius=noise_exclude_radius,
+        noise_sigma_factor=first_factor,
+        false_alarm_probability=false_alarm_probability,
+    )
+    echo_noise = estimate_noise_floor_from_mag(
+        work_mag,
+        left_bound=left_bound,
+        right_bound=right_bound,
+        exclude_indices=all_candidates,
+        exclude_radius=noise_exclude_radius,
+        noise_sigma_factor=noise_sigma_factor,
+        false_alarm_probability=false_alarm_probability,
+    )
+
+    first_significant = _significant_peak_indices(
+        work_mag, all_candidates, noise=first_path_noise
+    )
+    echo_significant = _significant_peak_indices(
+        work_mag, all_candidates, noise=echo_noise
+    )
+
+    # Never lose the dominant path.  If the robust threshold is too strict for a
+    # very short/dense segment, we fall back to the strongest peak rather than
+    # returning no marker.
+    if strongest_idx not in first_significant:
+        first_significant.append(strongest_idx)
+        first_significant.sort()
+    if strongest_idx not in echo_significant:
+        echo_significant.append(strongest_idx)
+        echo_significant.sort()
+
+    if first_path_policy in {"strongest", "legacy"}:
+        first_path_idx = strongest_idx
+    elif first_path_policy == "earliest_local_maximum":
+        first_path_idx = int(min(all_candidates)) if all_candidates else strongest_idx
+    elif first_path_policy == "earliest_significant":
+        first_path_idx = int(min(first_significant)) if first_significant else strongest_idx
+    else:
+        raise ValueError(
+            "first_path_policy must be 'earliest_significant', "
+            "'earliest_local_maximum', 'strongest', or 'legacy'"
+        )
+
+    min_echo_gap = max(0, int(min_echo_lag_samples))
+    echo_indices = [
+        int(idx)
+        for idx in echo_significant
+        if int(idx) > int(first_path_idx) + min_echo_gap
+    ]
+    if max_echoes is not None:
+        echo_indices = echo_indices[: max(0, int(max_echoes))]
+
+    group_indices = sorted({int(first_path_idx), int(strongest_idx), *echo_indices})
+    # Keep diagnostics complete for significant candidates while LOS/echo
+    # semantics remain governed by first_path_idx and echo_indices.
+    group_indices = sorted({*group_indices, *first_significant})
+
+    evidence = _build_peak_evidence(
+        work_mag,
+        group_indices,
+        noise=first_path_noise,
+        echo_noise=echo_noise,
+        shoulder_indices=set(shoulder_indices),
+        first_path_idx=first_path_idx,
+        strongest_idx=strongest_idx,
+    )
+
+    return CIRPathDetection(
+        strongest_idx=int(strongest_idx),
+        first_path_idx=int(first_path_idx),
+        los_idx=int(first_path_idx),
+        echo_indices=[int(i) for i in echo_indices],
+        group_indices=[int(i) for i in group_indices],
+        strict_peak_indices=[int(i) for i in strict_candidates],
+        shoulder_indices=[int(i) for i in shoulder_indices],
+        left_bound=int(left_bound),
+        right_bound=int(right_bound),
+        noise=first_path_noise,
+        first_path_noise=first_path_noise,
+        echo_noise=echo_noise,
+        evidence=evidence,
+        first_path_policy=str(first_path_policy),
+    )
+
+
 def apply_manual_lags(
     lags: np.ndarray,
     los_idx: int | None,
@@ -815,11 +1294,30 @@ def find_los_echo(
     cc: np.ndarray,
     *,
     repetition_period_samples: int | None = None,
+    include_shoulders: bool = False,
+    first_path_policy: FirstPathPolicy = "earliest_significant",
+    noise_sigma_factor: float = 3.0,
+    first_path_noise_sigma_factor: float | None = 3.0,
+    false_alarm_probability: float | None = None,
+    min_echo_lag_samples: int = 2,
 ) -> tuple[int | None, int | None]:
-    """Return LOS + first echo indices using a single magnitude conversion."""
+    """Return LOS/first-path and first echo indices using one magnitude conversion.
+
+    Drop-in compatibility: existing calls with only ``cc`` and optionally
+    ``repetition_period_samples`` still work.  The default semantics are now
+    physically clearer: LOS is the earliest significant path in the active peak
+    group, not blindly the strongest peak.  Use
+    ``first_path_policy='legacy'`` to reproduce the old strongest-peak behavior.
+    """
     return find_los_echo_from_mag(
         np.abs(cc),
         repetition_period_samples=repetition_period_samples,
+        include_shoulders=include_shoulders,
+        first_path_policy=first_path_policy,
+        noise_sigma_factor=noise_sigma_factor,
+        first_path_noise_sigma_factor=first_path_noise_sigma_factor,
+        false_alarm_probability=false_alarm_probability,
+        min_echo_lag_samples=min_echo_lag_samples,
     )
 
 
@@ -827,23 +1325,31 @@ def find_los_echo_from_mag(
     mag: np.ndarray,
     *,
     repetition_period_samples: int | None = None,
+    include_shoulders: bool = False,
+    first_path_policy: FirstPathPolicy = "earliest_significant",
+    noise_sigma_factor: float = 3.0,
+    first_path_noise_sigma_factor: float | None = 3.0,
+    false_alarm_probability: float | None = None,
+    min_echo_lag_samples: int = 2,
 ) -> tuple[int | None, int | None]:
-    """Return LOS + first echo indices using the shared peak grouping logic."""
-    _highest_idx, los_idx, echo_indices, _group_indices = classify_peak_group_from_mag(
+    """Return LOS/first-path and first echo indices from magnitude data.
+
+    Existing callers can keep using the two-index return value.  For scientific
+    diagnostics, prefer ``detect_cir_paths_from_mag``.
+    """
+    detection = detect_cir_paths_from_mag(
         mag,
-        peaks_before=0,
-        peaks_after=1,
-        min_rel_height=0.0,
         repetition_period_samples=repetition_period_samples,
+        include_shoulders=include_shoulders,
+        first_path_policy=first_path_policy,
+        noise_sigma_factor=noise_sigma_factor,
+        first_path_noise_sigma_factor=first_path_noise_sigma_factor,
+        false_alarm_probability=false_alarm_probability,
+        min_echo_lag_samples=min_echo_lag_samples,
+        max_echoes=1,
     )
-    echo_indices = filter_echo_indices_by_noise_prominence(
-        mag,
-        los_idx=los_idx,
-        echo_indices=echo_indices,
-        repetition_period_samples=repetition_period_samples,
-    )
-    echo_idx = echo_indices[0] if echo_indices else None
-    return los_idx, echo_idx
+    echo_idx = detection.echo_indices[0] if detection.echo_indices else None
+    return detection.los_idx, echo_idx
 
 
 def filter_echo_indices_by_noise_prominence(
@@ -854,18 +1360,17 @@ def filter_echo_indices_by_noise_prominence(
     repetition_period_samples: int | None = None,
     noise_sigma_factor: float = 0.3,
     min_echo_lag_samples: int = 2,
+    false_alarm_probability: float | None = None,
+    legacy_compatible: bool = True,
 ) -> list[int]:
     """Keep echo peaks that stand out from global background noise.
 
-    The filter uses a robust global baseline and a robust global noise estimate.
-    This keeps the decision independent of the LOS peak height and avoids
-    rejecting valid weaker echoes simply because the LOS component is strong.
-
-    ``repetition_period_samples`` is accepted for API compatibility and future
-    extensions; the current implementation already operates on the candidate
-    set supplied by the active group selection.
+    By default this remains compatible with the previous component: global
+    median + MAD is used, and if MAD is zero, any positive prominence is
+    accepted.  Set ``legacy_compatible=False`` to use the new diagnostic noise
+    estimator with IQR/std fallback and optional Rayleigh-PFA guardrail.
     """
-    del repetition_period_samples  # kept in the signature for drop-in compatibility
+    del repetition_period_samples  # grouping is already reflected in candidates
 
     work_mag = _as_finite_1d(mag)
     if work_mag.size == 0 or not echo_indices:
@@ -888,26 +1393,30 @@ def filter_echo_indices_by_noise_prominence(
     if not cleaned_indices:
         return []
 
-    # Keep the historical echo/noise decision exactly compatible: use the
-    # global median as baseline and the MAD-scaled sigma without IQR/std
-    # fallback. If the MAD is zero, any positive prominence is accepted, as in
-    # the original component. More elaborate robust fallbacks are used for
-    # shoulder evidence where they cannot silently remove existing strict peaks.
-    global_baseline = float(np.median(work_mag))
-    global_mad = float(np.median(np.abs(work_mag - global_baseline)))
-    noise_sigma = 1.4826 * global_mad
+    if legacy_compatible:
+        global_baseline = float(np.median(work_mag))
+        global_mad = float(np.median(np.abs(work_mag - global_baseline)))
+        noise_sigma = 1.4826 * global_mad
 
-    filtered: list[int] = []
-    for idx in cleaned_indices:
-        prominence = float(work_mag[idx]) - global_baseline
-        if prominence <= 0.0:
-            continue
-        if noise_sigma <= 1e-12:
-            filtered.append(int(idx))
-            continue
-        if prominence >= max(0.0, float(noise_sigma_factor)) * noise_sigma:
-            filtered.append(int(idx))
-    return filtered
+        filtered: list[int] = []
+        for idx in cleaned_indices:
+            prominence = float(work_mag[idx]) - global_baseline
+            if prominence <= 0.0:
+                continue
+            if noise_sigma <= 1e-12:
+                filtered.append(int(idx))
+                continue
+            if prominence >= max(0.0, float(noise_sigma_factor)) * noise_sigma:
+                filtered.append(int(idx))
+        return filtered
+
+    noise = estimate_noise_floor_from_mag(
+        work_mag,
+        exclude_indices=cleaned_indices + ([] if los_idx_int is None else [los_idx_int]),
+        noise_sigma_factor=noise_sigma_factor,
+        false_alarm_probability=false_alarm_probability,
+    )
+    return _significant_peak_indices(work_mag, cleaned_indices, noise=noise)
 
 
 def classify_peak_group(
@@ -917,6 +1426,8 @@ def classify_peak_group(
     peaks_after: int = 3,
     min_rel_height: float = 0.1,
     repetition_period_samples: int | None = None,
+    include_shoulders: bool = False,
+    first_path_policy: Literal["selected_group", "earliest_significant", "legacy", "strongest"] = "selected_group",
 ) -> tuple[int | None, int | None, list[int], list[int]]:
     """Return (highest_idx, los_idx, echo_indices, group_indices)."""
     return classify_peak_group_from_mag(
@@ -925,6 +1436,8 @@ def classify_peak_group(
         peaks_after=peaks_after,
         min_rel_height=min_rel_height,
         repetition_period_samples=repetition_period_samples,
+        include_shoulders=include_shoulders,
+        first_path_policy=first_path_policy,
     )
 
 
@@ -936,13 +1449,39 @@ def classify_peak_group_from_mag(
     min_rel_height: float = 0.1,
     repetition_period_samples: int | None = None,
     include_shoulders: bool = False,
+    first_path_policy: Literal["selected_group", "earliest_significant", "legacy", "strongest"] = "selected_group",
 ) -> tuple[int | None, int | None, list[int], list[int]]:
-    """Return (highest_idx, los_idx, echo_indices, group_indices)."""
+    """Return (highest_idx, los_idx, echo_indices, group_indices).
+
+    ``first_path_policy='selected_group'`` preserves the previous classification
+    behavior: LOS is the earliest index among the selected group peaks.  Use
+    ``'earliest_significant'`` for the physically clearer first-path semantics
+    used by ``find_los_echo_from_mag``.
+    """
     work_mag = _as_finite_1d(mag)
     if work_mag.size == 0:
         return None, None, [], []
 
     highest_idx = int(np.argmax(work_mag))
+
+    if first_path_policy in {"earliest_significant", "legacy", "strongest"}:
+        detection = detect_cir_paths_from_mag(
+            work_mag,
+            repetition_period_samples=repetition_period_samples,
+            include_shoulders=include_shoulders,
+            first_path_policy=("legacy" if first_path_policy in {"legacy", "strongest"} else "earliest_significant"),
+            min_rel_height=0.0 if first_path_policy == "earliest_significant" else min_rel_height,
+            peaks_before=max(peaks_before, 32),
+            peaks_after=max(peaks_after, 32),
+            max_echoes=None,
+        )
+        return (
+            detection.strongest_idx,
+            detection.los_idx,
+            list(detection.echo_indices),
+            list(detection.group_indices),
+        )
+
     peak_indices = find_local_maxima_around_peak_from_mag(
         work_mag,
         center_idx=highest_idx,
@@ -1002,7 +1541,7 @@ def find_local_maxima_around_peak_from_mag(
     Compatibility note: for finite input and ``include_shoulders=False`` the
     strict local-maxima rule is intentionally the same as in the original code.
     This is the main guardrail that keeps existing peak detections stable while
-    the statistical support code becomes more explicit and robust.
+    the scientific support code becomes explicit and diagnosable.
     """
     work_mag = _as_finite_1d(mag)
     if work_mag.size < 3:
@@ -1158,3 +1697,46 @@ def lag_overlap(data_len: int, ref_len: int, lag: int) -> tuple[int, int, int]:
         length = min(data_len, ref_len - s_start)
 
     return r_start, s_start, max(0, int(length))
+
+
+def xcorr_fft_energy_normalized(
+    a: np.ndarray,
+    b: np.ndarray,
+    *,
+    eps: float = 1e-12,
+) -> np.ndarray:
+    """Return overlap-energy-normalized full cross-correlation.
+
+    ``xcorr_fft`` is intentionally left unnormalized for drop-in compatibility.
+    This helper is the preferable amplitude-comparison primitive when peak
+    heights from different frames, windows, or reference snippets are compared.
+
+    The returned array has the same lag order as ``xcorr_fft`` and
+    ``np.correlate(a, b, mode='full')``: lags run from ``-(len(b)-1)`` to
+    ``len(a)-1``.  Samples with zero overlap energy are set to zero.
+    """
+    a = np.asarray(a)
+    b = np.asarray(b)
+    if a.ndim != 1 or b.ndim != 1:
+        raise ValueError("xcorr_fft_energy_normalized expects 1-D arrays")
+    if len(a) == 0 or len(b) == 0:
+        return np.array([], dtype=np.result_type(a, b, complex))
+
+    raw = xcorr_fft(a, b)
+    out = np.zeros_like(raw, dtype=np.result_type(raw, complex))
+    lags = np.arange(-(len(b) - 1), len(a), dtype=int)
+    eps = max(0.0, float(eps))
+
+    a_abs2 = np.abs(a) ** 2
+    b_abs2 = np.abs(b) ** 2
+
+    for out_idx, lag in enumerate(lags):
+        a_start, b_start, length = lag_overlap(len(a), len(b), int(lag))
+        if length <= 0:
+            continue
+        a_energy = float(np.sum(a_abs2[a_start : a_start + length]))
+        b_energy = float(np.sum(b_abs2[b_start : b_start + length]))
+        denom = float(np.sqrt(max(0.0, a_energy * b_energy)))
+        if denom > eps:
+            out[out_idx] = raw[out_idx] / denom
+    return out
