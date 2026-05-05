@@ -1362,3 +1362,30 @@ def test_manual_measurement_point_context_falls_back_to_selected_active_start_po
     assert context is not None
     assert context.point_index == 1
     assert context.point.id == "p2"
+
+def test_import_logs_appends_records_without_clearing_existing_results(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+    import zipfile
+
+    payload = {"measurement": {"status": "ok", "result": {}}, "map_name": "map-a"}
+    archive = tmp_path / "import.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("point-0001.json", json.dumps(payload))
+
+    window = MissionWorkflowWindow.__new__(MissionWorkflowWindow)
+    window._rx_antenna_global_position = None
+    window._current_map_name = lambda: "map-a"
+    window._append_validation = lambda _msg: None
+
+    imported: list[dict[str, object]] = []
+    window._on_record = lambda record: imported.append(record)
+
+    cleared = {"called": False}
+    window._clear_results_table = lambda: cleared.__setitem__("called", True)
+
+    monkeypatch.setattr("transceiver.mission_workflow_ui.filedialog.askopenfilename", lambda **_kwargs: str(archive))
+
+    window._import_logs()
+
+    assert cleared["called"] is False
+    assert imported == [payload]
