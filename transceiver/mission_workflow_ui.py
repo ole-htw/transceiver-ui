@@ -3305,7 +3305,9 @@ class MissionWorkflowWindow(ctk.CTkToplevel):
             self._append_validation("ℹ️ Testlauf aktiv: Wegpunkte werden ohne Messung angefahren.")
         start_point_index = self._selected_start_point_index()
 
-        self._clear_results_table()
+        # Ergebnisliste absichtlich nicht automatisch löschen:
+        # Historische Run-Ergebnisse sollen im Workflow persistent bleiben
+        # und nur über "Ergebnisliste leeren" entfernt werden.
         self._run_started_at = time.time()
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         self._run_log_dir = Path("signals") / "mission-runs" / ts
