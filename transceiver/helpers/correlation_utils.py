@@ -1,73 +1,16 @@
+from __future__ import annotations
+
+from typing import NamedTuple
+
 import numpy as np
 
 
-def _peak_search_bounds(
-    mag: np.ndarray,
-    *,
-    center_idx: int,
-    repetition_period_samples: int | None = None,
-) -> tuple[int, int]:
-    """Return inclusive [left_bound, right_bound] used for peak search."""
-    center_mag = float(mag[center_idx])
-    if repetition_period_samples is not None and repetition_period_samples > 1:
-        half_period = max(1, int(round(repetition_period_samples / 2.0)))
-        left_bound = max(0, center_idx - half_period)
-        right_bound = min(mag.size - 1, center_idx + half_period)
-        return left_bound, right_bound
+class _RobustScaleEstimate(NamedTuple):
+    """Internal robust location/scale estimate."""
 
-    # Fallback segmentation: walk from the center outwards until a local
-    # minimum is reached on each side *and* a new dominant lobe is found
-    # after that minimum. This keeps weaker echoes in the current group.
-    left_bound = 0
-    right_bound = mag.size - 1
-    main_lobe_threshold = 0.8 * center_mag
-
-    for idx in range(center_idx - 1, 0, -1):
-        if mag[idx] <= mag[idx - 1] and mag[idx] <= mag[idx + 1]:
-            has_new_main_lobe = any(
-                mag[j] >= mag[j - 1]
-                and mag[j] >= mag[j + 1]
-                and mag[j] >= main_lobe_threshold
-                for j in range(idx - 1, 0, -1)
-            )
-            if has_new_main_lobe:
-                left_bound = idx
-                break
-
-    for idx in range(center_idx + 1, mag.size - 1):
-        if mag[idx] <= mag[idx - 1] and mag[idx] <= mag[idx + 1]:
-            has_new_main_lobe = any(
-                mag[j] >= mag[j - 1]
-                and mag[j] >= mag[j + 1]
-                and mag[j] >= main_lobe_threshold
-                for j in range(idx + 1, mag.size - 1)
-            )
-            if has_new_main_lobe:
-                right_bound = idx
-                break
-    return left_bound, right_bound
-
-
-
-def _robust_sigma_1d(x: np.ndarray) -> float:
-    """Return a robust sigma estimate for a 1-D array."""
-    x = np.asarray(x, dtype=float)
-    x = x[np.isfinite(x)]
-    if x.size == 0:
-        return 0.0
-
-    med = float(np.median(x))
-    mad = float(np.median(np.abs(x - med)))
-    sigma = 1.4826 * mad
-
-    if sigma <= 1e-12 and x.size >= 4:
-        q25, q75 = np.percentile(x, [25.0, 75.0])
-        sigma = float((q75 - q25) / 1.349) if q75 > q25 else 0.0
-
-    if sigma <= 1e-12 and x.size >= 2:
-        sigma = float(np.std(x))
-
-    return max(0.0, sigma)
+    location: float
+    sigma: float
+    method: str
 
 
 def _as_finite_1d(y: np.ndarray) -> np.ndarray:
@@ -83,6 +26,44 @@ def _as_finite_1d(y: np.ndarray) -> np.ndarray:
     x = np.arange(y.size)
     y[~finite] = np.interp(x[~finite], x[finite], y[finite])
     return y
+
+
+def _robust_scale_1d(x: np.ndarray) -> _RobustScaleEstimate:
+    """Return a robust 1-D location/scale estimate.
+
+    Preference order:
+    1. MAD scaled to a Gaussian-equivalent sigma.
+    2. IQR scaled to a Gaussian-equivalent sigma.
+    3. Classical standard deviation as a degenerate fallback.
+
+    This avoids hidden dependence on a single large peak or outlier when noise
+    floors and slope thresholds are estimated from a peak group.
+    """
+    x = np.asarray(x, dtype=float)
+    x = x[np.isfinite(x)]
+    if x.size == 0:
+        return _RobustScaleEstimate(location=0.0, sigma=0.0, method="empty")
+
+    med = float(np.median(x))
+    mad = float(np.median(np.abs(x - med)))
+    sigma = 1.4826 * mad
+    method = "mad"
+
+    if sigma <= 1e-12 and x.size >= 4:
+        q25, q75 = np.percentile(x, [25.0, 75.0])
+        sigma = float((q75 - q25) / 1.349) if q75 > q25 else 0.0
+        method = "iqr"
+
+    if sigma <= 1e-12 and x.size >= 2:
+        sigma = float(np.std(x))
+        method = "std"
+
+    return _RobustScaleEstimate(location=med, sigma=max(0.0, sigma), method=method)
+
+
+def _robust_sigma_1d(x: np.ndarray) -> float:
+    """Return a robust sigma estimate for a 1-D array."""
+    return _robust_scale_1d(x).sigma
 
 
 def _odd_window(value: int, *, minimum: int = 3) -> int:
@@ -126,6 +107,93 @@ def _merge_close_indices(indices: list[int], *, max_gap: int) -> list[list[int]]
     return runs
 
 
+def _local_maxima_compat(
+    mag: np.ndarray,
+    *,
+    left_bound: int,
+    right_bound: int,
+    min_height: float,
+) -> list[int]:
+    """Return local maxima with the same plateau behavior as the old component."""
+    n = int(mag.size)
+    if n < 3:
+        return []
+
+    left = max(1, int(left_bound))
+    right_exclusive = min(n - 1, int(right_bound) + 1)
+    if right_exclusive <= left:
+        return []
+
+    min_height = float(min_height)
+    return [
+        int(i)
+        for i in range(left, right_exclusive)
+        if (
+            mag[i] >= mag[i - 1]
+            and mag[i] >= mag[i + 1]
+            and (mag[i] > mag[i - 1] or mag[i] > mag[i + 1])
+            and mag[i] >= min_height
+        )
+    ]
+
+
+def _peak_search_bounds(
+    mag: np.ndarray,
+    *,
+    center_idx: int,
+    repetition_period_samples: int | None = None,
+) -> tuple[int, int]:
+    """Return inclusive [left_bound, right_bound] used for peak search.
+
+    If the repetition period is known, the active group is the half-period
+    window around the anchor.  Otherwise, the method searches for the first
+    separating valley whose far side contains another dominant lobe.  This is a
+    conservative segmentation rule: weaker echoes remain in the same group.
+    """
+    work_mag = _as_finite_1d(mag)
+    if work_mag.size == 0:
+        return 0, -1
+
+    center_idx = int(np.clip(center_idx, 0, work_mag.size - 1))
+    center_mag = float(work_mag[center_idx])
+
+    if repetition_period_samples is not None and repetition_period_samples > 1:
+        half_period = max(1, int(round(repetition_period_samples / 2.0)))
+        left_bound = max(0, center_idx - half_period)
+        right_bound = min(work_mag.size - 1, center_idx + half_period)
+        return left_bound, right_bound
+
+    left_bound = 0
+    right_bound = work_mag.size - 1
+    main_lobe_threshold = 0.8 * center_mag
+
+    for idx in range(center_idx - 1, 0, -1):
+        if work_mag[idx] <= work_mag[idx - 1] and work_mag[idx] <= work_mag[idx + 1]:
+            has_new_main_lobe = any(
+                work_mag[j] >= work_mag[j - 1]
+                and work_mag[j] >= work_mag[j + 1]
+                and work_mag[j] >= main_lobe_threshold
+                for j in range(idx - 1, 0, -1)
+            )
+            if has_new_main_lobe:
+                left_bound = idx
+                break
+
+    for idx in range(center_idx + 1, work_mag.size - 1):
+        if work_mag[idx] <= work_mag[idx - 1] and work_mag[idx] <= work_mag[idx + 1]:
+            has_new_main_lobe = any(
+                work_mag[j] >= work_mag[j - 1]
+                and work_mag[j] >= work_mag[j + 1]
+                and work_mag[j] >= main_lobe_threshold
+                for j in range(idx + 1, work_mag.size - 1)
+            )
+            if has_new_main_lobe:
+                right_bound = idx
+                break
+
+    return left_bound, right_bound
+
+
 def find_shoulder_candidates_from_mag(
     mag: np.ndarray,
     *,
@@ -148,16 +216,18 @@ def find_shoulder_candidates_from_mag(
 ) -> list[int]:
     """Return shoulder-like peak candidates within the active peak group.
 
-    Detection and placement are deliberately separated:
+    The detector uses two independent pieces of evidence:
 
-    * detection uses local signed slope relief on each monotonic flank,
-    * placement uses the + -> - zero crossing of the local slope residual
-      plus the maximum of the locally integrated slope residual.
+    * derivative evidence: a local relief of the signed slope relative to a
+      slowly varying slope background;
+    * amplitude evidence: a positive residual against a local linear baseline.
 
-    This removes the common half-lobe bias:
-    descending-flank shoulders move right from the early relief knee toward the
-    hidden echo center, while ascending-flank shoulders move left from the late
-    relief knee toward the hidden echo center.
+    Placement is separated from detection.  Detection marks a shoulder event on
+    a monotonic flank; placement then moves the marker toward the most plausible
+    hidden echo center using the zero crossing of the slope residual and the
+    local maximum of the integrated residual.  The strict local-maxima detector
+    remains the primary source of peaks; shoulder candidates are only added when
+    ``include_shoulders=True`` in the public functions.
     """
     work_mag = _as_finite_1d(mag)
     n = work_mag.size
@@ -233,9 +303,7 @@ def find_shoulder_candidates_from_mag(
         )
 
     high_freq_residual = work_mag - smooth_mag
-    global_mag_noise = _robust_sigma_1d(
-        high_freq_residual[left_bound : right_bound + 1]
-    )
+    global_mag_noise = _robust_sigma_1d(high_freq_residual[left_bound : right_bound + 1])
     global_mag_span = float(np.ptp(smooth_mag[left_bound : right_bound + 1]))
 
     residual_floor_global = max(
@@ -244,12 +312,7 @@ def find_shoulder_candidates_from_mag(
         0.0025 * global_mag_span,
     )
 
-    def _crossing_idx(
-        *,
-        idx0: int,
-        idx1: int,
-        level: float = 0.0,
-    ) -> int:
+    def _crossing_idx(*, idx0: int, idx1: int, level: float = 0.0) -> int:
         idx0 = int(idx0)
         idx1 = int(idx1)
         y0 = float(slope_relief[idx0] - level)
@@ -348,10 +411,7 @@ def find_shoulder_candidates_from_mag(
         )
 
         valid = np.array(
-            [
-                _valid_marker_idx(int(x), segment_left, segment_right)
-                for x in xs
-            ],
+            [_valid_marker_idx(int(x), segment_left, segment_right) for x in xs],
             dtype=bool,
         )
 
@@ -371,7 +431,9 @@ def find_shoulder_candidates_from_mag(
         gain = float(values_valid[best_local] - edge_level)
 
         if gain < residual_floor_global and _valid_marker_idx(
-            fallback_idx, segment_left, segment_right
+            fallback_idx,
+            segment_left,
+            segment_right,
         ):
             return int(fallback_idx), gain
 
@@ -414,10 +476,7 @@ def find_shoulder_candidates_from_mag(
         residual = smooth_mag[xs] - baseline
         snap_xs = np.arange(snap_left, snap_right + 1, dtype=int)
         valid = np.array(
-            [
-                _valid_marker_idx(int(x), segment_left, segment_right)
-                for x in snap_xs
-            ],
+            [_valid_marker_idx(int(x), segment_left, segment_right) for x in snap_xs],
             dtype=bool,
         )
 
@@ -428,14 +487,8 @@ def find_shoulder_candidates_from_mag(
                 else (None, 0.0)
             )
 
-        residual_lookup = {
-            int(x): float(residual[int(x) - event_left])
-            for x in xs
-        }
-        values = np.array(
-            [residual_lookup[int(x)] for x in snap_xs[valid]],
-            dtype=float,
-        )
+        residual_lookup = {int(x): float(residual[int(x) - event_left]) for x in xs}
+        values = np.array([residual_lookup[int(x)] for x in snap_xs[valid]], dtype=float)
         best_idx = int(snap_xs[valid][int(np.argmax(values))])
         best_residual = float(np.max(values))
         return best_idx, best_residual
@@ -485,17 +538,13 @@ def find_shoulder_candidates_from_mag(
         if relief_sigma <= 1e-12:
             relief_sigma = max(
                 1e-12,
-                0.01 * float(np.ptp(signed_segment))
-                if signed_segment.size > 1
-                else 1e-12,
+                0.01 * float(np.ptp(signed_segment)) if signed_segment.size > 1 else 1e-12,
             )
 
         if slope_sigma <= 1e-12:
             slope_sigma = max(
                 1e-12,
-                0.01 * float(np.ptp(slope_segment))
-                if slope_segment.size > 1
-                else 1e-12,
+                0.01 * float(np.ptp(slope_segment)) if slope_segment.size > 1 else 1e-12,
             )
 
         threshold_from_mad = max(0.0, float(slope_threshold_factor)) * relief_sigma
@@ -530,9 +579,7 @@ def find_shoulder_candidates_from_mag(
                 continue
 
             left_slice = slope[max(segment_left, i - slope_window) : i]
-            right_slice = slope[
-                i + 1 : min(segment_right + 1, i + 1 + slope_window)
-            ]
+            right_slice = slope[i + 1 : min(segment_right + 1, i + 1 + slope_window)]
             if left_slice.size == 0 or right_slice.size == 0:
                 continue
 
@@ -560,9 +607,7 @@ def find_shoulder_candidates_from_mag(
             core_idx = int(max(run, key=lambda idx: hit_score.get(int(idx), 0.0)))
             event_score = float(hit_score.get(core_idx, 0.0))
 
-            left_band = signed_relief[
-                max(segment_left, run[0] - side_band) : run[0]
-            ]
+            left_band = signed_relief[max(segment_left, run[0] - side_band) : run[0]]
             right_band = signed_relief[
                 run[-1] + 1 : min(segment_right + 1, run[-1] + 1 + side_band)
             ]
@@ -576,10 +621,7 @@ def find_shoulder_candidates_from_mag(
             boundary_level = max(side_values) if side_values else 0.0
             event_contrast = event_score - boundary_level
 
-            if (
-                event_contrast < 0.12 * local_threshold
-                and event_score < 1.50 * local_threshold
-            ):
+            if event_contrast < 0.12 * local_threshold and event_score < 1.50 * local_threshold:
                 continue
 
             zero_idx = _slope_zero_center(
@@ -591,14 +633,8 @@ def find_shoulder_candidates_from_mag(
                 margin=margin,
             )
 
-            event_left = max(
-                segment_left + margin,
-                min(run[0], zero_idx) - residual_window,
-            )
-            event_right = min(
-                segment_right - margin,
-                max(run[-1], zero_idx) + residual_window,
-            )
+            event_left = max(segment_left + margin, min(run[0], zero_idx) - residual_window)
+            event_right = min(segment_right - margin, max(run[-1], zero_idx) + residual_window)
 
             best_idx, component_gain = _integrated_relief_best(
                 event_left=event_left,
@@ -610,13 +646,11 @@ def find_shoulder_candidates_from_mag(
             if best_idx is None:
                 continue
 
-            max_center_shift = max(
-                residual_window,
-                smooth_window,
-                2 * slope_window + 1,
-            )
+            max_center_shift = max(residual_window, smooth_window, 2 * slope_window + 1)
             if abs(best_idx - zero_idx) > max_center_shift and _valid_marker_idx(
-                zero_idx, segment_left, segment_right
+                zero_idx,
+                segment_left,
+                segment_right,
             ):
                 best_idx = int(zero_idx)
 
@@ -660,10 +694,7 @@ def find_shoulder_candidates_from_mag(
 
         kept: list[tuple[int, float]] = []
         for idx, score in candidates:
-            if any(
-                abs(idx - kept_idx) <= shoulder_merge_distance
-                for kept_idx, _ in kept
-            ):
+            if any(abs(idx - kept_idx) <= shoulder_merge_distance for kept_idx, _ in kept):
                 continue
             kept.append((idx, score))
 
@@ -682,10 +713,7 @@ def find_shoulder_candidates_from_mag(
         if interval_right - interval_left < 6:
             continue
 
-        valley = int(
-            interval_left
-            + np.argmin(smooth_mag[interval_left : interval_right + 1])
-        )
+        valley = int(interval_left + np.argmin(smooth_mag[interval_left : interval_right + 1]))
 
         interval_candidates: list[tuple[int, float]] = []
 
@@ -710,10 +738,7 @@ def find_shoulder_candidates_from_mag(
 
         kept_in_interval: list[tuple[int, float]] = []
         for idx, score in interval_candidates:
-            if any(
-                abs(idx - kept_idx) <= shoulder_merge_distance
-                for kept_idx, _ in kept_in_interval
-            ):
+            if any(abs(idx - kept_idx) <= shoulder_merge_distance for kept_idx, _ in kept_in_interval):
                 continue
 
             kept_in_interval.append((idx, score))
@@ -733,15 +758,13 @@ def find_shoulder_candidates_from_mag(
         if _too_close_to_strict(idx):
             continue
 
-        if any(
-            abs(idx - kept_idx) <= shoulder_merge_distance
-            for kept_idx, _ in final
-        ):
+        if any(abs(idx - kept_idx) <= shoulder_merge_distance for kept_idx, _ in final):
             continue
 
         final.append((idx, score))
 
     return sorted(int(idx) for idx, _ in final)
+
 
 def apply_manual_lags(
     lags: np.ndarray,
@@ -752,19 +775,29 @@ def apply_manual_lags(
     """Return marker indices adjusted by manual lag selections."""
     if manual_lags is None or lags.size == 0:
         return los_idx, echo_idx
+
+    finite_lags = _as_finite_1d(lags)
     manual_los = manual_lags.get("los")
     manual_echo = manual_lags.get("echo")
-    min_lag = float(lags.min())
-    max_lag = float(lags.max())
+    min_lag = float(finite_lags.min())
+    max_lag = float(finite_lags.max())
+
     if manual_los is not None and min_lag <= manual_los <= max_lag:
-        los_idx = int(np.abs(lags - manual_los).argmin())
+        los_idx = int(np.abs(finite_lags - manual_los).argmin())
     if manual_echo is not None and min_lag <= manual_echo <= max_lag:
-        echo_idx = int(np.abs(lags - manual_echo).argmin())
+        echo_idx = int(np.abs(finite_lags - manual_echo).argmin())
     return los_idx, echo_idx
 
 
 def xcorr_fft(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """Return the full cross-correlation of *a* and *b* using FFT."""
+    a = np.asarray(a)
+    b = np.asarray(b)
+    if a.ndim != 1 or b.ndim != 1:
+        raise ValueError("xcorr_fft expects 1-D arrays")
+    if len(a) == 0 or len(b) == 0:
+        return np.array([], dtype=np.result_type(a, b, complex))
+
     n = len(a) + len(b) - 1
     nfft = 1 << (n - 1).bit_length()
     A = np.fft.fft(a, nfft)
@@ -824,11 +857,18 @@ def filter_echo_indices_by_noise_prominence(
 ) -> list[int]:
     """Keep echo peaks that stand out from global background noise.
 
-    The filtering does not depend on LOS peak height. Instead it compares each
-    candidate echo against a robust global baseline (median) and global noise
-    spread (MAD-scaled sigma estimate).
+    The filter uses a robust global baseline and a robust global noise estimate.
+    This keeps the decision independent of the LOS peak height and avoids
+    rejecting valid weaker echoes simply because the LOS component is strong.
+
+    ``repetition_period_samples`` is accepted for API compatibility and future
+    extensions; the current implementation already operates on the candidate
+    set supplied by the active group selection.
     """
-    if mag.size == 0 or not echo_indices:
+    del repetition_period_samples  # kept in the signature for drop-in compatibility
+
+    work_mag = _as_finite_1d(mag)
+    if work_mag.size == 0 or not echo_indices:
         return []
 
     los_idx_int = int(los_idx) if los_idx is not None else None
@@ -837,7 +877,7 @@ def filter_echo_indices_by_noise_prominence(
             int(idx)
             for idx in echo_indices
             if (
-                0 <= int(idx) < mag.size
+                0 <= int(idx) < work_mag.size
                 and (
                     los_idx_int is None
                     or int(idx) > los_idx_int + max(0, int(min_echo_lag_samples))
@@ -848,19 +888,22 @@ def filter_echo_indices_by_noise_prominence(
     if not cleaned_indices:
         return []
 
-    mag_global = np.asarray(mag, dtype=float)
-    global_baseline = float(np.median(mag_global))
-    global_mad = float(np.median(np.abs(mag_global - global_baseline)))
+    # Keep the historical echo/noise decision exactly compatible: use the
+    # global median as baseline and the MAD-scaled sigma without IQR/std
+    # fallback. If the MAD is zero, any positive prominence is accepted, as in
+    # the original component. More elaborate robust fallbacks are used for
+    # shoulder evidence where they cannot silently remove existing strict peaks.
+    global_baseline = float(np.median(work_mag))
+    global_mad = float(np.median(np.abs(work_mag - global_baseline)))
     noise_sigma = 1.4826 * global_mad
 
     filtered: list[int] = []
     for idx in cleaned_indices:
-        prominence = float(mag[idx]) - global_baseline
+        prominence = float(work_mag[idx]) - global_baseline
         if prominence <= 0.0:
             continue
         if noise_sigma <= 1e-12:
-            if prominence > 0.0:
-                filtered.append(int(idx))
+            filtered.append(int(idx))
             continue
         if prominence >= max(0.0, float(noise_sigma_factor)) * noise_sigma:
             filtered.append(int(idx))
@@ -895,12 +938,13 @@ def classify_peak_group_from_mag(
     include_shoulders: bool = False,
 ) -> tuple[int | None, int | None, list[int], list[int]]:
     """Return (highest_idx, los_idx, echo_indices, group_indices)."""
-    if mag.size == 0:
+    work_mag = _as_finite_1d(mag)
+    if work_mag.size == 0:
         return None, None, [], []
 
-    highest_idx = int(np.argmax(mag))
+    highest_idx = int(np.argmax(work_mag))
     peak_indices = find_local_maxima_around_peak_from_mag(
-        mag,
+        work_mag,
         center_idx=highest_idx,
         peaks_before=peaks_before,
         peaks_after=peaks_after,
@@ -953,32 +997,37 @@ def find_local_maxima_around_peak_from_mag(
     repetition_period_samples: int | None = None,
     include_shoulders: bool = False,
 ) -> list[int]:
-    """Return local maxima indices around a center peak (before + after)."""
-    if mag.size < 3:
+    """Return local maxima indices around a center peak (before + after).
+
+    Compatibility note: for finite input and ``include_shoulders=False`` the
+    strict local-maxima rule is intentionally the same as in the original code.
+    This is the main guardrail that keeps existing peak detections stable while
+    the statistical support code becomes more explicit and robust.
+    """
+    work_mag = _as_finite_1d(mag)
+    if work_mag.size < 3:
         return []
     if center_idx is None:
-        center_idx = int(np.argmax(mag))
-    center_idx = int(np.clip(center_idx, 0, mag.size - 1))
+        center_idx = int(np.argmax(work_mag))
+    center_idx = int(np.clip(center_idx, 0, work_mag.size - 1))
 
-    center_mag = float(mag[center_idx])
+    center_mag = float(work_mag[center_idx])
     min_height = max(0.0, float(min_rel_height)) * center_mag
 
     left_bound, right_bound = _peak_search_bounds(
-        mag,
+        work_mag,
         center_idx=center_idx,
         repetition_period_samples=repetition_period_samples,
     )
+    if right_bound < left_bound:
+        return []
 
-    local_maxima = [
-        i
-        for i in range(max(1, left_bound), min(mag.size - 1, right_bound + 1))
-        if (
-            mag[i] >= mag[i - 1]
-            and mag[i] >= mag[i + 1]
-            and (mag[i] > mag[i - 1] or mag[i] > mag[i + 1])
-            and mag[i] >= min_height
-        )
-    ]
+    local_maxima = _local_maxima_compat(
+        work_mag,
+        left_bound=left_bound,
+        right_bound=right_bound,
+        min_height=min_height,
+    )
     if not local_maxima:
         return []
 
@@ -994,7 +1043,7 @@ def find_local_maxima_around_peak_from_mag(
         return selected
 
     shoulder_candidates = find_shoulder_candidates_from_mag(
-        mag,
+        work_mag,
         center_idx=center_idx,
         strict_peak_indices=selected,
         min_height=min_height,
@@ -1017,21 +1066,22 @@ def filter_peak_indices_to_period_group(
     half-period window around the selected anchor lag, so marker points remain
     on one peak group and do not jump between adjacent repetitions.
     """
-    if anchor_idx is None or lags.size == 0:
+    finite_lags = _as_finite_1d(lags)
+    if anchor_idx is None or finite_lags.size == 0:
         return [int(i) for i in peak_indices]
     if period_samples is None or period_samples <= 1:
         return [int(i) for i in peak_indices]
 
-    anchor_idx = int(np.clip(anchor_idx, 0, lags.size - 1))
-    anchor_lag = float(lags[anchor_idx])
+    anchor_idx = int(np.clip(anchor_idx, 0, finite_lags.size - 1))
+    anchor_lag = float(finite_lags[anchor_idx])
     half_period = float(period_samples) / 2.0
 
     filtered = []
     for idx in peak_indices:
         idx = int(idx)
-        if idx < 0 or idx >= lags.size:
+        if idx < 0 or idx >= finite_lags.size:
             continue
-        if abs(float(lags[idx]) - anchor_lag) <= half_period:
+        if abs(float(finite_lags[idx]) - anchor_lag) <= half_period:
             filtered.append(idx)
     return filtered
 
@@ -1052,26 +1102,23 @@ def resolve_manual_los_idx(
     cross-correlation group, the manual LOS is ignored and ``manual_lags['los']``
     is reset to ``None`` so subsequent frames snap back to the current group.
     """
-    if lags.size == 0:
+    finite_lags = _as_finite_1d(lags)
+    if finite_lags.size == 0:
         return base_los_idx, False
     if manual_lags is None or manual_lags.get("los") is None:
         return base_los_idx, False
 
     manual_los = float(manual_lags["los"])
-    min_lag = float(lags.min())
-    max_lag = float(lags.max())
+    min_lag = float(finite_lags.min())
+    max_lag = float(finite_lags.max())
     if manual_los < min_lag or manual_los > max_lag:
         return base_los_idx, False
 
-    manual_idx = int(np.abs(lags - manual_los).argmin())
+    manual_idx = int(np.abs(finite_lags - manual_los).argmin())
     allow_manual = True
 
     if constrain_to_peak_group and peak_group_indices:
-        normalized = {
-            int(idx)
-            for idx in peak_group_indices
-            if 0 <= int(idx) < lags.size
-        }
+        normalized = {int(idx) for idx in peak_group_indices if 0 <= int(idx) < finite_lags.size}
         if normalized and manual_idx not in normalized:
             allow_manual = False
 
@@ -1082,8 +1129,8 @@ def resolve_manual_los_idx(
         and period_samples is not None
         and period_samples > 1
     ):
-        highest_idx = int(np.clip(highest_idx, 0, lags.size - 1))
-        highest_lag = float(lags[highest_idx])
+        highest_idx = int(np.clip(highest_idx, 0, finite_lags.size - 1))
+        highest_lag = float(finite_lags[highest_idx])
         half_period = float(period_samples) / 2.0
         if abs(manual_los - highest_lag) > half_period:
             allow_manual = False
@@ -1095,10 +1142,12 @@ def resolve_manual_los_idx(
     return manual_idx, False
 
 
-def lag_overlap(
-    data_len: int, ref_len: int, lag: int
-) -> tuple[int, int, int]:
+def lag_overlap(data_len: int, ref_len: int, lag: int) -> tuple[int, int, int]:
     """Return (data_start, ref_start, length) for a given lag."""
+    data_len = int(data_len)
+    ref_len = int(ref_len)
+    lag = int(lag)
+
     if lag >= 0:
         r_start = lag
         s_start = 0
@@ -1107,5 +1156,5 @@ def lag_overlap(
         r_start = 0
         s_start = -lag
         length = min(data_len, ref_len - s_start)
-    return r_start, s_start, length
 
+    return r_start, s_start, max(0, int(length))
